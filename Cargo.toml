@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "coagomem-core",
+    "coagomem-wal",
+    "coagomem-ql",
+]
+resolver = "2"
+
+[profile.release]
+panic = "abort"
+opt-level = 3
