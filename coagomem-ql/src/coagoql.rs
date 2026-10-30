@@ -26,7 +26,7 @@
 use core::fmt;
 
 pub const MAX_QUERY_BYTES: usize = 64 * 1024;
-pub const MAX_TOKENS: usize = 8192;
+pub const MAX_TOKENS: usize = 16384;
 pub const MAX_STAGES: usize = 32;
 pub const MAX_LIST: usize = 256;
 pub const MAX_DEPTH: usize = 16;
@@ -187,6 +187,17 @@ pub fn lex(src: &str) -> PResult<Vec<Token<'_>>> {
                 return Err(err(start, start + 7, "empty `$ref` handle"));
             }
             i += 7 + n;
+            if b.get(i) != Some(&b'.') {
+                return Err(err(start, i, "reference requires a 128-bit MAC"));
+            }
+            i += 1;
+            let mac_start = i;
+            while b.get(i).is_some_and(u8::is_ascii_hexdigit) {
+                i += 1;
+            }
+            if i - mac_start != 32 {
+                return Err(err(start, i, "reference MAC must contain 32 hex digits"));
+            }
             Tok::Ref(&src[start + 7..i])
         } else if c.is_ascii_digit() || (c == b'-' && b.get(i + 1).is_some_and(u8::is_ascii_digit))
         {
@@ -328,6 +339,7 @@ impl Root {
 pub struct FieldPath<'a> {
     /// `actor(0x..)` qualifier (TX_ACTORS queries only).
     pub actor: Option<u64>,
+    pub alias: Option<&'a str>,
     pub root: Root,
     /// Segments after the root, e.g. `["wallet", "credits"]`.
     pub path: Vec<&'a str>,
@@ -346,10 +358,16 @@ pub enum Literal<'a> {
     Null,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefLiteral {
+    pub id: u64,
+    pub mac: [u8; 16],
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value<'a> {
     Lit(Literal<'a>),
-    Ref(u64),
+    Ref(RefLiteral),
     Array(Vec<Value<'a>>),
     Object(Vec<(&'a str, Value<'a>)>),
     Call { name: &'a str, args: Vec<Value<'a>> },
@@ -464,6 +482,14 @@ pub enum Stage<'a> {
         format: &'a str,
         destination: &'a str,
     },
+    JoinActor {
+        target: FieldPath<'a>,
+        alias: &'a str,
+    },
+    LinkAdd {
+        target: u64,
+        cascade: bool,
+    },
 }
 
 impl Stage<'_> {
@@ -480,6 +506,8 @@ impl Stage<'_> {
             Stage::Take(_) => "TAKE",
             Stage::SearchBm25 { .. } => "SEARCH",
             Stage::ExportTo { .. } => "EXPORT",
+            Stage::JoinActor { .. } => "JOIN",
+            Stage::LinkAdd { .. } => "LINK",
         }
     }
 }
@@ -616,11 +644,19 @@ impl<'a> Parser<'a> {
     fn list<T>(
         &mut self,
         close: Tok<'static>,
+        item: impl FnMut(&mut Self) -> PResult<T>,
+    ) -> PResult<Vec<T>> {
+        self.list_bounded(close, MAX_LIST, item)
+    }
+    fn list_bounded<T>(
+        &mut self,
+        close: Tok<'static>,
+        limit: usize,
         mut item: impl FnMut(&mut Self) -> PResult<T>,
     ) -> PResult<Vec<T>> {
         let mut v = Vec::new();
         loop {
-            if v.len() == MAX_LIST {
+            if v.len() == limit {
                 return self.fail("list too long");
             }
             v.push(item(self)?);
@@ -726,7 +762,13 @@ impl<'a> Parser<'a> {
     fn field_path(&mut self) -> PResult<FieldPath<'a>> {
         let at = self.tok().at;
         let mut actor = None;
-        if self.is_kw("actor") && self.peek2() == Tok::LParen {
+        let mut alias = None;
+        if self.peek() == Tok::At {
+            self.bump();
+            alias = Some(self.ident("expected join alias")?);
+            self.expect(Tok::Dot, "expected . after alias")?;
+        }
+        if alias.is_none() && self.is_kw("actor") && self.peek2() == Tok::LParen {
             self.bump();
             self.bump();
             actor = Some(self.uint()?);
@@ -754,6 +796,7 @@ impl<'a> Parser<'a> {
         }
         Ok(FieldPath {
             actor,
+            alias,
             root,
             path,
             at,
@@ -805,15 +848,21 @@ impl<'a> Parser<'a> {
         let v = match t.tok {
             Tok::Ref(hex) => {
                 self.bump();
-                let v = parse_uint(&format!("0x{hex}"), t.at, t.end)?;
-                if v == 0 {
-                    return Err(err(
-                        t.at as usize,
-                        t.end as usize,
-                        "`$ref:0x0` is not a valid handle",
-                    ));
+                let (id, mac) = hex.split_once('.').ok_or(err(
+                    t.at as usize,
+                    t.end as usize,
+                    "reference requires MAC",
+                ))?;
+                let id = parse_uint(&format!("0x{id}"), t.at, t.end)?;
+                if id == 0 || mac.len() != 32 {
+                    return self.fail("invalid reference");
                 }
-                Value::Ref(v)
+                let mut bytes = [0u8; 16];
+                for (i, out) in bytes.iter_mut().enumerate() {
+                    *out = u8::from_str_radix(&mac[i * 2..i * 2 + 2], 16)
+                        .map_err(|_| err(t.at as usize, t.end as usize, "invalid MAC"))?;
+                }
+                Value::Ref(RefLiteral { id, mac: bytes })
             }
             Tok::LBrack => {
                 self.bump();
@@ -845,15 +894,7 @@ impl<'a> Parser<'a> {
             Tok::Ident(name)
                 if self.peek2() == Tok::LParen && !matches!(name, "true" | "false" | "null") =>
             {
-                self.bump();
-                self.bump();
-                let args = if self.peek() == Tok::RParen {
-                    self.bump();
-                    Vec::new()
-                } else {
-                    self.list(Tok::RParen, |p| p.value())?
-                };
-                Value::Call { name, args }
+                return self.fail("unknown function: no expression functions are enabled");
             }
             _ => Value::Lit(self.literal()?),
         };
@@ -872,8 +913,8 @@ impl<'a> Parser<'a> {
             Tok::Lt => CompOp::Lt,
             Tok::Ge => CompOp::Ge,
             Tok::Le => CompOp::Le,
-            Tok::Ident("IN") => CompOp::In,
-            Tok::Ident("CONTAINS") => CompOp::Contains,
+            Tok::Ident(k) if k.eq_ignore_ascii_case("IN") => CompOp::In,
+            Tok::Ident(k) if k.eq_ignore_ascii_case("CONTAINS") => CompOp::Contains,
             Tok::Assign => return self.fail("`=` is assignment; use `==` in FILTER"),
             _ => return self.fail("expected comparison operator"),
         };
@@ -995,11 +1036,12 @@ impl<'a> Parser<'a> {
                 self.expect_kw("vector", "expected `vector:`")?;
                 self.expect(Tok::Colon, "expected `:`")?;
                 let vt = self.expect(Tok::LBrack, "expected `[` vector literal")?;
-                let vector = self.list(Tok::RBrack, |p| match p.literal()? {
-                    Literal::Float(f) => Ok(f as f32),
-                    Literal::Int(i) => Ok(i as f32),
-                    _ => p.fail("vector elements must be numbers"),
-                })?;
+                let vector =
+                    self.list_bounded(Tok::RBrack, MAX_VECTOR_DIMS, |p| match p.literal()? {
+                        Literal::Float(f) => Ok(f as f32),
+                        Literal::Int(i) => Ok(i as f32),
+                        _ => p.fail("vector elements must be numbers"),
+                    })?;
                 if vector.len() > MAX_VECTOR_DIMS || vector.iter().any(|x| !x.is_finite()) {
                     return Err(err(
                         vt.at as usize,
@@ -1257,6 +1299,45 @@ impl<'a> Parser<'a> {
                     destination: destination.ok_or(err(0, 0, "missing destination"))?,
                 })
             }
+            "JOIN" => {
+                if self.peek() == Tok::At {
+                    self.bump();
+                }
+                self.expect_kw("actor", "expected actor(field)")?;
+                self.expect(Tok::LParen, "expected (")?;
+                let target = self.field_path()?;
+                self.expect(Tok::RParen, "expected )")?;
+                self.expect_kw("AS", "expected AS")?;
+                if self.peek() == Tok::At {
+                    self.bump();
+                }
+                let alias = self.ident("expected alias")?;
+                Ok(Stage::JoinActor { target, alias })
+            }
+            "LINK" => {
+                self.expect_kw("ADD", "expected ADD")?;
+                self.expect(Tok::LParen, "expected (")?;
+                self.expect_kw("target", "expected target")?;
+                self.expect(Tok::Colon, "expected :")?;
+                if self.peek() == Tok::At {
+                    self.bump();
+                }
+                let target = self.uint()?;
+                self.expect(Tok::Comma, "expected ,")?;
+                self.expect_kw("on_delete", "expected on_delete")?;
+                self.expect(Tok::Colon, "expected :")?;
+                let cascade = match self
+                    .ident("expected RESTRICT or CASCADE")?
+                    .to_ascii_uppercase()
+                    .as_str()
+                {
+                    "CASCADE" => true,
+                    "RESTRICT" => false,
+                    _ => return self.fail("expected RESTRICT or CASCADE"),
+                };
+                self.expect(Tok::RParen, "expected )")?;
+                Ok(Stage::LinkAdd { target, cascade })
+            }
             // The fix for the spec's silent drop: anything else is an error.
             _ => Err(err(
                 kw_tok.at as usize,
@@ -1292,6 +1373,7 @@ pub fn parse(src: &str) -> PResult<Query<'_>> {
         return p.fail("expected `|>` or end of query");
     }
     let q = Query { source, stages };
+    preflight(&q)?;
     validate(&q, &stage_at)?;
     Ok(q)
 }
@@ -1314,6 +1396,7 @@ fn visit_paths<'q, 'a>(
         }
     }
     match s {
+        Stage::JoinActor { target, .. } => f(target),
         Stage::Filter(e) => bool_paths(e, f),
         Stage::Mutate(ms) => ms.iter().try_for_each(|m| match m {
             Mutation::Assign { target, .. } | Mutation::Append { target, .. } => f(target),
@@ -1339,6 +1422,7 @@ fn validate(q: &Query<'_>, at: &[(u32, u32)]) -> PResult<()> {
     };
     let scan = matches!(q.source, Source::ScanRange { .. } | Source::ScanAll);
     let mut mutates = 0;
+    let mut aliases = Vec::new();
     for (i, s) in q.stages.iter().enumerate() {
         match s {
             Stage::Take(_)
@@ -1347,6 +1431,14 @@ fn validate(q: &Query<'_>, at: &[(u32, u32)]) -> PResult<()> {
                         && matches!(q.stages.last(), Some(Stage::ExportTo { .. }))) =>
             {
                 return e(i, "TAKE must be the last stage");
+            }
+            Stage::JoinActor { alias, .. } if alias.is_empty() || aliases.contains(alias) => {
+                return e(i, "duplicate or empty join alias");
+            }
+            Stage::LinkAdd { target, .. }
+                if *target == 0 || !matches!(q.source, Source::Actor(_)) =>
+            {
+                return e(i, "LINK requires a single actor and nonzero target");
             }
             Stage::Mutate(ms) => {
                 mutates += 1;
@@ -1359,7 +1451,10 @@ fn validate(q: &Query<'_>, at: &[(u32, u32)]) -> PResult<()> {
                 for m in ms {
                     match m {
                         Mutation::Assign { target, op, value } => {
-                            if target.root != Root::State || target.path.is_empty() {
+                            if target.root != Root::State
+                                || target.path.is_empty()
+                                || target.alias.is_some()
+                            {
                                 return Err(ParseError {
                                     at: target.at,
                                     end: target.at + 1,
@@ -1418,25 +1513,39 @@ fn validate(q: &Query<'_>, at: &[(u32, u32)]) -> PResult<()> {
             }
             _ => {}
         }
-        visit_paths(s, &mut |p| match (tx, p.actor) {
-            (Some(ids), Some(a)) if ids.contains(&a) => Ok(()),
-            (Some(_), Some(_)) => Err(ParseError {
-                at: p.at,
-                end: p.at + 1,
-                msg: "actor(..) is not a participant of TX_ACTORS",
-            }),
-            (Some(_), None) if p.root != Root::Meta => Err(ParseError {
-                at: p.at,
-                end: p.at + 1,
-                msg: "field paths in TX_ACTORS queries must be qualified with actor(..)",
-            }),
-            (None, Some(_)) => Err(ParseError {
-                at: p.at,
-                end: p.at + 1,
-                msg: "actor(..) qualifier is only valid with TX_ACTORS",
-            }),
-            _ => Ok(()),
+        visit_paths(s, &mut |p| {
+            if let Some(alias) = p.alias {
+                if !aliases.contains(&alias) || tx.is_some() {
+                    return Err(ParseError {
+                        at: p.at,
+                        end: p.at + 1,
+                        msg: "unknown join alias",
+                    });
+                }
+            }
+            match (tx, p.actor) {
+                (Some(ids), Some(a)) if ids.contains(&a) => Ok(()),
+                (Some(_), Some(_)) => Err(ParseError {
+                    at: p.at,
+                    end: p.at + 1,
+                    msg: "actor(..) is not a participant of TX_ACTORS",
+                }),
+                (Some(_), None) if p.root != Root::Meta => Err(ParseError {
+                    at: p.at,
+                    end: p.at + 1,
+                    msg: "field paths in TX_ACTORS queries must be qualified with actor(..)",
+                }),
+                (None, Some(_)) => Err(ParseError {
+                    at: p.at,
+                    end: p.at + 1,
+                    msg: "actor(..) qualifier is only valid with TX_ACTORS",
+                }),
+                _ => Ok(()),
+            }
         })?;
+        if let Stage::JoinActor { alias, .. } = s {
+            aliases.push(*alias);
+        }
     }
     Ok(())
 }
@@ -1448,7 +1557,7 @@ pub mod spec_examples {
 |> MUTATE {
      state.wallet.credits -= 50,
      state.metrics.api_calls += 1,
-     episodes.append({ tool: "k8s_deploy", output_ref: $ref:0x99A4F012, status: 200 })
+     episodes.append({ tool: "k8s_deploy", output_ref: $ref:0x99A4F012.abababababababababababababababab, status: 200 })
    }
 |> CHECKPOINT_FRAME(intent: "Verify pod readiness in namespace prod-01")
 |> PROJECT {
@@ -1495,8 +1604,147 @@ pub mod spec_examples {
 |> TAKE 5"#;
 }
 
+fn preflight(q: &Query<'_>) -> PResult<()> {
+    enum Node<'q, 'a> {
+        Expr(&'q BoolExpr<'a>, usize),
+        Val(&'q Value<'a>, usize),
+    }
+    let mut stack = Vec::new();
+    let mut nodes = 0usize;
+    if q.stages.len() > MAX_STAGES {
+        return Err(err(0, 0, "too many stages"));
+    }
+    for stage in &q.stages {
+        match stage {
+            Stage::Filter(e) => stack.push(Node::Expr(e, 1)),
+            Stage::Mutate(ms) => {
+                if ms.len() > MAX_LIST {
+                    return Err(err(0, 0, "too many mutations"));
+                }
+                for m in ms {
+                    match m {
+                        Mutation::Assign { value, .. } | Mutation::Append { value, .. } => {
+                            stack.push(Node::Val(value, 1))
+                        }
+                    }
+                }
+            }
+            Stage::Project(v) if v.len() > MAX_LIST => {
+                return Err(err(0, 0, "too many projections"));
+            }
+            Stage::GroupBy(v) if v.len() > MAX_LIST => {
+                return Err(err(0, 0, "too many group keys"));
+            }
+            Stage::Reduce(v) if v.len() > MAX_LIST => return Err(err(0, 0, "too many aggregates")),
+            _ => {}
+        }
+    }
+    while let Some(n) = stack.pop() {
+        nodes += 1;
+        if nodes > MAX_TOKENS {
+            return Err(err(0, 0, "AST node budget exceeded"));
+        }
+        match n {
+            Node::Expr(e, d) => {
+                if d > MAX_DEPTH {
+                    return Err(err(0, 0, "AST nesting too deep"));
+                }
+                match e {
+                    BoolExpr::Pred(p) => {
+                        if p.field.path.len() > MAX_DEPTH {
+                            return Err(err(0, 0, "field path too deep"));
+                        }
+                        stack.push(Node::Val(&p.rhs, d));
+                    }
+                    BoolExpr::And(es) | BoolExpr::Or(es) => {
+                        if es.is_empty() || es.len() > MAX_LIST {
+                            return Err(err(0, 0, "invalid boolean arity"));
+                        }
+                        for e in es {
+                            stack.push(Node::Expr(e, d + 1));
+                        }
+                    }
+                }
+            }
+            Node::Val(v, d) => {
+                if d > MAX_DEPTH {
+                    return Err(err(0, 0, "value nesting too deep"));
+                }
+                match v {
+                    Value::Call { .. } => return Err(err(0, 0, "unknown function")),
+                    Value::Array(vs) => {
+                        if vs.len() > MAX_LIST {
+                            return Err(err(0, 0, "array too long"));
+                        }
+                        for v in vs {
+                            stack.push(Node::Val(v, d + 1));
+                        }
+                    }
+                    Value::Object(vs) => {
+                        if vs.len() > MAX_LIST {
+                            return Err(err(0, 0, "object too long"));
+                        }
+                        for (_, v) in vs {
+                            stack.push(Node::Val(v, d + 1));
+                        }
+                    }
+                    Value::Ref(r) if r.id == 0 => return Err(err(0, 0, "invalid reference")),
+                    Value::Lit(Literal::Float(f)) if !f.is_finite() => {
+                        return Err(err(0, 0, "non-finite value"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// Query owns recursive public nodes. Tear them down iteratively, even if validation
+// rejected a malicious programmatically-built AST before a bounded recursive walk.
+impl Drop for Query<'_> {
+    fn drop(&mut self) {
+        enum Node<'a> {
+            Expr(BoolExpr<'a>),
+            Val(Value<'a>),
+        }
+        let mut stack = Vec::new();
+        for stage in self.stages.drain(..) {
+            match stage {
+                Stage::Filter(e) => stack.push(Node::Expr(e)),
+                Stage::Mutate(ms) => {
+                    for m in ms {
+                        match m {
+                            Mutation::Assign { value, .. } | Mutation::Append { value, .. } => {
+                                stack.push(Node::Val(value))
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        while let Some(n) = stack.pop() {
+            match n {
+                Node::Expr(BoolExpr::Pred(p)) => stack.push(Node::Val(p.rhs)),
+                Node::Expr(BoolExpr::And(es) | BoolExpr::Or(es)) => {
+                    stack.extend(es.into_iter().map(Node::Expr))
+                }
+                Node::Val(Value::Array(vs) | Value::Call { args: vs, .. }) => {
+                    stack.extend(vs.into_iter().map(Node::Val))
+                }
+                Node::Val(Value::Object(vs)) => {
+                    stack.extend(vs.into_iter().map(|(_, v)| Node::Val(v)))
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Recheck typed ASTs supplied by callers, including participant and stage bounds.
 pub fn validate_query_ast(q: &Query<'_>) -> PResult<()> {
+    preflight(q)?;
     if q.stages.len() > MAX_STAGES {
         return Err(err(0, 0, "too many stages"));
     }
@@ -1530,9 +1778,13 @@ pub fn validate_query_ast(q: &Query<'_>) -> PResult<()> {
 }
 
 /// Actor references are typed nodes, never searched for inside raw query text.
-pub fn referenced_actors(q: &Query<'_>) -> Vec<u64> {
+pub fn referenced_actors(q: &Query<'_>) -> PResult<Vec<u64>> {
+    preflight(q)?;
     let mut ids = Vec::new();
     for s in &q.stages {
+        if let Stage::LinkAdd { target, .. } = s {
+            ids.push(*target);
+        }
         let _ = visit_paths(s, &mut |path| {
             if let Some(id) = path.actor {
                 ids.push(id)
@@ -1542,7 +1794,7 @@ pub fn referenced_actors(q: &Query<'_>) -> Vec<u64> {
     }
     ids.sort_unstable();
     ids.dedup();
-    ids
+    Ok(ids)
 }
 
 #[cfg(test)]
@@ -1581,7 +1833,16 @@ mod tests {
                 value: Value::Object(kv),
             } => {
                 assert_eq!(target.root, Root::Episodes);
-                assert_eq!(kv[1], ("output_ref", Value::Ref(0x99A4_F012)));
+                assert_eq!(
+                    kv[1],
+                    (
+                        "output_ref",
+                        Value::Ref(RefLiteral {
+                            id: 0x99A4_F012,
+                            mac: [0xab; 16]
+                        })
+                    )
+                );
                 assert_eq!(kv[2], ("status", Value::Lit(Literal::Int(200))));
             }
             m => panic!("{m:?}"),

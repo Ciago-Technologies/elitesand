@@ -203,7 +203,7 @@ pub fn decode_record(buf: &[u8]) -> Option<(RecHeader, &[u8])> {
 }
 
 // ---------------------------------------------------------------------------------
-// Extent image header (payload words 0..8 of every slot / on-disk extent copy)
+// Extent image v3 header (payload words 0..16 of every slot / on-disk extent copy)
 // ---------------------------------------------------------------------------------
 //
 // word 0: magic 0xC0A6_E1E7 (u32) | format version (u16) | flags (u16)
@@ -211,59 +211,68 @@ pub fn decode_record(buf: &[u8]) -> Option<(RecHeader, &[u8])> {
 // word 2: checkpoint_lsn  (all records <= this are folded into the image)
 // word 3: log epoch at checkpoint
 // word 4: image sequence (+1 per checkpoint of this tenant; picks newest of A/B)
-// word 5: payload crc32c over bytes [64, extent_bytes)
-// word 6: header crc32c over words 0..6 (low 32 bits)
+// word 5: payload crc32c over bytes [128, extent_bytes)
+// word 6: header crc32c over all 128 header bytes with word 6 zeroed
 // word 7: reserved (0)
+// words 8..10: full 128-bit incarnation; words 10..16 reserved (0)
 
 pub const IMG_MAGIC: u32 = 0xC0A6_E1E7;
-pub const IMG_VERSION: u16 = 2;
-
+pub const IMG_VERSION: u16 = 3;
+pub const IMG_WORDS: usize = 16;
+pub const IMG_BYTES: usize = IMG_WORDS * 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExtentImage {
     pub tenant: u32,
+    pub incarnation: u128,
+    pub tombstone: bool,
     pub layout_version: u32,
     pub checkpoint_lsn: u64,
     pub epoch: u64,
     pub image_seq: u64,
 }
-
 impl ExtentImage {
-    /// Build the 8 header words for a payload whose bytes from 64 onwards are `body`.
-    pub fn header_words(&self, body: &[u8]) -> [u64; 8] {
-        let mut w = [0u64; 8];
-        w[0] = IMG_MAGIC as u64 | (IMG_VERSION as u64) << 32;
-        w[1] = self.tenant as u64 | (self.layout_version as u64) << 32;
+    pub fn header_words(&self, body: &[u8]) -> [u64; IMG_WORDS] {
+        let mut w = [0; IMG_WORDS];
+        w[0] = IMG_MAGIC as u64 | ((IMG_VERSION as u64) << 32) | ((self.tombstone as u64) << 48);
+        w[1] = self.tenant as u64 | ((self.layout_version as u64) << 32);
         w[2] = self.checkpoint_lsn;
         w[3] = self.epoch;
         w[4] = self.image_seq;
         w[5] = crc32c(&[body]) as u64;
-        let mut hb = [0u8; 48];
-        for (i, x) in w[..6].iter().enumerate() {
-            hb[i * 8..i * 8 + 8].copy_from_slice(&x.to_le_bytes());
-        }
-        w[6] = crc32c(&[&hb]) as u64;
+        w[8] = self.incarnation as u64;
+        w[9] = (self.incarnation >> 64) as u64;
+        let bytes: Vec<u8> = w.iter().flat_map(|x| x.to_le_bytes()).collect();
+        w[6] = crc32c(&[&bytes]) as u64;
         w
     }
-
-    /// Validate a full image (`bytes` = whole extent). Returns the decoded header.
-    pub fn validate(bytes: &[u8], expect_tenant: u32) -> Option<ExtentImage> {
-        if bytes.len() < 64 {
+    pub fn validate(bytes: &[u8], tenant: u32, incarnation: u128, epoch: u64) -> Option<Self> {
+        if bytes.len() < IMG_BYTES || incarnation == 0 {
             return None;
         }
-        let w: [u64; 8] = core::array::from_fn(|i| {
+        let w: [u64; IMG_WORDS] = core::array::from_fn(|i| {
             u64::from_le_bytes(bytes[i * 8..i * 8 + 8].try_into().unwrap())
         });
         if w[0] as u32 != IMG_MAGIC
             || (w[0] >> 32) as u16 != IMG_VERSION
-            || w[1] as u32 != expect_tenant
+            || w[0] >> 48 != 0
+            || w[1] as u32 != tenant
+            || w[3] != epoch
+            || (w[8] as u128 | ((w[9] as u128) << 64)) != incarnation
         {
             return None;
         }
-        if crc32c(&[&bytes[..48]]) as u64 != w[6] || crc32c(&[&bytes[64..]]) as u64 != w[5] {
+        let mut header = bytes[..IMG_BYTES].to_vec();
+        header[48..56].fill(0);
+        if crc32c(&[&header]) as u64 != w[6] || crc32c(&[&bytes[IMG_BYTES..]]) as u64 != w[5] {
             return None;
         }
-        Some(ExtentImage {
-            tenant: w[1] as u32,
+        if w[7] != 0 || w[10..].iter().any(|w| *w != 0) {
+            return None;
+        }
+        Some(Self {
+            tenant,
+            incarnation,
+            tombstone: false,
             layout_version: (w[1] >> 32) as u32,
             checkpoint_lsn: w[2],
             epoch: w[3],
@@ -312,18 +321,20 @@ mod tests {
         ext[100] = 42;
         let img = ExtentImage {
             tenant: 7,
+            incarnation: 8,
+            tombstone: false,
             layout_version: 1,
             checkpoint_lsn: 99,
             epoch: 2,
             image_seq: 5,
         };
-        let hw = img.header_words(&ext[64..]);
+        let hw = img.header_words(&ext[IMG_BYTES..]);
         for (i, w) in hw.iter().enumerate() {
             ext[i * 8..i * 8 + 8].copy_from_slice(&w.to_le_bytes());
         }
-        assert_eq!(ExtentImage::validate(&ext, 7), Some(img));
-        assert_eq!(ExtentImage::validate(&ext, 8), None);
+        assert_eq!(ExtentImage::validate(&ext, 7, 8, 2), Some(img));
+        assert_eq!(ExtentImage::validate(&ext, 8, 8, 2), None);
         ext[4000] = 1; // torn tail
-        assert_eq!(ExtentImage::validate(&ext, 7), None);
+        assert_eq!(ExtentImage::validate(&ext, 7, 8, 2), None);
     }
 }

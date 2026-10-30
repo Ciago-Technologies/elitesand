@@ -1,54 +1,75 @@
 //! Tenant-scoped labels, authenticated endorsements, reference tokens and identity allocation.
-use ciagomem_crypto::{Endorsement, Prf, ct_eq};
+use ciagomem_crypto::{
+    Approval, AttestationVerifier, Endorsement, Prf, SignedProvenance, VerifiedMacaroon,
+    content_digest, ct_eq,
+};
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultLoc {
     pub segment: u32,
     pub offset: u64,
     pub len: u32,
     pub generation: u64,
-    pub blake3_256: [u8; 32],
+    pub digest: [u8; 32],
 }
-#[derive(Debug, Clone)]
-pub struct RefToken {
-    pub id: u64,
-    pub mac: [u8; 16],
-}
+pub use coagomem_ql::RefLiteral as RefToken;
 #[derive(Debug, PartialEq, Eq)]
 pub enum RefDenied {
-    NotFound,
-    BadMac,
+    Denied,
 }
-pub fn mint_ref(k: &impl Prf, tenant: u128, id: u64, loc: &VaultLoc) -> RefToken {
+#[derive(Debug, Clone, Copy)]
+pub struct RefScope {
+    pub tenant: u128,
+    pub session: u128,
+    pub actor: u64,
+    pub expires_at: u64,
+}
+pub fn mint_ref(k: &impl Prf, scope: &RefScope, id: u64, loc: &VaultLoc) -> RefToken {
     let msg = [
-        tenant.to_le_bytes().as_slice(),
+        scope.tenant.to_le_bytes().as_slice(),
+        &scope.session.to_le_bytes(),
+        &scope.actor.to_le_bytes(),
+        &scope.expires_at.to_le_bytes(),
         &id.to_le_bytes(),
         &loc.segment.to_le_bytes(),
         &loc.offset.to_le_bytes(),
         &loc.len.to_le_bytes(),
         &loc.generation.to_le_bytes(),
-        &loc.blake3_256,
+        &loc.digest,
     ]
     .concat();
     RefToken {
         id,
-        mac: k.mac128(b"ciagomem/ref/v1", &msg),
+        mac: k.mac128(b"ciagomem/ref/v2", &msg),
     }
 }
 pub fn resolve_ref<'a>(
     k: &impl Prf,
-    tenant: u128,
+    scope: &RefScope,
     index: &'a HashMap<u64, VaultLoc>,
     tok: &RefToken,
+    now: u64,
 ) -> Result<&'a VaultLoc, RefDenied> {
-    let loc = index.get(&tok.id).ok_or(RefDenied::NotFound)?;
-    if !ct_eq(&tok.mac, &mint_ref(k, tenant, tok.id, loc).mac) {
-        return Err(RefDenied::BadMac);
+    // A single error class hides existence; missing entries still execute a MAC comparison.
+    let dummy = VaultLoc {
+        segment: 0,
+        offset: 0,
+        len: 0,
+        generation: 0,
+        digest: [0; 32],
+    };
+    let found = index.get(&tok.id);
+    let loc = found.unwrap_or(&dummy);
+    let valid = ct_eq(&tok.mac, &mint_ref(k, scope, tok.id, loc).mac);
+    if !valid
+        || found.is_none()
+        || scope.actor == 0
+        || scope.session == 0
+        || now >= scope.expires_at
+    {
+        return Err(RefDenied::Denied);
     }
-    Ok(loc)
+    Ok(found.unwrap())
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Integrity {
@@ -57,29 +78,73 @@ pub enum Integrity {
     UserDirect,
     Policy,
 }
+/// Security metadata is opaque. Trusted integrity requires signed, content-bound provenance.
+/// ```compile_fail
+/// use coagomem_core::{Label,Integrity};
+/// let label=Label::new(Integrity::Policy,1,vec![1]);
+/// ```
+/// ```compile_fail
+/// use coagomem_core::{Label,Integrity};
+/// let mut label=Label::external(1,vec![1]).unwrap();
+/// label.integrity=Integrity::Policy;
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Label {
-    pub integrity: Integrity,
-    pub sources: u64,
+    integrity: Integrity,
+    sources: u64,
     readers: Vec<u128>,
+    digest: Option<[u8; 32]>,
+    issuer: Option<[u8; 32]>,
+    scope: Option<(u128, u128)>,
+    expires_at: u64,
 }
 impl Label {
-    /// Explicit principal IDs; no modulo operation or global 64-bit tenant bitmap.
-    pub fn new(
-        integrity: Integrity,
-        sources: u64,
-        mut readers: Vec<u128>,
-    ) -> Result<Self, &'static str> {
+    pub fn external(sources: u64, mut readers: Vec<u128>) -> Result<Self, &'static str> {
         readers.sort_unstable();
         readers.dedup();
         if readers.len() > 4 {
-            return Err("reader set exceeds inline policy limit");
+            return Err("too many readers");
         }
         Ok(Self {
-            integrity,
+            integrity: Integrity::External,
             sources,
             readers,
+            digest: None,
+            issuer: None,
+            scope: None,
+            expires_at: u64::MAX,
         })
+    }
+    pub fn attested(
+        proof: &SignedProvenance,
+        key: &AttestationVerifier,
+        tenant: u128,
+        session: u128,
+        content: &[u8],
+        now: u64,
+    ) -> Result<Self, &'static str> {
+        if !proof.verify(key, tenant, session, content, now) {
+            return Err("invalid provenance");
+        }
+        let mut l = Self::external(proof.claims.sources, proof.claims.readers.clone())?;
+        l.integrity = match proof.claims.integrity {
+            0 => Integrity::External,
+            1 => Integrity::AgentDerived,
+            2 => Integrity::UserDirect,
+            3 => Integrity::Policy,
+            _ => return Err("unknown integrity"),
+        };
+        l.digest = Some(content_digest(content));
+        l.issuer = Some(key.to_bytes());
+        l.scope = Some((tenant, session));
+        l.expires_at = proof.claims.expires_at;
+        Ok(l)
+    }
+    pub fn integrity(&self) -> Integrity {
+        self.integrity
+    }
+    pub fn sources(&self) -> u64 {
+        self.sources
     }
     pub fn readers(&self) -> &[u128] {
         &self.readers
@@ -94,7 +159,24 @@ impl Label {
                 .copied()
                 .filter(|r| b.readers.binary_search(r).is_ok())
                 .collect(),
+            digest: None,
+            issuer: if self.issuer == b.issuer {
+                self.issuer
+            } else {
+                None
+            },
+            scope: if self.scope == b.scope {
+                self.scope
+            } else {
+                None
+            },
+            expires_at: self.expires_at.min(b.expires_at),
         }
+    }
+    pub fn derived(content: &[u8], parents: &[Label]) -> Self {
+        let mut l = label_pllm_output(parents);
+        l.digest = Some(content_digest(content));
+        l
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,24 +191,114 @@ pub enum FrameField {
 pub enum FlowDenied {
     InsufficientIntegrity,
     InvalidEndorsement,
+    ReaderDenied,
+    InvalidProvenance,
+    Replay,
+    Capacity,
+    WrongAction,
+}
+pub struct NonceTracker {
+    seen: std::collections::BTreeMap<(u128, u128, u128), u64>,
+    capacity: usize,
+}
+impl NonceTracker {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            seen: Default::default(),
+            capacity,
+        }
+    }
+    fn consume(
+        &mut self,
+        tenant: u128,
+        session: u128,
+        nonce: u128,
+        expires: u64,
+        now: u64,
+    ) -> Result<(), FlowDenied> {
+        self.seen.retain(|_, until| *until > now);
+        let key = (tenant, session, nonce);
+        if self.seen.contains_key(&key) {
+            return Err(FlowDenied::Replay);
+        }
+        if self.seen.len() >= self.capacity {
+            return Err(FlowDenied::Capacity);
+        }
+        self.seen.insert(key, expires);
+        Ok(())
+    }
+}
+pub struct AdmissionContext<'a> {
+    pub session: &'a VerifiedMacaroon,
+    pub reader: u128,
+    pub content: &'a [u8],
+    pub now: u64,
+    pub nonce: u128,
+    pub tool: &'a str,
+    pub sink: u128,
+    pub verifier: &'a AttestationVerifier,
+}
+#[derive(Debug)]
+pub struct FrameValue {
+    label: Label,
+    tenant: u128,
+    session: u128,
+    digest: [u8; 32],
+    tool: String,
+    sink: u128,
+    expires_at: u64,
+    action: bool,
+    used: bool,
+}
+impl FrameValue {
+    pub fn label(&self) -> &Label {
+        &self.label
+    }
 }
 pub fn admit_to_frame(
     field: FrameField,
     mut label: Label,
     endorsement: Option<&Endorsement>,
-    user_key: &impl Prf,
-    tenant: u128,
-    now: u64,
-) -> Result<Label, FlowDenied> {
+    ctx: &AdmissionContext<'_>,
+    nonces: &mut NonceTracker,
+) -> Result<FrameValue, FlowDenied> {
+    if !label.readers.contains(&ctx.reader) {
+        return Err(FlowDenied::ReaderDenied);
+    }
+    let tenant = ctx.session.tenant_incarnation();
+    let session = ctx.session.session_id();
+    let digest = content_digest(ctx.content);
+    if label.integrity != Integrity::External
+        && (label.issuer != Some(ctx.verifier.to_bytes())
+            || label.scope != Some((tenant, session))
+            || label.digest != Some(digest)
+            || ctx.now >= label.expires_at)
+    {
+        return Err(FlowDenied::InvalidProvenance);
+    }
+    let mut action = false;
     if let Some(e) = endorsement {
-        if !e.verify(user_key, tenant, label.sources, now)
-            || label.integrity != Integrity::AgentDerived
-        {
+        if label.integrity == Integrity::External {
+            return Err(FlowDenied::InvalidEndorsement);
+        }
+        let expected = Approval {
+            tenant,
+            session,
+            nonce: ctx.nonce,
+            field: field as u8,
+            sources: label.sources,
+            digest,
+            sink: ctx.sink,
+            tool: ctx.tool.to_owned(),
+            expires_at: e.approval.expires_at,
+        };
+        if !e.verify(ctx.verifier, &expected, ctx.now) {
             return Err(FlowDenied::InvalidEndorsement);
         }
         if matches!(field, FrameField::ActiveIntent | FrameField::Playbook) {
-            label.integrity = Integrity::UserDirect
+            label.integrity = Integrity::UserDirect;
         }
+        action = true;
     }
     let required = match field {
         FrameField::HardConstraint => Integrity::Policy,
@@ -137,150 +309,64 @@ pub fn admit_to_frame(
     if label.integrity < required {
         return Err(FlowDenied::InsufficientIntegrity);
     }
-    Ok(label)
+    if let Some(e) = endorsement {
+        nonces.consume(tenant, session, ctx.nonce, e.approval.expires_at, ctx.now)?;
+    }
+    Ok(FrameValue {
+        expires_at: label
+            .expires_at
+            .min(endorsement.map_or(u64::MAX, |e| e.approval.expires_at)),
+        label,
+        tenant,
+        session,
+        digest,
+        tool: ctx.tool.into(),
+        sink: ctx.sink,
+        action,
+        used: false,
+    })
 }
+/// Labels alone never authorize side effects. Use the one-use action permit below.
 pub fn gateway_allow(side_effecting: bool, label: &Label, sink: u128) -> bool {
-    label.readers.binary_search(&sink).is_ok()
-        && (!side_effecting || label.integrity >= Integrity::UserDirect)
+    !side_effecting && label.readers.contains(&sink)
 }
-/// P-LLM outputs inherit every context restriction, and can never acquire human integrity.
+pub fn authorize_tool_call(
+    value: &mut FrameValue,
+    session: &VerifiedMacaroon,
+    tool: &str,
+    sink: u128,
+    args: &[u8],
+    now: u64,
+) -> Result<(), FlowDenied> {
+    if value.used
+        || !value.action
+        || value.tenant != session.tenant_incarnation()
+        || value.session != session.session_id()
+        || value.tool != tool
+        || value.sink != sink
+        || value.digest != content_digest(args)
+        || now >= value.expires_at
+        || !value.label.readers.contains(&sink)
+    {
+        return Err(FlowDenied::WrongAction);
+    }
+    value.used = true;
+    Ok(())
+}
 pub fn label_pllm_output(context: &[Label]) -> Label {
     let Some((first, rest)) = context.split_first() else {
-        return Label::new(Integrity::External, 0, vec![]).unwrap();
+        return Label::external(0, vec![]).unwrap();
     };
     let mut out = rest.iter().fold(first.clone(), |a, b| a.join(b));
     out.integrity = out.integrity.min(Integrity::AgentDerived);
+    out.digest = None;
     out
 }
 pub fn label_qllm_output(context: &[Label]) -> Label {
-    let mut l = label_pllm_output(context);
-    l.integrity = Integrity::External;
-    l
+    let mut out = label_pllm_output(context);
+    out.integrity = Integrity::External;
+    out
 }
 
-/// Durable append-only incarnation reservation journal. One authoritative path per identity domain.
-/// The process holds an exclusive file lock. Incomplete/torn records fail closed on attach.
-/// This journal must be retained with backups; it is not yet integrated into the WAL superblock.
-pub struct IncarnationStore {
-    file: File,
-    last: u128,
-    failed: bool,
-}
-impl IncarnationStore {
-    pub fn create(path: &Path) -> std::io::Result<Self> {
-        let file = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .append(true)
-            .open(path)?;
-        file.try_lock().map_err(std::io::Error::other)?;
-        file.sync_all()?;
-        File::open(
-            path.parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or(Path::new(".")),
-        )?
-        .sync_all()?;
-        Ok(Self {
-            file,
-            last: 0,
-            failed: false,
-        })
-    }
-    pub fn open(path: &Path) -> std::io::Result<Self> {
-        let mut file = OpenOptions::new().read(true).append(true).open(path)?;
-        file.try_lock().map_err(std::io::Error::other)?;
-        let len = file.metadata()?.len();
-        if len % 32 != 0 {
-            return Err(std::io::Error::other("incomplete incarnation journal"));
-        }
-        let mut last = 0u128;
-        let mut record = [0u8; 32];
-        file.seek(SeekFrom::Start(0))?;
-        for _ in 0..len / 32 {
-            file.read_exact(&mut record)?;
-            let n = u128::from_le_bytes(record[..16].try_into().unwrap());
-            let check = u128::from_le_bytes(record[16..].try_into().unwrap());
-            if n != last + 1 || check != !n {
-                return Err(std::io::Error::other("corrupt incarnation journal"));
-            }
-            last = n;
-        }
-        Ok(Self {
-            file,
-            last,
-            failed: false,
-        })
-    }
-    fn reserve(&mut self) -> std::io::Result<u128> {
-        if self.failed {
-            return Err(std::io::Error::other(
-                "incarnation store fenced after I/O error",
-            ));
-        }
-        let n = self
-            .last
-            .checked_add(1)
-            .ok_or_else(|| std::io::Error::other("incarnation exhausted"))?;
-        let record = [n.to_le_bytes(), (!n).to_le_bytes()].concat();
-        if let Err(e) = self
-            .file
-            .write_all(&record)
-            .and_then(|_| self.file.sync_all())
-        {
-            self.failed = true;
-            return Err(e);
-        }
-        self.last = n;
-        Ok(n)
-    }
-}
-pub struct TenantRegistry {
-    by_id: HashMap<u64, (String, String, u128)>,
-    store: IncarnationStore,
-}
-#[derive(Debug)]
-pub enum RegistryError {
-    Collision,
-    Persistence(std::io::Error),
-}
-impl TenantRegistry {
-    pub fn new(store: IncarnationStore) -> Self {
-        Self {
-            by_id: HashMap::new(),
-            store,
-        }
-    }
-    pub fn register(
-        &mut self,
-        k: &impl Prf,
-        ns: &str,
-        external: &str,
-    ) -> Result<(u64, u128), RegistryError> {
-        let msg = [
-            (ns.len() as u64).to_le_bytes().as_slice(),
-            ns.as_bytes(),
-            external.as_bytes(),
-        ]
-        .concat();
-        let id = u64::from_le_bytes(
-            k.mac128(b"ciagomem/tenant/v1", &msg)[..8]
-                .try_into()
-                .unwrap(),
-        );
-        if let Some((n, e, inc)) = self.by_id.get(&id) {
-            return if n == ns && e == external {
-                Ok((id, *inc))
-            } else {
-                Err(RegistryError::Collision)
-            };
-        }
-        let counter = self.store.reserve().map_err(RegistryError::Persistence)?;
-        let inc = u128::from_le_bytes(k.mac128(
-            b"ciagomem/incarnation/v1",
-            &[id.to_le_bytes().as_slice(), &counter.to_le_bytes()].concat(),
-        ));
-        self.by_id.insert(id, (ns.into(), external.into(), inc));
-        Ok((id, inc))
-    }
-}
+pub mod identity;
+pub use identity::*;

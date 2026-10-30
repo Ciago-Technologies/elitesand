@@ -1,0 +1,29 @@
+namespace ciagomem.image;
+enum Kind:ubyte { Null, Bool, Int, Float, Text, Ref }
+table Field {
+  name:string (required);
+  kind:Kind;
+  int_value:long;
+  float_value:double;
+  text_value:string;
+  bool_value:bool;
+  ref_id:ulong;
+  ref_inc_lo:ulong;
+  ref_inc_hi:ulong;
+}
+table ActorImage {
+  id:ulong;
+  incarnation_lo:ulong;
+  incarnation_hi:ulong;
+  tenant_lo:ulong;
+  tenant_hi:ulong;
+  schema_version:uint;
+  fields:[Field] (required);
+  integrity:ubyte;
+  sources:ulong;
+  reader_lo:[ulong] (required);
+  reader_hi:[ulong] (required);
+  embedding:[float];
+}
+root_type ActorImage;
+file_identifier "CIAE";

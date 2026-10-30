@@ -7,3 +7,4 @@ edition = "2024"
 hmac = "0.12.1"
 sha2 = "0.10.9"
 subtle = "2.6.1"
+ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std", "fast", "zeroize"] }

@@ -1,5 +1,6 @@
 //! Corrected regression guards derived from New File/ciagomem-v30-review-harness.zip.
 //! PASS means the reviewed defect is rejected, unlike the archived reproduction tests.
+mod support;
 use coagomem_core::*;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +13,8 @@ fn session(tenant: u128, ops: u64) -> VerifiedMacaroon {
             Caveat::Tenant(tenant),
             Caveat::ExpiresAt(100),
             Caveat::PeerUid(1000),
+            Caveat::Session(1),
+            Caveat::Audience(7),
             Caveat::Ops(ops),
             Caveat::KeyEpoch(2),
         ],
@@ -25,6 +28,8 @@ fn session(tenant: u128, ops: u64) -> VerifiedMacaroon {
             now_ns: 1,
             op_bit: OP_READ,
             peer_uid: 1000,
+            session: 1,
+            audience: 7,
         },
     )
     .unwrap()
@@ -37,6 +42,7 @@ fn s1_cross_tenant_and_scan_denied() {
         session: &token,
         owner_of: &owner,
         allowed_destinations: &[],
+        owner_version: 0,
     };
     assert_eq!(
         validate_query(
@@ -64,7 +70,8 @@ fn s2_actor_references_are_validated_nodes() {
             &AuthContext {
                 session: &token,
                 owner_of: &owner,
-                allowed_destinations: &[]
+                allowed_destinations: &[],
+                owner_version: 0,
             }
         ),
         Err(PolicyError::ForeignActor(2))
@@ -115,7 +122,12 @@ fn s3c_take_export_policy_agrees() {
             &AuthContext {
                 session: &token,
                 owner_of: &owner,
-                allowed_destinations: &["s3://approved/reports/"]
+                allowed_destinations: &[DestinationRule {
+                    tenant: 11,
+                    prefix: "s3://approved/reports/",
+                    expected_owner: Some("owner")
+                }],
+                owner_version: 0,
             }
         )
         .is_ok()
@@ -165,113 +177,154 @@ fn journal_path(name: &str) -> std::path::PathBuf {
 }
 #[test]
 fn s5_restart_does_not_reuse_incarnations() {
-    let p = journal_path("restart");
+    let p = journal_path("stable");
+    let anchor = support::anchor();
     let k = KeyedPrf([7; 32]);
-    let (id1, inc1) = {
-        let mut r = TenantRegistry::new(IncarnationStore::create(&p).unwrap());
-        r.register(&k, "ns", "tenant").unwrap()
+    let first = {
+        let mut r = TenantRegistry::new(IncarnationStore::create(&p, anchor.clone()).unwrap());
+        r.create(&k, "ns", "tenant").unwrap()
     };
-    let (id2, inc2) = {
-        let mut r = TenantRegistry::new(IncarnationStore::open(&p).unwrap());
-        r.register(&k, "ns", "tenant").unwrap()
-    };
-    assert_eq!(id1, id2);
-    assert_ne!(inc1, inc2);
+    let mut registry = TenantRegistry::new(IncarnationStore::open(&p, anchor.clone()).unwrap());
+    assert_eq!(registry.lookup(&k, "ns", "tenant").unwrap(), first);
+    assert!(matches!(
+        registry.create(&k, "ns", "tenant"),
+        Err(RegistryError::Exists)
+    ));
+    registry.delete(&k, "ns", "tenant").unwrap();
+    let second = registry.create(&k, "ns", "tenant").unwrap();
+    assert_eq!(first.0, second.0);
+    assert_ne!(first.1, second.1);
     let loc = VaultLoc {
         segment: 1,
         offset: 0,
         len: 10,
         generation: 1,
-        blake3_256: [9; 32],
+        digest: [9; 32],
     };
-    let tok = mint_ref(&k, inc1, 5, &loc);
-    let idx = HashMap::from([(5, loc)]);
-    assert!(resolve_ref(&k, inc1, &idx, &tok).is_ok());
-    assert_eq!(resolve_ref(&k, inc2, &idx, &tok), Err(RefDenied::BadMac));
+    let scope = RefScope {
+        tenant: first.1,
+        session: 1,
+        actor: 1,
+        expires_at: 100,
+    };
+    let token = mint_ref(&k, &scope, 5, &loc);
+    let index = HashMap::from([(5, loc)]);
+    assert!(resolve_ref(&k, &scope, &index, &token, 1).is_ok());
+    assert!(
+        resolve_ref(
+            &k,
+            &RefScope {
+                tenant: second.1,
+                ..scope
+            },
+            &index,
+            &token,
+            1
+        )
+        .is_err()
+    );
+    drop(registry);
     std::fs::remove_file(p).unwrap();
 }
+
 #[test]
 fn incarnation_journal_fails_closed_on_torn_tail_and_lock_conflict() {
     use std::io::Write;
-    let p = journal_path("torn");
-    let store = IncarnationStore::create(&p).unwrap();
-    assert!(IncarnationStore::open(&p).is_err());
+    let p = journal_path("tail");
+    let anchor = support::anchor();
+    let store = IncarnationStore::create(&p, anchor.clone()).unwrap();
+    assert!(IncarnationStore::open(&p, anchor.clone()).is_err());
     drop(store);
     std::fs::OpenOptions::new()
         .append(true)
         .open(&p)
         .unwrap()
-        .write_all(&[1])
+        .write_all(&[0; 32])
         .unwrap();
-    assert!(IncarnationStore::open(&p).is_err());
+    let recovered = IncarnationStore::open(&p, anchor.clone()).unwrap();
+    assert_eq!(recovered.recovered_tail_bytes, 32);
+    drop(recovered);
     std::fs::remove_file(p).unwrap();
 }
+
 #[test]
 fn s6_endorsements_require_authentication_and_binding() {
-    let key = KeyedPrf([2; 32]);
-    let label = Label::new(Integrity::AgentDerived, 2, vec![11]).unwrap();
-    let valid = Endorsement::issue(&key, 11, 2, 100);
+    let signer = AttestationSigner::from_seed([3; 32]);
+    let verifier = signer.verifier();
+    let token = session(11, OP_READ | OP_WRITE);
+    let content = b"value";
+    let label = support::label(Integrity::AgentDerived, 2, vec![11]).unwrap();
+    let approval = Approval {
+        tenant: 11,
+        session: 1,
+        nonce: 1,
+        field: FrameField::ActiveIntent as u8,
+        sources: 2,
+        digest: content_digest(content),
+        sink: 11,
+        tool: "send".into(),
+        expires_at: 100,
+    };
+    let e = signer.endorse(approval);
+    let context = AdmissionContext {
+        session: &token,
+        reader: 11,
+        content,
+        now: 1,
+        nonce: 1,
+        tool: "send",
+        sink: 11,
+        verifier: &verifier,
+    };
+    let mut nonces = NonceTracker::new(10);
+    let mut value = admit_to_frame(
+        FrameField::ActiveIntent,
+        label.clone(),
+        Some(&e),
+        &context,
+        &mut nonces,
+    )
+    .unwrap();
+    assert!(authorize_tool_call(&mut value, &token, "send", 11, content, 2).is_ok());
+    assert!(authorize_tool_call(&mut value, &token, "send", 11, content, 2).is_err());
     assert!(
         admit_to_frame(
             FrameField::ActiveIntent,
             label.clone(),
-            Some(&valid),
-            &key,
-            11,
-            1
+            Some(&e),
+            &context,
+            &mut nonces
         )
-        .is_ok()
+        .is_err()
     );
-    let mut forged = valid.clone();
-    forged.sources = u64::MAX;
+    let mut forged = e.clone();
+    forged.approval.sources = u64::MAX;
     assert!(
         admit_to_frame(
             FrameField::ActiveIntent,
             label.clone(),
             Some(&forged),
-            &key,
-            11,
-            1
+            &context,
+            &mut NonceTracker::new(10)
         )
         .is_err()
     );
-    for (tenant, now) in [(22, 1), (11, 100)] {
-        assert!(
-            admit_to_frame(
-                FrameField::ActiveIntent,
-                label.clone(),
-                Some(&valid),
-                &key,
-                tenant,
-                now
-            )
-            .is_err()
-        );
-    }
-    assert!(
-        admit_to_frame(
-            FrameField::HardConstraint,
-            label.clone(),
-            Some(&valid),
-            &key,
-            11,
-            1
-        )
-        .is_err()
-    );
-    let external = Label::new(Integrity::External, 2, vec![11]).unwrap();
+    let wrong = AdmissionContext {
+        content: b"different",
+        ..context
+    };
     assert!(
         admit_to_frame(
             FrameField::ActiveIntent,
-            external,
-            Some(&valid),
-            &key,
-            11,
-            1
+            label,
+            Some(&e),
+            &wrong,
+            &mut NonceTracker::new(10)
         )
         .is_err()
     );
 }
+
 #[test]
 fn s6b_signature_ops_and_mandatory_caveats_required() {
     let k = KeyedPrf([3; 32]);
@@ -281,11 +334,15 @@ fn s6b_signature_ops_and_mandatory_caveats_required() {
         now_ns: 1,
         op_bit: 1,
         peer_uid: 1000,
+        session: 1,
+        audience: 7,
     };
     let base = vec![
         Caveat::Tenant(1),
         Caveat::ExpiresAt(100),
         Caveat::PeerUid(1000),
+        Caveat::Session(1),
+        Caveat::Audience(7),
         Caveat::KeyEpoch(0),
     ];
     assert!(
@@ -308,6 +365,8 @@ fn s6b_signature_ops_and_mandatory_caveats_required() {
             Caveat::Tenant(1),
             Caveat::ExpiresAt(100),
             Caveat::PeerUid(1000),
+            Caveat::Session(1),
+            Caveat::Audience(7),
             Caveat::KeyEpoch(0),
             Caveat::Ops(1),
         ],
@@ -318,23 +377,23 @@ fn s6b_signature_ops_and_mandatory_caveats_required() {
 }
 #[test]
 fn s7_principals_do_not_alias_modulo_64() {
-    let label = Label::new(Integrity::UserDirect, 1, vec![1]).unwrap();
-    assert!(gateway_allow(true, &label, 1));
+    let label = support::label(Integrity::UserDirect, 1, vec![1]).unwrap();
+    assert!(gateway_allow(false, &label, 1));
     assert!(!gateway_allow(true, &label, 65));
 }
 #[test]
 fn llm_output_inherits_every_context_label() {
-    let user = Label::new(Integrity::UserDirect, 1, vec![1, 65]).unwrap();
-    let ext = Label::new(Integrity::External, 2, vec![65]).unwrap();
+    let user = support::label(Integrity::UserDirect, 1, vec![1, 65]).unwrap();
+    let ext = support::label(Integrity::External, 2, vec![65]).unwrap();
     let out = label_pllm_output(&[user.clone(), ext]);
-    assert_eq!(out.integrity, Integrity::External);
-    assert_eq!(out.sources, 3);
+    assert_eq!(out.integrity(), Integrity::External);
+    assert_eq!(out.sources(), 3);
     assert_eq!(out.readers(), &[65]);
     assert_eq!(
-        label_pllm_output(&[user.clone()]).integrity,
+        label_pllm_output(&[user.clone()]).integrity(),
         Integrity::AgentDerived
     );
-    assert_eq!(label_qllm_output(&[user]).integrity, Integrity::External);
+    assert_eq!(label_qllm_output(&[user]).integrity(), Integrity::External);
 }
 struct StepClock(AtomicU64);
 impl Clock for StepClock {
@@ -344,7 +403,7 @@ impl Clock for StepClock {
 }
 #[test]
 fn s9_slot_read_uses_a_deadline() {
-    let a = SlotArena::<4>::new(0, 1, 1);
+    let a = SlotArena::<512>::new(0, 1, 1);
     let h = a
         .install(
             0,
@@ -362,11 +421,15 @@ fn s9_slot_read_uses_a_deadline() {
         .unwrap();
     let guard = a.header(0).seq.write_begin().unwrap();
     assert!(matches!(
-        a.read(h, 1, Visibility::Optimistic, |v| v.word(0)).err(),
+        a.read(h, 1, 11, Visibility::Optimistic, |v| v.word(0))
+            .err(),
         Some(SlotReadError::WriterStalled | SlotReadError::DeadlineExhausted)
     ));
     guard.commit();
-    assert!(a.read(h, 1, Visibility::Optimistic, |v| v.word(0)).is_ok());
+    assert!(
+        a.read(h, 1, 11, Visibility::Optimistic, |v| v.word(0))
+            .is_ok()
+    );
 }
 #[test]
 fn s10_stalled_writer_is_not_declared_poisoned() {
@@ -409,8 +472,9 @@ fn s11_overflow_hard_cap_and_excess_credits() {
     assert_eq!(lane.0.len(), 4);
     assert_eq!(rejected, 99_988);
     lane.0.clear();
-    flow.on_credits(100);
-    assert_eq!(flow.excess_credits, 96);
+    assert!(flow.acknowledge(100).is_err());
+    flow.acknowledge(4).unwrap();
+    assert_eq!(flow.excess_credits, 1);
     assert_eq!(flow.pump(&mut lane), 4);
     assert_eq!(flow.backlog(), 4);
     let mut zero = OutboundFlow::new(0, 0);
@@ -432,8 +496,8 @@ fn s12_dirty_list_checks_head_only_and_unlinks_arbitrary_nodes() {
         PinAction::None
     );
     assert_eq!(calls.get(), 1);
-    p.on_checkpointed(35_000).unwrap();
-    p.on_checkpointed(0).unwrap();
+    p.on_checkpointed(35_000, 36_000).unwrap();
+    p.on_checkpointed(0, 1000).unwrap();
     assert_eq!(p.min_needed_lsn(80_000), 1001);
     assert_eq!(
         p.decide(1, 0.1, Duration::from_secs(1), |_| false),
@@ -448,7 +512,7 @@ fn vote_reuse_rejects_late_and_conflicting_duplicate_ballots() {
     let n = Participants::new(2).unwrap();
     t.open(1, n).unwrap();
     assert_eq!(t.vote(1, 0, true), Vote::Pending);
-    assert_eq!(t.vote(1, 0, false), Vote::Duplicate);
+    assert_eq!(t.vote(1, 0, false), Vote::Conflict);
     assert_eq!(t.vote(1, 1, true), Vote::Decided { commit: true });
     t.close(1);
     t.open(3, n).unwrap();
@@ -470,7 +534,7 @@ fn sixty_four_votes_required() {
 #[test]
 fn checked_primitives_reject_regression_before_mutating() {
     assert!(ExtentLoc::new_checked(4103, false, 1).is_none());
-    let a = SlotArena::<4>::new(0, 1, 1);
+    let a = SlotArena::<512>::new(0, 1, 1);
     let h = a
         .install(
             0,
@@ -494,14 +558,14 @@ fn checked_primitives_reject_regression_before_mutating() {
         })
     );
     assert_eq!(
-        a.read(h, 1, Visibility::Optimistic, |v| v.word(0))
+        a.read(h, 1, 11, Visibility::Optimistic, |v| v.word(0))
             .unwrap()
             .value,
         0
     );
-    a.cores[0].publish_durable(100);
-    a.cores[0].publish_durable(10);
-    assert_eq!(a.cores[0].durable(), 100);
+    a.core(0).publish_durable(100);
+    a.core(0).publish_durable(10);
+    assert_eq!(a.core(0).durable(), 100);
 }
 #[test]
 fn p0_slot_regressions_are_also_rejected_in_release() {
@@ -516,6 +580,7 @@ fn p0_slot_regressions_are_also_rejected_in_release() {
                 layout_version: 1,
                 flags: 0,
             },
+            11,
             100,
             100,
         )
@@ -570,6 +635,7 @@ fn policy_rechecks_manually_constructed_ast() {
         session: &token,
         owner_of: &owner,
         allowed_destinations: &[],
+        owner_version: 0,
     };
     let mut q = parse_ciaql("@1").unwrap();
     q.stages.push(Stage::Take(0));

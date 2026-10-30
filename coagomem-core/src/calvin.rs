@@ -45,9 +45,12 @@ pub enum Vote {
     /// decider's outcome message arrives on the mesh.
     Pending,
     /// This vote completed the set: broadcast `commit` to the other participants.
-    Decided { commit: bool },
+    Decided {
+        commit: bool,
+    },
     /// Same participant voted twice (redelivery). Ignored.
     Duplicate,
+    Conflict,
     /// Slot does not belong to this `tx_seq` (late or misrouted message).
     Stale,
 }
@@ -113,7 +116,11 @@ impl VoteTable {
         }
         let bit = 1u64 << idx;
         if s.voted & bit != 0 {
-            return Vote::Duplicate;
+            return if ((s.nays & bit) == 0) == ok {
+                Vote::Duplicate
+            } else {
+                Vote::Conflict
+            };
         }
         if !ok {
             s.nays |= bit

@@ -24,3 +24,7 @@ path = "../tests/export_window.rs"
 [[test]]
 name = "v30_regressions"
 path = "../tests/v30_regressions.rs"
+
+[[test]]
+name = "r5_regressions"
+path = "../tests/r5_regressions.rs"

@@ -38,6 +38,12 @@ use coagomem_core::slot::CoreControl;
 use core::ptr::NonNull;
 use std::collections::VecDeque;
 
+/// A fenced write may already be on disk; clients must reconcile rather than blindly retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AckOutcome {
+    Indeterminate(u64),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TailMode {
     /// Every write ends on a block boundary (PAD record). Never rewrites a block that
@@ -674,7 +680,7 @@ impl GroupCommitLog {
 
     /// Feed every `Op::LogWrite` CQE here. Durable acknowledgements (in LSN order) are
     /// appended to `acks`; if the log fences, every pending acknowledgement is moved to
-    /// `failed` and `Err(Fenced)` is returned.
+    /// `indeterminate` and `Err(Fenced)` is returned. No promise of rollback is made.
     pub fn on_cqe<I: IoBackend>(
         &mut self,
         user_data: u64,
@@ -682,8 +688,12 @@ impl GroupCommitLog {
         core: &CoreControl,
         io: &mut I,
         acks: &mut Vec<u64>,
-        failed: &mut Vec<u64>,
+        indeterminate: &mut Vec<AckOutcome>,
     ) -> Result<(), LogError> {
+        if let Some(errno) = self.fenced {
+            core.fence();
+            return Err(LogError::Fenced(errno));
+        }
         let Some(ud) = UserData::decode(user_data) else {
             return Ok(());
         };
@@ -711,7 +721,8 @@ impl GroupCommitLog {
             self.stats.retries += 1;
             if b.retries > self.cfg.max_retries {
                 let errno = if res < 0 { res } else { -libc::EIO };
-                self.fence(errno, failed);
+                core.fence();
+                self.fence(errno, indeterminate);
                 return Err(LogError::Fenced(errno));
             }
             b.state = BufState::Sealed;
@@ -744,13 +755,13 @@ impl GroupCommitLog {
         }
     }
 
-    fn fence(&mut self, errno: i32, failed: &mut Vec<u64>) {
+    fn fence(&mut self, errno: i32, indeterminate: &mut Vec<AckOutcome>) {
         self.fenced = Some(errno);
         for &i in &self.pipeline {
-            failed.append(&mut self.bufs[i].acks);
+            indeterminate.extend(self.bufs[i].acks.drain(..).map(AckOutcome::Indeterminate));
         }
         if let Some(i) = self.active {
-            failed.append(&mut self.bufs[i].acks);
+            indeterminate.extend(self.bufs[i].acks.drain(..).map(AckOutcome::Indeterminate));
         }
     }
 
@@ -1190,7 +1201,10 @@ mod tests {
         assert_eq!(fenced, Some(LogError::Fenced(-libc::EIO)));
         assert!(acks.is_empty());
         failed.sort();
-        assert_eq!(failed, vec![10, 11]);
+        assert_eq!(
+            failed,
+            vec![AckOutcome::Indeterminate(10), AckOutcome::Indeterminate(11)]
+        );
         assert_eq!(
             log.append(1, KIND_DATA, b"c", None, 0, &mut io),
             Err(LogError::Fenced(-libc::EIO))

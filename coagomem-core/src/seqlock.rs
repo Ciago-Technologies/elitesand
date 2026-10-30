@@ -221,7 +221,7 @@ impl<'a> WordsMut<'a> {
     /// # Safety contract (not `unsafe` because misuse cannot cause UB, only torn data):
     /// call only while holding the write section that protects `words`.
     #[inline(always)]
-    pub fn new(words: &'a [AtomicU64]) -> Self {
+    pub(crate) fn new(words: &'a [AtomicU64]) -> Self {
         WordsMut { words }
     }
     #[inline(always)]
@@ -317,7 +317,7 @@ impl<const W: usize> Default for SeqCell<W> {
 }
 
 impl<const W: usize> SeqCell<W> {
-    pub fn new(init: [u64; W]) -> Self {
+    pub(crate) fn new(init: [u64; W]) -> Self {
         SeqCell {
             seq: SeqWord::new(),
             words: init.map(AtomicU64::new),

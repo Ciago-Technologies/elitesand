@@ -1,0 +1,15 @@
+--- /tmp/mesh.orig	2026-10-30 18:08:40.053742466 +0000
++++ coagomem-core/src/mesh.rs	2026-10-30 18:08:40.065742466 +0000
+@@ -276,7 +276,11 @@
+             ring.head.store(h, Release);
+         }
+         self.heads[src] = h;
+-        (n, h != t)
++        if h == t {
++            // Re-check: the doorbell bit for a later flush may already be consumed.
++            self.cached_tails[src] = ring.tail.load(Acquire);
++        }
++        (n, h != self.cached_tails[src])
+     }
+ 
+     /// Returns `true` if the caller may sleep (and must then wait for a wake CQE).

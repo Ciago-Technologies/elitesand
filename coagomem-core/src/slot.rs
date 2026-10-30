@@ -164,6 +164,13 @@ impl ExtentLoc {
         assert!(container < 4096 && block_4k <= Self::BLOCK_MASK);
         ExtentLoc((container as u64) << 52 | (copy_b as u64) << 51 | block_4k)
     }
+    pub const fn new_checked(container: u16, copy_b: bool, block: u64) -> Option<Self> {
+        if container >= 4096 || block > Self::BLOCK_MASK {
+            None
+        } else {
+            Some(Self::new(container, block, copy_b))
+        }
+    }
     pub const fn container(self) -> u16 {
         (self.0 >> 52) as u16
     }
@@ -205,11 +212,13 @@ pub struct SlotHeader {
     /// Last generation issued for this physical slot (engine-private bookkeeping
     /// kept here so it survives the slot being free).
     pub last_generation: AtomicU64, //           +48
+    pub incarnation_lo: AtomicU64,
+    pub incarnation_hi: AtomicU64,
     pub reserved: AtomicU64, //                  +56
 }
-const _: () = assert!(core::mem::size_of::<SlotHeader>() == 64);
+const _: () = assert!(core::mem::size_of::<SlotHeader>() == 128);
 
-/// Per-core durability watermark, exported read-only to agents.
+/// Engine-private durability/fence state; agent projections must copy an attested watermark.
 #[derive(Debug, Default)]
 #[repr(C)]
 pub struct CoreControl {
@@ -217,6 +226,7 @@ pub struct CoreControl {
     pub durable_lsn: CachePadded<AtomicU64>,
     /// Bumped on every engine (re)start; readers drop all cached handles on change.
     pub engine_epoch: CachePadded<AtomicU64>,
+    fenced: core::sync::atomic::AtomicBool,
 }
 
 impl CoreControl {
@@ -230,7 +240,15 @@ impl CoreControl {
     /// Log side: monotonic publish.
     #[inline(always)]
     pub fn publish_durable(&self, lsn: u64) {
-        self.durable_lsn.fetch_max(lsn, Release);
+        if !self.is_fenced() {
+            self.durable_lsn.fetch_max(lsn, Release);
+        }
+    }
+    pub fn fence(&self) {
+        self.fenced.store(true, Release);
+    }
+    pub fn is_fenced(&self) -> bool {
+        self.fenced.load(Acquire)
     }
 }
 
@@ -245,7 +263,7 @@ impl CoreControl {
 #[repr(C, align(4096))]
 pub struct Payload<const W: usize>(pub [AtomicU64; W]);
 
-pub const IMAGE_HEADER_WORDS: usize = 8;
+pub const IMAGE_HEADER_WORDS: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
@@ -258,6 +276,7 @@ pub enum Visibility {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotReadError {
+    Fenced,
     /// The handle no longer owns the slot: re-resolve via the route table.
     Reassigned,
     /// Snapshot is newer than the durability watermark. `applied - durable` is bounded
@@ -302,7 +321,8 @@ enum Backing {
 
 /// One size class of the slab: a dense header array plus 4 KiB-aligned payloads.
 /// Production backing is a `memfd_create(MFD_HUGETLB | MFD_HUGE_2MB)` mapping (see
-/// `SlotArena::new_hugetlb`), so agents can map the very same pages read-only.
+/// `SlotArena::new_hugetlb`). This backing is engine-private; agents receive
+/// separately authorized sealed projections, never this descriptor.
 pub struct SlotArena<const W: usize> {
     class: u8,
     n: u32,
@@ -331,7 +351,7 @@ impl<const W: usize> SlotArena<W> {
     pub const PAYLOAD_BYTES: usize = W * 8;
 
     const fn header_region(n: usize) -> usize {
-        (n * 64).next_multiple_of(2 * 1024 * 1024)
+        (n * core::mem::size_of::<SlotHeader>()).next_multiple_of(2 * 1024 * 1024)
     }
 
     /// Bytes of backing memory needed for `n` slots (headers rounded to 2 MiB).
@@ -345,6 +365,9 @@ impl<const W: usize> SlotArena<W> {
     }
 
     /// Zeroed heap backing (tests, non-Linux, or no hugepages reserved).
+    pub fn new(class: u8, n: usize, cores: usize) -> Self {
+        Self::new_heap(class, n.try_into().expect("slot count exceeds u32"), cores)
+    }
     pub fn new_heap(class: u8, n: u32, cores: usize) -> Self {
         Self::check(class, n, cores);
         let layout =
@@ -357,14 +380,9 @@ impl<const W: usize> SlotArena<W> {
     }
 
     /// HugeTLB-backed memfd (2 MiB pages, reserved at boot via `hugepages=`), mapped
-    /// `MAP_SHARED | MAP_POPULATE`. Returns the fd too so it can be passed to agent
-    /// processes over SCM_RIGHTS for a read-only mapping.
+    /// `MAP_SHARED | MAP_POPULATE`. Private engine allocation; no descriptor is returned.
     #[cfg(target_os = "linux")]
-    pub fn new_hugetlb(
-        class: u8,
-        n: u32,
-        cores: usize,
-    ) -> std::io::Result<(Self, std::os::fd::RawFd)> {
+    pub fn new_hugetlb(class: u8, n: u32, cores: usize) -> std::io::Result<Self> {
         use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
         Self::check(class, n, cores);
         let len = Self::region_bytes(n as usize).next_multiple_of(2 * 1024 * 1024);
@@ -381,12 +399,15 @@ impl<const W: usize> SlotArena<W> {
             if libc::ftruncate(fd.as_raw_fd(), len as libc::off_t) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            // Size is now fixed for the agents' mappings.
-            libc::fcntl(
+            // Check every seal operation; this allocation is never shared with agents.
+            if libc::fcntl(
                 fd.as_raw_fd(),
                 libc::F_ADD_SEALS,
                 libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_SEAL,
-            );
+            ) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
             let p = libc::mmap(
                 core::ptr::null_mut(),
                 len,
@@ -398,11 +419,14 @@ impl<const W: usize> SlotArena<W> {
             if p == libc::MAP_FAILED {
                 return Err(std::io::Error::last_os_error());
             }
-            let raw = fd.as_raw_fd();
+
             let base = NonNull::new_unchecked(p as *mut u8);
-            Ok((
-                Self::from_base(class, n, cores, base, Backing::Mmap { len, _fd: fd }),
-                raw,
+            Ok(Self::from_base(
+                class,
+                n,
+                cores,
+                base,
+                Backing::Mmap { len, _fd: fd },
             ))
         }
     }
@@ -475,9 +499,13 @@ impl<const W: usize> SlotArena<W> {
         &self,
         h: SlotHandle,
         tenant: u32,
+        expected_incarnation: u128,
         vis: Visibility,
         mut f: impl FnMut(WordView<'_>) -> Option<R>,
     ) -> Result<Snapshot<R>, SlotReadError> {
+        if self.cores.iter().any(CoreControl::is_fenced) {
+            return Err(SlotReadError::Fenced);
+        }
         let idx = self.resolve(h).ok_or(SlotReadError::InvalidHandle)?;
         let hdr = self.header(idx);
         let words = self.payload(idx);
@@ -491,7 +519,11 @@ impl<const W: usize> SlotArena<W> {
             |view| {
                 let owner = hdr.owner.load(Relaxed);
                 let tw = TenantWord::unpack(hdr.tenant.load(Relaxed));
-                if owner != h.raw() || tw.tenant != tenant {
+                if owner != h.raw()
+                    || tw.tenant != tenant
+                    || hdr.incarnation_lo.load(Relaxed) != expected_incarnation as u64
+                    || hdr.incarnation_hi.load(Relaxed) != (expected_incarnation >> 64) as u64
+                {
                     return Some(Err(()));
                 }
                 let applied = hdr.applied_lsn.load(Relaxed);
@@ -547,12 +579,35 @@ impl<const W: usize> SlotArena<W> {
                 attempted: lsn,
             });
         }
+        if lsn == current {
+            g.commit();
+            return Err(crate::WriteError::DuplicateLsn);
+        }
         let r = f(WordsMut::new(self.payload(idx)));
         hdr.applied_lsn.store(lsn, Relaxed);
         g.commit();
         Ok(r)
     }
 
+    pub(crate) fn stamp_image_header(
+        &self,
+        h: SlotHandle,
+        words: &[u64],
+    ) -> Result<(), WriterBusy> {
+        let idx = self.resolve(h).ok_or(WriterBusy)?;
+        let hdr = self.header(idx);
+        let g = hdr.seq.write_begin()?;
+        if hdr.owner.load(Relaxed) != h.raw() {
+            g.commit();
+            return Err(WriterBusy);
+        }
+        let w = WordsMut::new(self.payload(idx));
+        for (i, value) in words.iter().enumerate() {
+            w.set(i, *value);
+        }
+        g.commit();
+        Ok(())
+    }
     /// Owner core only, slot currently unowned: issue the next generation, install the
     /// owner, and expose it. The *caller* publishes the handle in the route table after
     /// this returns (publication order: slot first, route second).
@@ -560,6 +615,7 @@ impl<const W: usize> SlotArena<W> {
         &self,
         idx: u32,
         tw: TenantWord,
+        incarnation: u128,
         applied_lsn: u64,
         checkpoint_lsn: u64,
     ) -> Result<Option<SlotHandle>, WriterBusy> {
@@ -574,6 +630,13 @@ impl<const W: usize> SlotArena<W> {
             g.commit();
             return Err(WriterBusy);
         }
+        if incarnation == 0 {
+            g.commit();
+            return Err(WriterBusy);
+        }
+        hdr.incarnation_lo.store(incarnation as u64, Relaxed);
+        hdr.incarnation_hi
+            .store((incarnation >> 64) as u64, Relaxed);
         hdr.last_generation.store(h.generation(), Relaxed);
         hdr.tenant.store(tw.pack(), Relaxed);
         hdr.applied_lsn.store(applied_lsn, Relaxed);
@@ -594,6 +657,8 @@ impl<const W: usize> SlotArena<W> {
         debug_assert_eq!(hdr.owner.load(Relaxed), h.raw());
         hdr.owner.store(0, Relaxed);
         hdr.tenant.store(0, Relaxed);
+        hdr.incarnation_lo.store(0, Relaxed);
+        hdr.incarnation_hi.store(0, Relaxed);
         g.commit();
         Ok(())
     }
@@ -732,12 +797,12 @@ mod tests {
             flags: 0,
         };
 
-        let h1 = arena.install(2, tw(5), 10, 10).unwrap().unwrap();
+        let h1 = arena.install(2, tw(5), 5u128 + 1, 10, 10).unwrap().unwrap();
         route.publish(5, h1);
         arena.write(h1, 11, |w| w.set(8, 0xAAAA)).unwrap();
         assert_eq!(
             arena
-                .read(h1, 5, Visibility::Applied, |v| v.word(8))
+                .read(h1, 5, (5) as u128 + 1, Visibility::Applied, |v| v.word(8))
                 .unwrap()
                 .value,
             0xAAAA
@@ -746,24 +811,24 @@ mod tests {
         // Evict tenant 5, reuse slot 2 for tenant 9.
         assert!(route.unpublish(5, h1));
         arena.revoke(h1).unwrap();
-        let h2 = arena.install(2, tw(9), 0, 0).unwrap().unwrap();
+        let h2 = arena.install(2, tw(9), 9u128 + 1, 0, 0).unwrap().unwrap();
         route.publish(9, h2);
         arena.write(h2, 1, |w| w.set(8, 0xBBBB)).unwrap();
 
         assert_eq!(h1.index(), h2.index());
         assert_eq!(h2.generation(), h1.generation() + 1);
         assert_eq!(
-            arena.read(h1, 5, Visibility::Applied, |v| v.word(8)),
+            arena.read(h1, 5, (5) as u128 + 1, Visibility::Applied, |v| v.word(8)),
             Err(SlotReadError::Reassigned)
         );
         // Even a forged (old handle, new tenant) pair fails on the generation.
         assert_eq!(
-            arena.read(h1, 9, Visibility::Applied, |v| v.word(8)),
+            arena.read(h1, 9, (9) as u128 + 1, Visibility::Applied, |v| v.word(8)),
             Err(SlotReadError::Reassigned)
         );
         assert_eq!(
             arena
-                .read(h2, 9, Visibility::Applied, |v| v.word(8))
+                .read(h2, 9, (9) as u128 + 1, Visibility::Applied, |v| v.word(8))
                 .unwrap()
                 .value,
             0xBBBB
@@ -780,20 +845,24 @@ mod tests {
             layout_version: 1,
             flags: 0,
         };
-        let h = arena.install(0, tw, 0, 0).unwrap().unwrap();
+        let h = arena.install(0, tw, 2, 0, 0).unwrap().unwrap();
         arena.write(h, 7, |w| w.set(9, 1)).unwrap();
         assert_eq!(
-            arena.read(h, 1, Visibility::Durable, |v| v.word(9)),
+            arena.read(h, 1, (1) as u128 + 1, Visibility::Durable, |v| v.word(9)),
             Err(SlotReadError::NotYetDurable {
                 applied: 7,
                 durable: 0
             })
         );
-        assert!(arena.read(h, 1, Visibility::Applied, |v| v.word(9)).is_ok());
+        assert!(
+            arena
+                .read(h, 1, (1) as u128 + 1, Visibility::Applied, |v| v.word(9))
+                .is_ok()
+        );
         arena.core(0).publish_durable(7);
         assert_eq!(
             arena
-                .read(h, 1, Visibility::Durable, |v| v.word(9))
+                .read(h, 1, (1) as u128 + 1, Visibility::Durable, |v| v.word(9))
                 .unwrap()
                 .value,
             1
@@ -808,4 +877,9 @@ mod tests {
         assert_eq!(l.flipped().flipped(), l);
         assert_eq!(l.container(), 3);
     }
+}
+
+impl Visibility {
+    #[allow(non_upper_case_globals)]
+    pub const Optimistic: Self = Self::Applied;
 }

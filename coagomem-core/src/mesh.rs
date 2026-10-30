@@ -276,7 +276,13 @@ impl<T: Send, const N: usize> Consumer<T, N> {
             ring.head.store(h, Release);
         }
         self.heads[src] = h;
-        (n, h != t)
+        // A new doorbell may have been consumed while this lane still had an old
+        // cached tail. Refresh on exhaustion before dropping its pending bit;
+        // otherwise the final newly published batch can be stranded forever.
+        if h == t {
+            self.cached_tails[src] = ring.tail.load(Acquire);
+        }
+        (n, h != self.cached_tails[src])
     }
 
     /// Returns `true` if the caller may sleep (and must then wait for a wake CQE).
@@ -367,6 +373,21 @@ pub fn admit_all_or_nothing<T: Send + Clone, const N: usize>(
     Ok(())
 }
 
+/// Separate fixed-capacity control lanes ensure user-data saturation cannot consume
+/// vote/decision/credit capacity. The reactor must always drain control before data.
+pub struct PriorityMesh<T: Send, C: Send, const DATA: usize, const CONTROL: usize> {
+    pub data: Mesh<T, DATA>,
+    pub control: Mesh<C, CONTROL>,
+}
+impl<T: Send, C: Send, const D: usize, const C0: usize> PriorityMesh<T, C, D, C0> {
+    pub fn new(cores: usize) -> Self {
+        Self {
+            data: Mesh::new(cores, cores),
+            control: Mesh::new(cores, cores),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,6 +404,7 @@ mod tests {
         let mut handles = Vec::new();
         for (src, mut row) in producers.into_iter().enumerate() {
             handles.push(std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 for i in 0..PER {
                     for (dst, p) in row.iter_mut().enumerate() {
                         let v = (src as u64) << 48 | (dst as u64) << 40 | i;
@@ -392,6 +414,10 @@ mod tests {
                                 Ok(()) => break,
                                 Err(back) => {
                                     v2 = back;
+                                    assert!(
+                                        cfg!(miri) || std::time::Instant::now() < deadline,
+                                        "producer progress deadline"
+                                    );
                                     p.flush();
                                     std::thread::yield_now(); // 9 threads may share 2 CPUs
                                 }
@@ -412,6 +438,7 @@ mod tests {
             cons_handles.push(std::thread::spawn(move || {
                 let mut next = vec![0u64; P];
                 let mut total = 0u64;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 while total < PER * P as u64 {
                     let n = c.poll(64, |src, v| {
                         assert_eq!((v >> 48) as usize, src);
@@ -420,6 +447,10 @@ mod tests {
                         next[src] += 1;
                     }) as u64;
                     if n == 0 {
+                        assert!(
+                            cfg!(miri) || std::time::Instant::now() < deadline,
+                            "consumer progress deadline"
+                        );
                         std::thread::yield_now();
                     }
                     total += n;
@@ -433,6 +464,26 @@ mod tests {
         for h in cons_handles {
             assert_eq!(h.join().unwrap(), PER * P as u64);
         }
+    }
+
+    #[test]
+    fn a_new_doorbell_cannot_strand_data_behind_the_cached_tail() {
+        let Mesh {
+            mut producers,
+            mut consumers,
+        } = Mesh::<u64, 8>::new(1, 1);
+        producers[0][0].try_push(10).unwrap();
+        producers[0][0].try_push(11).unwrap();
+        producers[0][0].flush();
+        let mut seen = Vec::new();
+        assert_eq!(consumers[0].poll(1, |_, v| seen.push(v)), 1);
+        producers[0][0].try_push(12).unwrap();
+        producers[0][0].flush();
+        // No producer publishes anything after this point. The consumer must retain
+        // pending work even when it consumes the last doorbell before the old tail.
+        consumers[0].poll(8, |_, v| seen.push(v));
+        consumers[0].poll(8, |_, v| seen.push(v));
+        assert_eq!(seen, vec![10, 11, 12]);
     }
 
     #[test]

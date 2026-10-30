@@ -1,7 +1,10 @@
 //! Standard HMAC-SHA256 provider and authenticated capability primitives.
 #![forbid(unsafe_code)]
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
+pub fn content_digest(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
 use subtle::ConstantTimeEq;
 
 pub trait Prf {
@@ -31,6 +34,8 @@ pub enum Caveat {
     PeerUid(u32),
     Ops(u64),
     KeyEpoch(u64),
+    Audience(u64),
+    Session(u128),
     Unknown(Vec<u8>),
 }
 fn encode(c: &Caveat) -> Vec<u8> {
@@ -40,6 +45,8 @@ fn encode(c: &Caveat) -> Vec<u8> {
         Caveat::PeerUid(v) => [vec![2], v.to_le_bytes().to_vec()].concat(),
         Caveat::Ops(v) => [vec![3], v.to_le_bytes().to_vec()].concat(),
         Caveat::KeyEpoch(v) => [vec![4], v.to_le_bytes().to_vec()].concat(),
+        Caveat::Audience(v) => [vec![5], v.to_le_bytes().to_vec()].concat(),
+        Caveat::Session(v) => [vec![6], v.to_le_bytes().to_vec()].concat(),
         Caveat::Unknown(v) => [vec![255], v.clone()].concat(),
     }
 }
@@ -55,6 +62,8 @@ pub struct RequestCtx {
     pub now_ns: u64,
     pub op_bit: u64,
     pub peer_uid: u32,
+    pub session: u128,
+    pub audience: u64,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum CaveatError {
@@ -68,10 +77,18 @@ pub enum CaveatError {
 pub struct VerifiedMacaroon {
     tenant: u128,
     ops: u64,
+    session: u128,
+    audience: u64,
 }
 impl VerifiedMacaroon {
     pub fn tenant_incarnation(&self) -> u128 {
         self.tenant
+    }
+    pub fn session_id(&self) -> u128 {
+        self.session
+    }
+    pub fn audience(&self) -> u64 {
+        self.audience
     }
     pub fn allows(&self, operation: u64) -> bool {
         operation != 0 && self.ops & operation == operation
@@ -112,6 +129,7 @@ impl Macaroon {
         }
         let (mut t, mut e, mut p, mut o, mut epoch) = (false, false, false, false, false);
         let mut ops = u64::MAX;
+        let (mut session, mut audience) = (false, false);
         for c in &self.caveats {
             let ok = match c {
                 Caveat::Tenant(v) => {
@@ -135,58 +153,33 @@ impl Macaroon {
                     epoch = true;
                     *v == ctx.key_epoch
                 }
+                Caveat::Session(v) => {
+                    session = true;
+                    *v != 0 && *v == ctx.session
+                }
+                Caveat::Audience(v) => {
+                    audience = true;
+                    *v == ctx.audience
+                }
                 Caveat::Unknown(_) => false,
             };
             if !ok {
                 return Err(CaveatError::Denied);
             }
         }
-        if !(t && e && p && o && epoch) {
+        if !(t && e && p && o && epoch && session && audience) {
             return Err(CaveatError::MissingMandatory);
         }
         Ok(VerifiedMacaroon {
             tenant: ctx.tenant_incarnation,
             ops,
+            session: ctx.session,
+            audience: ctx.audience,
         })
     }
 }
-#[derive(Debug, Clone)]
-pub struct Endorsement {
-    pub tenant: u128,
-    pub sources: u64,
-    pub expires_at: u64,
-    pub signature: [u8; 32],
-}
-impl Endorsement {
-    /// Caller must hold the authenticated user-channel signing key.
-    pub fn issue(k: &impl Prf, tenant: u128, sources: u64, expires_at: u64) -> Self {
-        let mut e = Self {
-            tenant,
-            sources,
-            expires_at,
-            signature: [0; 32],
-        };
-        e.signature = k.mac256(b"ciagomem/endorsement/v1", &e.message());
-        e
-    }
-    fn message(&self) -> Vec<u8> {
-        [
-            self.tenant.to_le_bytes().as_slice(),
-            &self.sources.to_le_bytes(),
-            &self.expires_at.to_le_bytes(),
-        ]
-        .concat()
-    }
-    pub fn verify(&self, k: &impl Prf, tenant: u128, sources: u64, now: u64) -> bool {
-        self.tenant == tenant
-            && sources & !self.sources == 0
-            && now < self.expires_at
-            && ct_eq(
-                &self.signature,
-                &k.mac256(b"ciagomem/endorsement/v1", &self.message()),
-            )
-    }
-}
+pub mod approval;
+pub use approval::*;
 #[cfg(test)]
 mod tests {
     use super::*;

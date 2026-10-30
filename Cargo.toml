@@ -4,6 +4,7 @@ members = [
     "coagomem-wal",
     "coagomem-ql",
     "ciagomem-crypto",
+    "ciagomem-engine",
 ]
 resolver = "2"
 
@@ -23,3 +24,36 @@ typenum = { path = "vendor/typenum-1.17.0" }
 version_check = { path = "vendor/version_check-0.9.5" }
 cpufeatures = { path = "vendor/cpufeatures-0.2.17" }
 subtle = { path = "vendor/subtle-2.6.1" }
+roaring = { path = "vendor/roaring-0.10.12" }
+wide = { path = "vendor/wide-0.7.33" }
+flatbuffers = { path = "vendor/flatbuffers-25.2.10" }
+bytemuck = { path = "vendor/bytemuck-1.21.0" }
+byteorder = { path = "vendor/byteorder-1.5.0" }
+safe_arch = { path = "vendor/safe_arch-0.7.4" }
+rustc_version = { path = "vendor/rustc_version-0.4.1" }
+semver = { path = "vendor/semver-1.0.25" }
+ed25519-dalek = { path = "vendor/ed25519-dalek-2.1.1" }
+curve25519-dalek = { path = "vendor/curve25519-dalek-4.1.3" }
+ed25519 = { path = "vendor/ed25519-2.2.3" }
+signature = { path = "vendor/signature-2.2.0" }
+zeroize = { path = "vendor/zeroize-1.8.1" }
+curve25519-dalek-derive = { path = "vendor/curve25519-dalek-derive-0.1.1" }
+fiat-crypto = { path = "vendor/fiat-crypto-0.2.9" }
+serde = { path = "vendor/serde-1.0.217" }
+serde_derive = { path = "vendor/serde_derive-1.0.217" }
+rand_core = { path = "vendor/rand_core-0.6.4" }
+pkcs8 = { path = "vendor/pkcs8-0.10.2" }
+spki = { path = "vendor/spki-0.7.3" }
+der = { path = "vendor/der-0.7.9" }
+const-oid = { path = "vendor/const-oid-0.9.6" }
+base64ct = { path = "vendor/base64ct-1.6.0" }
+getrandom = { path = "vendor/getrandom-0.2.15" }
+wasi = { path = "vendor/wasi-0.11.0+wasi-snapshot-preview1" }
+syn = { path = "vendor/syn-2.0.87" }
+bitflags = { path = "vendor/bitflags-2.13.2" }
+cfg-if = { path = "vendor/cfg-if-1.0.5" }
+io-uring = { path = "vendor/io-uring-0.7.15" }
+libc = { path = "vendor/libc-0.2.191" }
+proc-macro2 = { path = "vendor/proc-macro2-1.0.86" }
+quote = { path = "vendor/quote-1.0.36" }
+unicode-ident = { path = "vendor/unicode-ident-1.0.12" }

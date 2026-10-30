@@ -8,6 +8,7 @@ pub struct TruncationPins {
     next: Box<[u32]>,
     lsn: Box<[u64]>,
     since: Box<[u64]>,
+    latest: Box<[u64]>,
     head: u32,
     tail: u32,
     last_lsn: u64,
@@ -17,6 +18,7 @@ pub enum DirtyError {
     InvalidTenant,
     LsnRegression,
     ZeroLsn,
+    StaleCheckpoint,
 }
 impl TruncationPins {
     pub fn new(tenants: usize) -> Self {
@@ -26,6 +28,7 @@ impl TruncationPins {
             next: vec![NIL; tenants].into(),
             lsn: vec![0; tenants].into(),
             since: vec![0; tenants].into(),
+            latest: vec![0; tenants].into(),
             head: NIL,
             tail: NIL,
             last_lsn: 0,
@@ -36,9 +39,6 @@ impl TruncationPins {
         if i >= self.lsn.len() {
             return Err(DirtyError::InvalidTenant);
         }
-        if self.lsn[i] != 0 {
-            return Ok(());
-        }
         if lsn == 0 {
             return Err(DirtyError::ZeroLsn);
         }
@@ -46,6 +46,10 @@ impl TruncationPins {
             return Err(DirtyError::LsnRegression);
         }
         self.last_lsn = lsn;
+        self.latest[i] = lsn;
+        if self.lsn[i] != 0 {
+            return Ok(());
+        }
         self.lsn[i] = lsn;
         self.since[i] = now;
         self.prev[i] = self.tail;
@@ -58,10 +62,13 @@ impl TruncationPins {
         self.tail = t;
         Ok(())
     }
-    pub fn on_checkpointed(&mut self, t: u32) -> Result<(), DirtyError> {
+    pub fn on_checkpointed(&mut self, t: u32, image_lsn: u64) -> Result<(), DirtyError> {
         let i = t as usize;
         if i >= self.lsn.len() {
             return Err(DirtyError::InvalidTenant);
+        }
+        if self.latest[i] > image_lsn {
+            return Err(DirtyError::StaleCheckpoint);
         }
         if self.lsn[i] == 0 {
             return Ok(());

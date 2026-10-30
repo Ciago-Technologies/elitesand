@@ -1,5 +1,7 @@
 # v3.0 review remediation ledger
 
+> Historical first-review ledger. The [R5 ledger](R5_REMEDIATION.md) supersedes identity, image-format, label, endorsement, scope and flow-control contracts described below.
+
 Source material: `New File/CiagoMem-SLAE v3.0 Production-Readiness Sign-Off Review.md` and `New File/ciagomem-v30-review-harness.zip`, supplied alongside this workspace. Original reference source and defect assertions are preserved as text under `review/v30`; they are not compiled as passing security regressions.
 
 ## Changes delivered
@@ -42,9 +44,9 @@ These are production gates, not completed fixes or implied guarantees:
 - Calibrated hardware counters, clocksource boot checks, persistent-arena attach repair, allocation-free read combining and request-ring fallback. `MonotonicClock` currently uses Instant.
 - Sequenced credit return, full control-message headroom and bounded admission across the reactor. Excess-credit clamping alone cannot detect every duplicate return.
 - Authenticated session transport, trusted owner resolver, signing-key custody, rotation/revocation and invoking query/frame/tool policy on every execution path.
-- Vault digest generation, authenticated large reader sets, runtime vector bindings, aliases, joins, link constraints, query execution and result-byte budgets.
+- Vault digest generation, authenticated large reader sets, runtime vector bindings, tenant-name aliases, arbitrary/distributed joins and durable multi-reactor query execution. The new reference executor supplies typed reference joins, a bounded equijoin API, link constraints, schema projection/upgrades, search, analytics and work/result budgets; see [ACTOR_NATIVE_QUERY_ENGINE.md](ACTOR_NATIVE_QUERY_ENGINE.md).
 - Cross-process publication protocol, authorized projection construction, SCM_RIGHTS transport, unified export budgets and boot-time FD/VMA/host qualification.
-- Synchronous standby replication, archive spool, consistent backups, KMS/DEKs, fork-PITR, schema upgrades, migration and multi-region protocols.
+- Synchronous standby replication, archive spool, consistent backups, KMS/DEKs, fork-PITR, durable schema/index catalogs and checkpoint migration, shard migration and multi-region protocols.
 - Node-wide allocation enforcement, Miri/loom/fuzz/DST, physical power-loss testing, Elle/TLA+, calibrated benchmarks and production security sign-off.
 
 ## Validation
@@ -59,3 +61,7 @@ python3 scripts/validate_workspace.py
 ```
 
 `--all-features` includes explicitly labelled legacy exploit reproductions. They are historical compatibility evidence, not successful remediation tests. Clippy may report existing P0 lint debt and upstream-vendored compatibility warnings; this revision does not claim a zero-warning release gate or results for unavailable nightly/cross-target tools.
+
+## Actor-native execution milestone
+
+`ciagomem-engine` adds the executable counterparts and detailed protocols for the five relational capability scopes. See [the ecosystem design](ACTOR_NATIVE_QUERY_ENGINE.md). The journal interface is publication-gated, but its built-in MemoryJournal is non-durable. Actual mesh request/reply transport is covered by integration tests; pinned production owner loops and full WAL replay are still open. The legacy production gates above remain applicable.

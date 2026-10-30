@@ -1,0 +1,25 @@
+{
+  "planning": "deep",
+  "context_depth": "dependency",
+  "verification_depth": "impact",
+  "delegation": "none",
+  "reason_codes": [
+    "security-remediation",
+    "durability",
+    "parser-hardening",
+    "review-bundle"
+  ],
+  "allowed_write_scope": [
+    "ciagomem-slae",
+    "ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md",
+    "ciagomem-slae-perplexity-review.zip",
+    "ciagomem-r5-fixed-review.zip"
+  ],
+  "acceptance": [
+    "all supplied findings dispositioned against current code",
+    "corrected deterministic regression guards",
+    "release default and all-feature tests pass",
+    "spec source and guarantees synchronized",
+    "fresh self-contained review upload bundle"
+  ]
+}
