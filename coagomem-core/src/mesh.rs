@@ -43,7 +43,11 @@ use crate::CachePadded;
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst}, fence};
+use core::sync::atomic::{
+    AtomicU32, AtomicU64,
+    Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst},
+    fence,
+};
 use std::sync::Arc;
 
 /// 64-byte POD message: exactly one cache line per slot, no pointers into the producer's
@@ -133,7 +137,11 @@ pub struct Producer<T, const N: usize> {
 
 impl<T, const N: usize> core::fmt::Debug for Producer<T, N> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Producer").field("src", &self.src).field("tail", &self.tail).field("published", &self.published).finish()
+        f.debug_struct("Producer")
+            .field("src", &self.src)
+            .field("tail", &self.tail)
+            .field("published", &self.published)
+            .finish()
     }
 }
 
@@ -183,7 +191,11 @@ impl<T: Send, const N: usize> Producer<T, N> {
         let word = &self.block.doorbell[self.src / 64];
         word.fetch_or(1 << (self.src % 64), AcqRel);
         fence(SeqCst); // Dekker with Consumer::prepare_park
-        if self.block.parked.load(Relaxed) != 0 { Wake::Needed } else { Wake::NotNeeded }
+        if self.block.parked.load(Relaxed) != 0 {
+            Wake::Needed
+        } else {
+            Wake::NotNeeded
+        }
     }
 
     pub fn src(&self) -> usize {
@@ -212,7 +224,9 @@ pub struct Consumer<T, const N: usize> {
 
 impl<T, const N: usize> core::fmt::Debug for Consumer<T, N> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Consumer").field("lanes", &self.heads.len()).finish()
+        f.debug_struct("Consumer")
+            .field("lanes", &self.heads.len())
+            .finish()
     }
 }
 
@@ -239,7 +253,12 @@ impl<T: Send, const N: usize> Consumer<T, N> {
         delivered
     }
 
-    fn drain_lane(&mut self, src: usize, budget: usize, f: &mut impl FnMut(usize, T)) -> (usize, bool) {
+    fn drain_lane(
+        &mut self,
+        src: usize,
+        budget: usize,
+        f: &mut impl FnMut(usize, T),
+    ) -> (usize, bool) {
         let ring = &self.block.rings[src];
         let mut h = self.heads[src];
         if h == self.cached_tails[src] {
@@ -294,7 +313,9 @@ impl<T: Send, const N: usize> Mesh<T, N> {
         const { assert!(N.is_power_of_two() && N >= 2) };
         assert!(producers >= 1 && consumers >= 1);
         let words = producers.div_ceil(64);
-        let mut prod: Vec<Vec<Producer<T, N>>> = (0..producers).map(|_| Vec::with_capacity(consumers)).collect();
+        let mut prod: Vec<Vec<Producer<T, N>>> = (0..producers)
+            .map(|_| Vec::with_capacity(consumers))
+            .collect();
         let mut cons = Vec::with_capacity(consumers);
         for _dst in 0..consumers {
             let block = Arc::new(InboundBlock {
@@ -303,7 +324,14 @@ impl<T: Send, const N: usize> Mesh<T, N> {
                 rings: (0..producers).map(|_| Ring::new()).collect(),
             });
             for (src, row) in prod.iter_mut().enumerate() {
-                row.push(Producer { block: block.clone(), src, tail: 0, published: 0, cached_head: 0, _not_sync: PhantomData });
+                row.push(Producer {
+                    block: block.clone(),
+                    src,
+                    tail: 0,
+                    published: 0,
+                    cached_head: 0,
+                    _not_sync: PhantomData,
+                });
             }
             cons.push(Consumer {
                 block,
@@ -313,7 +341,10 @@ impl<T: Send, const N: usize> Mesh<T, N> {
                 _not_sync: PhantomData,
             });
         }
-        Mesh { producers: prod, consumers: cons }
+        Mesh {
+            producers: prod,
+            consumers: cons,
+        }
     }
 }
 
@@ -345,7 +376,10 @@ mod tests {
         const C: usize = 4;
         const P: usize = 5; // 4 reactors + sequencer
         const PER: u64 = if cfg!(miri) { 64 } else { 50_000 };
-        let Mesh { producers, consumers } = Mesh::<u64, 256>::new(P, C);
+        let Mesh {
+            producers,
+            consumers,
+        } = Mesh::<u64, 256>::new(P, C);
         let mut handles = Vec::new();
         for (src, mut row) in producers.into_iter().enumerate() {
             handles.push(std::thread::spawn(move || {
@@ -403,13 +437,20 @@ mod tests {
 
     #[test]
     fn all_or_nothing_admission_and_park_protocol() {
-        let Mesh { mut producers, mut consumers } = Mesh::<MeshMsg, 4>::new(3, 2);
+        let Mesh {
+            mut producers,
+            mut consumers,
+        } = Mesh::<MeshMsg, 4>::new(3, 2);
         let seq_row = &mut producers[2];
         // Fill core 1's sequencer lane.
         for _ in 0..4 {
             seq_row[1].try_push(MeshMsg::default()).unwrap();
         }
-        let mk = |p: usize, _c: usize| MeshMsg { participant: p as u8, participants: 2, ..Default::default() };
+        let mk = |p: usize, _c: usize| MeshMsg {
+            participant: p as u8,
+            participants: 2,
+            ..Default::default()
+        };
         assert!(admit_all_or_nothing(seq_row, &[0, 1], mk).is_err());
         assert_eq!(seq_row[0].staged(), 0, "nothing delivered to core 0 either");
         seq_row[1].flush();
@@ -420,7 +461,10 @@ mod tests {
         assert!(consumers[0].prepare_park());
         assert_eq!(producers[2][0].flush(), Wake::Needed);
         consumers[0].unpark();
-        assert!(!consumers[0].prepare_park(), "doorbell pending: must not sleep");
+        assert!(
+            !consumers[0].prepare_park(),
+            "doorbell pending: must not sleep"
+        );
         let mut got = Vec::new();
         consumers[0].poll(16, |src, m| got.push((src, m.participant)));
         assert_eq!(got, vec![(2, 0)]);

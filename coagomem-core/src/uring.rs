@@ -33,7 +33,10 @@ pub struct UringIo {
 
 impl core::fmt::Debug for UringIo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("UringIo").field("fd", &self.ring.as_raw_fd()).field("bufs", &self.bufs.len()).finish()
+        f.debug_struct("UringIo")
+            .field("fd", &self.ring.as_raw_fd())
+            .field("bufs", &self.bufs.len())
+            .finish()
     }
 }
 
@@ -47,7 +50,11 @@ impl UringIo {
             .setup_cqsize(entries * 2)
             .build(entries)
             .or_else(|_| IoUring::builder().setup_cqsize(entries * 2).build(entries))?; // kernels < 6.1
-        Ok(UringIo { ring, bufs: Vec::new(), files_registered: 0 })
+        Ok(UringIo {
+            ring,
+            bufs: Vec::new(),
+            files_registered: 0,
+        })
     }
 
     /// Register the log/extent files; `file` arguments are indices into `fds`.
@@ -66,15 +73,27 @@ impl UringIo {
         let mut off = 0;
         while off < len {
             let n = (len - off).min(MAX_REG_CHUNK);
-            iov.push(libc::iovec { iov_base: unsafe { ptr.add(off) }.cast(), iov_len: n });
+            iov.push(libc::iovec {
+                iov_base: unsafe { ptr.add(off) }.cast(),
+                iov_len: n,
+            });
             off += n;
         }
         // Registration is all-at-once per ring; re-register the union.
-        let mut all: Vec<libc::iovec> =
-            self.bufs.iter().map(|b| libc::iovec { iov_base: b.addr as *mut libc::c_void, iov_len: b.len }).collect();
+        let mut all: Vec<libc::iovec> = self
+            .bufs
+            .iter()
+            .map(|b| libc::iovec {
+                iov_base: b.addr as *mut libc::c_void,
+                iov_len: b.len,
+            })
+            .collect();
         all.extend_from_slice(&iov);
         if all.len() > u16::MAX as usize {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "too many fixed buffers"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "too many fixed buffers",
+            ));
         }
         if !self.bufs.is_empty() {
             let _ = self.ring.submitter().unregister_buffers();
@@ -82,12 +101,23 @@ impl UringIo {
         // SAFETY: caller guarantees lifetime of the new region; old regions were
         // guaranteed by earlier calls.
         unsafe { self.ring.submitter().register_buffers(&all)? };
-        self.bufs = all.iter().enumerate().map(|(i, v)| RegBuf { addr: v.iov_base as usize, len: v.iov_len, index: i as u16 }).collect();
+        self.bufs = all
+            .iter()
+            .enumerate()
+            .map(|(i, v)| RegBuf {
+                addr: v.iov_base as usize,
+                len: v.iov_len,
+                index: i as u16,
+            })
+            .collect();
         Ok(())
     }
 
     fn buf_index(&self, addr: usize, len: usize) -> Option<u16> {
-        self.bufs.iter().find(|b| addr >= b.addr && addr + len <= b.addr + b.len).map(|b| b.index)
+        self.bufs
+            .iter()
+            .find(|b| addr >= b.addr && addr + len <= b.addr + b.len)
+            .map(|b| b.index)
     }
 
     fn push(&mut self, e: squeue::Entry) -> Result<(), SqFull> {
@@ -130,22 +160,45 @@ impl UringIo {
 }
 
 impl IoBackend for UringIo {
-    unsafe fn write_at(&mut self, user_data: u64, file: u16, buf: *const u8, len: u32, offset: u64, dsync: bool) -> Result<(), SqFull> {
+    unsafe fn write_at(
+        &mut self,
+        user_data: u64,
+        file: u16,
+        buf: *const u8,
+        len: u32,
+        offset: u64,
+        dsync: bool,
+    ) -> Result<(), SqFull> {
         debug_assert!((file as usize) < self.files_registered);
         let flags = if dsync { libc::RWF_DSYNC } else { 0 };
         let fd = types::Fixed(file as u32);
         let e = match self.buf_index(buf as usize, len as usize) {
-            Some(idx) => opcode::WriteFixed::new(fd, buf, len, idx).offset(offset).rw_flags(flags).build(),
-            None => opcode::Write::new(fd, buf, len).offset(offset).rw_flags(flags).build(),
+            Some(idx) => opcode::WriteFixed::new(fd, buf, len, idx)
+                .offset(offset)
+                .rw_flags(flags)
+                .build(),
+            None => opcode::Write::new(fd, buf, len)
+                .offset(offset)
+                .rw_flags(flags)
+                .build(),
         };
         self.push(e.user_data(user_data))
     }
 
-    unsafe fn read_at(&mut self, user_data: u64, file: u16, buf: *mut u8, len: u32, offset: u64) -> Result<(), SqFull> {
+    unsafe fn read_at(
+        &mut self,
+        user_data: u64,
+        file: u16,
+        buf: *mut u8,
+        len: u32,
+        offset: u64,
+    ) -> Result<(), SqFull> {
         debug_assert!((file as usize) < self.files_registered);
         let fd = types::Fixed(file as u32);
         let e = match self.buf_index(buf as usize, len as usize) {
-            Some(idx) => opcode::ReadFixed::new(fd, buf, len, idx).offset(offset).build(),
+            Some(idx) => opcode::ReadFixed::new(fd, buf, len, idx)
+                .offset(offset)
+                .build(),
             None => opcode::Read::new(fd, buf, len).offset(offset).build(),
         };
         self.push(e.user_data(user_data))

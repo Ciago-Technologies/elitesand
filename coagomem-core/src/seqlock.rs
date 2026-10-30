@@ -28,7 +28,11 @@
 //! documentation that is the only form guaranteed sound on *read-only mappings*
 //! (agent processes map the slab `PROT_READ`). `load(Acquire)` is not guaranteed there.
 
-use core::sync::atomic::{AtomicU64, Ordering::{Acquire, Relaxed, Release}, fence};
+use core::sync::atomic::{
+    AtomicU64,
+    Ordering::{Acquire, Relaxed, Release},
+    fence,
+};
 
 /// Default bounded retry budget for optimistic readers. Readers never block the writer;
 /// when the budget is exhausted the caller falls back to the owner core's mailbox.
@@ -87,7 +91,11 @@ impl SeqWord {
         }
         // Orders the odd store before every data store in the section.
         fence(Release);
-        Ok(SeqWriteGuard { seq: self, odd: s + 1, committed: false })
+        Ok(SeqWriteGuard {
+            seq: self,
+            odd: s + 1,
+            committed: false,
+        })
     }
 
     /// Raw value (diagnostics and tests).
@@ -231,7 +239,10 @@ impl<'a> WordsMut<'a> {
     /// Byte write via 8-byte read-modify-write of the writer's own words. The writer is
     /// exclusive, so the RMW needs no atomic RMW instruction.
     pub fn write_bytes(&self, byte_off: usize, src: &[u8]) {
-        assert!(byte_off + src.len() <= self.words.len() * 8, "write outside slot");
+        assert!(
+            byte_off + src.len() <= self.words.len() * 8,
+            "write outside slot"
+        );
         let mut done = 0;
         let mut off = byte_off;
         while done < src.len() {
@@ -307,7 +318,10 @@ impl<const W: usize> Default for SeqCell<W> {
 
 impl<const W: usize> SeqCell<W> {
     pub fn new(init: [u64; W]) -> Self {
-        SeqCell { seq: SeqWord::new(), words: init.map(AtomicU64::new) }
+        SeqCell {
+            seq: SeqWord::new(),
+            words: init.map(AtomicU64::new),
+        }
     }
 
     pub fn load(&self) -> Result<[u64; W], ReadError> {
@@ -361,12 +375,15 @@ mod tests {
         })
         .unwrap();
         let stop = Arc::new(AtomicBool::new(false));
+        let start = Arc::new(std::sync::Barrier::new(4));
+        let writer_start = start.clone();
         let w = {
             let (cell, stop) = (cell.clone(), stop.clone());
             std::thread::spawn(move || {
+                writer_start.wait();
                 let mut i = 0u64;
-                // Under Miri the writer is iteration-bounded (interpreted time is slow).
-                while !stop.load(Relaxed) && !(cfg!(miri) && i >= 300) {
+                let limit = if cfg!(miri) { 300 } else { 10_000 };
+                while i < limit {
                     i += 1;
                     cell.write(|w| {
                         for k in 0..W - 1 {
@@ -375,16 +392,22 @@ mod tests {
                         w.set(W - 1, !i);
                     })
                     .unwrap();
+                    if i % 16 == 0 {
+                        std::thread::yield_now();
+                    }
                 }
+                stop.store(true, Relaxed);
                 i
             })
         };
         let readers: Vec<_> = (0..3)
             .map(|_| {
-                let (cell, stop) = (cell.clone(), stop.clone());
+                let (cell, stop, start) = (cell.clone(), stop.clone(), start.clone());
                 std::thread::spawn(move || {
+                    start.wait();
                     let mut ok = 0u64;
-                    while !stop.load(Relaxed) || (cfg!(miri) && ok == 0) {
+                    let minimum = if cfg!(miri) { 1 } else { 1000 };
+                    while !stop.load(Relaxed) || ok < minimum {
                         if let Ok(a) = cell.load() {
                             let x = a[0];
                             assert!(a[..W - 1].iter().all(|&v| v == x), "torn snapshot");
@@ -396,18 +419,10 @@ mod tests {
                 })
             })
             .collect();
-        let writes = if cfg!(miri) {
-            let n = w.join().unwrap();
-            stop.store(true, Relaxed);
-            n
-        } else {
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            stop.store(true, Relaxed);
-            w.join().unwrap()
-        };
+        let writes = w.join().unwrap();
         let reads: u64 = readers.into_iter().map(|r| r.join().unwrap()).sum();
-        let min = if cfg!(miri) { 0 } else { 1000 };
-        assert!(writes > min && reads > min, "writes={writes} reads={reads}");
+        assert_eq!(writes, if cfg!(miri) { 300 } else { 10_000 });
+        assert!(reads >= if cfg!(miri) { 3 } else { 3000 }, "reads={reads}");
     }
 
     #[test]
@@ -422,7 +437,8 @@ mod tests {
     #[test]
     fn byte_access_round_trips_across_word_boundaries() {
         let cell = SeqCell::<4>::default();
-        cell.write(|w| w.write_bytes(5, &[1, 2, 3, 4, 5, 6, 7, 8, 9])).unwrap();
+        cell.write(|w| w.write_bytes(5, &[1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .unwrap();
         let got = cell
             .read(|v| {
                 let mut b = [0u8; 9];
@@ -431,7 +447,59 @@ mod tests {
             })
             .unwrap();
         assert_eq!(got, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        assert_eq!(cell.read(|v| v.u32_at(6)).unwrap(), u32::from_le_bytes([2, 3, 4, 5]));
+        assert_eq!(
+            cell.read(|v| v.u32_at(6)).unwrap(),
+            u32::from_le_bytes([2, 3, 4, 5])
+        );
         assert_eq!(cell.read(|v| v.u64_at(30)).unwrap_err(), ReadError::Corrupt);
+    }
+}
+
+use crate::{Clock, DeadlineReadError};
+use std::time::Duration;
+pub fn read_deadline<R>(
+    seq: &SeqWord,
+    words: &[AtomicU64],
+    clock: &impl Clock,
+    budget: Duration,
+    stall_after: Duration,
+    mut f: impl FnMut(WordView<'_>) -> Option<R>,
+) -> Result<R, DeadlineReadError> {
+    let start = clock.now_ns();
+    let deadline = start.saturating_add(budget.as_nanos().min(u64::MAX as u128) as u64);
+    let stall_ns = stall_after.as_nanos().min(u64::MAX as u128) as u64;
+    let view = WordView::new(words);
+
+    let mut odd_seen: Option<(u64, u64)> = None;
+    let mut retries = 0u32;
+    let mut spins = 1u32;
+
+    loop {
+        if let Some(s1) = seq.read_begin() {
+            odd_seen = None;
+            let r = f(view);
+            if !seq.read_retry(s1) {
+                return r.ok_or(DeadlineReadError::Corrupt);
+            }
+        } else {
+            let raw = seq.raw();
+            let now = clock.now_ns();
+            match odd_seen {
+                Some((prev, since)) if prev == raw => {
+                    if now.saturating_sub(since) >= stall_ns {
+                        return Err(DeadlineReadError::WriterStalled { odd_seq: raw });
+                    }
+                }
+                _ => odd_seen = Some((raw, now)),
+            }
+        }
+        retries += 1;
+        if clock.now_ns() >= deadline {
+            return Err(DeadlineReadError::DeadlineExhausted { retries });
+        }
+        for _ in 0..spins {
+            core::hint::spin_loop();
+        }
+        spins = (spins << 1).min(32);
     }
 }

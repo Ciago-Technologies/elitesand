@@ -1,0 +1,227 @@
+//! v3.0 sign-off adversarial harness.
+//! Every test here PASSES when the defect it names is PRESENT in the v3.0 reference code.
+//! Flip each assertion once the fix lands; the test then becomes a regression guard.
+
+use ciagomem_slae_v3::*;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+fn user_auth<'a>() -> AuthContext<'a> {
+    AuthContext { operator_scope: false, allowed_prefixes: &[] }
+}
+
+// ---------------------------------------------------------------------------
+// S1 (P0) - validator has no tenant binding: any session reads any actor / all actors
+// ---------------------------------------------------------------------------
+#[test]
+fn s1_cross_tenant_read_passes_policy_without_operator_scope() {
+    let q = parse_ciaql("@0x0009B104 |> select { state.wallet.balance_cents }").unwrap();
+    assert_eq!(validate_query(&q, &user_auth()), Ok(()));
+    let scan = parse_ciaql("scan actors[*] |> select { state.wallet }").unwrap();
+    assert_eq!(validate_query(&scan, &user_auth()), Ok(()), "fleet-wide read with no operator scope");
+}
+
+// ---------------------------------------------------------------------------
+// S2 (P0) - stage bodies are raw &str; a single-actor mutate can name another actor
+// ---------------------------------------------------------------------------
+#[test]
+fn s2_mutate_body_can_reference_foreign_actor() {
+    let q = parse_ciaql("@0x1 mutate { actor(0x2).state.wallet.balance_cents = 0 }").unwrap();
+    assert!(matches!(q.stages[0], Stage::Mutate(b) if b.contains("actor(0x2)")));
+    assert_eq!(validate_query(&q, &user_auth()), Ok(()));
+    // filter is also unparsed text: anything containing '>' is "valid"
+    let f = parse_ciaql("@0x1 where ->DROP EVERYTHING<-").unwrap();
+    assert!(matches!(f.stages[0], Stage::Filter(_)));
+}
+
+// ---------------------------------------------------------------------------
+// S3 (P1) - named-arg extraction uses body.find(key): keys inside string literals win
+// ---------------------------------------------------------------------------
+#[test]
+fn s3_top_k_smuggled_inside_query_string_and_unbounded() {
+    // the key inside the string literal shadows the real argument
+    let q = parse_ciaql(r#"@0x1 |> search(query: "top_k: 7 now", field: body, top_k: 3)"#).unwrap();
+    assert!(matches!(q.stages[0], Stage::SearchBm25 { top_k: 7, .. }), "{:?}", q.stages[0]);
+    // malformed value silently defaults to 10 instead of a parse error
+    let q = parse_ciaql(r#"@0x1 |> search(field: body, query: "x", top_k: banana)"#).unwrap();
+    assert!(matches!(q.stages[0], Stage::SearchBm25 { top_k: 10, .. }));
+    // no upper bound
+    let q = parse_ciaql(r#"@0x1 |> search(field: body, query: "x", top_k: 4000000000)"#).unwrap();
+    assert!(matches!(q.stages[0], Stage::SearchBm25 { top_k: 4_000_000_000, .. }));
+}
+
+#[test]
+fn s3b_similarity_drops_vector_and_metric() {
+    let q = parse_ciaql("@0x1 |> similarity(vector: $q, metric: cosine, threshold: 0.8)").unwrap();
+    // AST only carries threshold: the executor cannot know WHAT to compare against.
+    assert_eq!(q.stages[0], Stage::Similarity { threshold: 0.8 });
+}
+
+#[test]
+fn s3c_parser_and_validator_disagree_on_take_then_export() {
+    let q = parse_ciaql(r#"@0x1 |> take 5 |> export(format: "csv", destination: "s3://b/x")"#).unwrap();
+    let op = AuthContext { operator_scope: true, allowed_prefixes: &["s3://b/"] };
+    assert_eq!(validate_query(&q, &op), Err(PolicyError::TakeNotLast));
+}
+
+#[test]
+fn s3d_bare_stage_keyword_inside_predicate_splits_stage() {
+    // `limit` used as a bare identifier in a predicate becomes a new stage.
+    let r = parse_ciaql("@0x1 where limit > 3");
+    assert!(r.is_err(), "identifier `limit` was treated as a stage keyword: {r:?}");
+}
+
+// ---------------------------------------------------------------------------
+// S4 (P0 if configured as documented) - prefix allowlist `s3://` admits any bucket
+// ---------------------------------------------------------------------------
+#[test]
+fn s4_generic_s3_prefix_allows_attacker_bucket() {
+    let q = parse_ciaql(r#"backup store to "s3://attacker-exfil/dump""#).unwrap();
+    let op = AuthContext { operator_scope: true, allowed_prefixes: &["s3://", "/var/backups/ciagomem/"] };
+    assert_eq!(validate_query(&q, &op), Ok(()));
+}
+
+// ---------------------------------------------------------------------------
+// S5 (P0) - incarnation = (id<<64)|process-local counter: reused after restart
+// ---------------------------------------------------------------------------
+#[test]
+fn s5_incarnation_repeats_across_restart() {
+    let k = KeyedPrf([7u8; 32]);
+    let mut before = TenantRegistry::default();
+    let (id1, inc1) = before.register(&k, "acme", "user-42").unwrap();
+    drop(before); // process restart: registry is an in-memory HashMap, nothing persisted
+    let mut after = TenantRegistry::default();
+    let (id2, inc2) = after.register(&k, "acme", "user-42").unwrap();
+    assert_eq!((id1, inc1), (id2, inc2));
+    // => a $ref minted before a delete+recreate verifies after it.
+    let loc = VaultLoc { segment: 1, offset: 0, len: 10, generation: 1, blake3_256: [9; 32] };
+    let tok = mint_ref(&k, inc1, 5, &loc);
+    let mut idx = HashMap::new();
+    idx.insert(5u64, loc);
+    assert!(resolve_ref(&k, inc2, &idx, &tok).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// S6 (P0) - Endorsement is an unauthenticated struct; macaroon "chain" is never verified
+// ---------------------------------------------------------------------------
+#[test]
+fn s6_forged_endorsement_elevates_agent_output_to_active_intent() {
+    let agent = Label { integrity: Integrity::AgentDerived, sources: 0b10, readers: 1 };
+    let forged = Endorsement { author_integrity: Integrity::Policy, target_sources: u64::MAX };
+    let out = admit_to_frame(FrameField::ActiveIntent, agent, Some(&forged)).unwrap();
+    assert_eq!(out.integrity, Integrity::UserDirect);
+}
+
+#[test]
+fn s6b_caveat_list_without_signature_or_ops_is_accepted() {
+    let ctx = RequestCtx { tenant_incarnation: 1, key_epoch: 0, now_ns: 0, op_bit: 1 << 31, peer_uid: 1000 };
+    let cav = [Caveat::Tenant(1), Caveat::ExpiresAt(u64::MAX), Caveat::PeerUid(1000)];
+    assert_eq!(verify_caveats(&cav, &ctx), Ok(()), "no MAC chain; no Ops caveat => every op allowed");
+}
+
+// ---------------------------------------------------------------------------
+// S7 (P1) - readers is a 64-bit principal set: tenants alias at 1M scale
+// ---------------------------------------------------------------------------
+#[test]
+fn s7_reader_bitset_aliases_tenants() {
+    let bit = |tenant: u32| 1u64 << (tenant % 64);
+    let secret_of_t1 = Label { integrity: Integrity::UserDirect, sources: 1, readers: bit(1) };
+    assert!(gateway_allow(true, secret_of_t1, bit(65)), "tenant 65 is an authorised reader of tenant 1");
+}
+
+// ---------------------------------------------------------------------------
+// S8 (P1) - home-grown ARX "PRF": measure avalanche on final-byte flip
+// ---------------------------------------------------------------------------
+#[test]
+fn s8_keyed_prf_avalanche_report() {
+    let k = KeyedPrf([0x5a; 32]);
+    let mut worst = 128u32;
+    let mut total = 0u64;
+    let n = 4096u32;
+    for i in 0..n {
+        let mut m = [0u8; 24];
+        m[..4].copy_from_slice(&i.to_le_bytes());
+        let a = k.mac128(b"d", &m);
+        m[23] ^= 1 << (i % 8);
+        let b = k.mac128(b"d", &m);
+        let d: u32 = a.iter().zip(b.iter()).map(|(x, y)| (x ^ y).count_ones()).sum();
+        worst = worst.min(d);
+        total += d as u64;
+    }
+    let mean = total as f64 / n as f64;
+    eprintln!("KeyedPrf last-byte avalanche: mean={mean:.2} bits (ideal 64), worst={worst}");
+    // 2 ARX rounds per byte and no finalisation: worst-case diffusion is far below a real MAC.
+    assert!(worst < 40, "worst={worst}");
+}
+
+// ---------------------------------------------------------------------------
+// S9 (P1) - SlotArena::read still uses the 128-iteration budget, not read_deadline
+// ---------------------------------------------------------------------------
+#[test]
+fn s9_slot_read_never_reports_poison_only_writer_active() {
+    let a: SlotArena<4> = SlotArena::new(1, 4, 1);
+    let tw = TenantWord { tenant: 9, core: 0, layout_version: 1, flags: 0 };
+    let h = a.install(0, tw, 1, 0, 0).unwrap().unwrap();
+    let g = a.header(0).seq.write_begin().unwrap();
+    std::mem::forget(g); // simulate a writer that never commits
+    let r = a.read(h, 9, Visibility::Optimistic, |v| v.word(0));
+    assert_eq!(r.err(), Some(SlotReadError::WriterActive));
+}
+
+// ---------------------------------------------------------------------------
+// S10 (P1) - poison detector fires on a merely preempted writer (panic=abort means
+// in-process poison is impossible, so every Poisoned verdict is a false positive)
+// ---------------------------------------------------------------------------
+#[test]
+fn s10_poison_false_positive_on_stalled_writer() {
+    let seq = Arc::new(SeqWord::new());
+    let words: Arc<Vec<AtomicU64>> = Arc::new((0..2).map(|_| AtomicU64::new(0)).collect());
+    let in_section = Arc::new(AtomicBool::new(false));
+    let (s2, f2) = (seq.clone(), in_section.clone());
+    let w = std::thread::spawn(move || {
+        let g = s2.write_begin().unwrap();
+        f2.store(true, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(5)); // preemption / page fault / SMI
+        g.commit();
+    });
+    while !in_section.load(Ordering::SeqCst) {}
+    let r = read_deadline(&seq, &words, &HardwareClock, Duration::from_millis(50), Duration::from_micros(50), |v| v.word(0));
+    w.join().unwrap();
+    assert!(matches!(r, Err(DeadlineReadError::Poisoned { .. })), "{r:?}");
+    assert_eq!(seq.raw() & 1, 0, "...yet the writer committed normally");
+}
+
+// ---------------------------------------------------------------------------
+// S11 (P1) - credit flow: ShedAdmission is advisory; overflow is unbounded
+// ---------------------------------------------------------------------------
+#[test]
+fn s11_overflow_grows_past_cap() {
+    let mut lane = (std::collections::VecDeque::new(), 4usize);
+    let mut f = OutboundFlow::new(4, 8);
+    for i in 0..100_000u32 {
+        let _ = f.send(&mut lane, i);
+    }
+    assert!(f.backlog() > 99_000, "backlog={} despite overflow_cap=8", f.backlog());
+}
+
+// ---------------------------------------------------------------------------
+// S12 (P1, hot path) - TruncationPins::decide is an O(dirty tenants) HashMap scan
+// ---------------------------------------------------------------------------
+#[test]
+fn s12_truncation_decide_is_linear_scan() {
+    let mut p = TruncationPins::default();
+    for t in 0..70_000u32 {
+        p.on_dirty(t, 1_000 + t as u64, 0);
+    } // ~1M tenants / 14 cores
+    let iters = 50;
+    let t0 = Instant::now();
+    for _ in 0..iters {
+        std::hint::black_box(p.decide(1, 0.9, Duration::from_secs(1), |_| false));
+    }
+    let per = t0.elapsed() / iters;
+    eprintln!("TruncationPins::decide with 70k dirty tenants: {per:?} per call");
+    assert!(per > Duration::from_micros(20), "per={per:?}");
+}
+

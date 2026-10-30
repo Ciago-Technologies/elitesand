@@ -1,0 +1,21 @@
+{
+  "planning": "deep",
+  "context_depth": "dependency",
+  "verification_depth": "impact",
+  "delegation": "none",
+  "reason_codes": [
+    "security-review-remediation",
+    "specification-code-alignment"
+  ],
+  "allowed_write_scope": [
+    "ciagomem-slae",
+    "ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md"
+  ],
+  "acceptance": [
+    "integrate zip reference kernel and review evidence",
+    "replace defect assertions with corrected regressions for implemented fixes",
+    "document remaining production gates explicitly",
+    "release workspace tests pass",
+    "embedded reference code agrees with workspace source"
+  ]
+}

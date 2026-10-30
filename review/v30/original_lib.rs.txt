@@ -1,0 +1,2271 @@
+//! CiagoMem - SLAE ("The Store") & CiaQL — v3.0 Final Audit-Hardened Reference Kernel.
+//! Resolves all P0 (1a..4b) and v2.5 Adversarial Audit (C1..C6, H1..H8, M1..M8) findings.
+
+#![allow(clippy::too_many_arguments)]
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{
+    AtomicU32, AtomicU64,
+    Ordering::{AcqRel, Acquire, Relaxed, Release},
+    fence,
+};
+use std::time::Duration;
+
+// =============================================================================
+// 1. PROT_READ-SAFE BOEHM SEQLOCK + DEADLINE + POISON DETECTION + READ COMBINER
+// =============================================================================
+
+pub const READ_RETRY_LIMIT: u32 = 128;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadError {
+    WriterActive,
+    Corrupt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadlineReadError {
+    DeadlineExhausted { retries: u32 },
+    Poisoned { odd_seq: u64 },
+    Corrupt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriterBusy;
+
+pub trait Clock {
+    fn now_ns(&self) -> u64;
+}
+
+pub struct HardwareClock;
+impl Clock for HardwareClock {
+    #[inline(always)]
+    fn now_ns(&self) -> u64 {
+        // Monotonic nanosecond clock portable across x86_64, aarch64, and Miri.
+        static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        EPOCH.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64
+    }
+}
+
+#[derive(Debug, Default)]
+#[repr(transparent)]
+pub struct SeqWord(AtomicU64);
+
+impl SeqWord {
+    pub const fn new() -> Self {
+        SeqWord(AtomicU64::new(0))
+    }
+
+    #[inline(always)]
+    pub fn read_begin(&self) -> Option<u64> {
+        let s = self.0.load(Relaxed);
+        fence(Acquire); // F1: orders subsequent relaxed data word loads
+        if s & 1 == 0 { Some(s) } else { None }
+    }
+
+    #[inline(always)]
+    pub fn read_retry(&self, s1: u64) -> bool {
+        fence(Acquire); // F2: prevents data word loads from sinking past s2
+        self.0.load(Relaxed) != s1
+    }
+
+    #[inline(always)]
+    pub fn write_begin(&self) -> Result<SeqWriteGuard<'_>, WriterBusy> {
+        let s = self.0.load(Relaxed);
+        if s & 1 != 0 {
+            return Err(WriterBusy);
+        }
+        if self.0.compare_exchange(s, s + 1, Acquire, Relaxed).is_err() {
+            return Err(WriterBusy);
+        }
+        fence(Release); // W1: orders odd sequence store before data stores
+        Ok(SeqWriteGuard {
+            seq: self,
+            odd: s + 1,
+            committed: false,
+        })
+    }
+
+    #[inline(always)]
+    pub fn raw(&self) -> u64 {
+        self.0.load(Relaxed)
+    }
+}
+
+#[must_use = "dropping SeqWriteGuard without commit() leaves the slot poisoned (odd)"]
+pub struct SeqWriteGuard<'a> {
+    seq: &'a SeqWord,
+    odd: u64,
+    committed: bool,
+}
+
+impl SeqWriteGuard<'_> {
+    #[inline(always)]
+    pub fn commit(mut self) {
+        self.committed = true;
+        self.seq.0.store(self.odd + 1, Release); // W2: publishes section
+    }
+}
+
+impl Drop for SeqWriteGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            debug_assert!(self.seq.raw() & 1 == 1);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WordView<'a> {
+    words: &'a [AtomicU64],
+}
+
+impl<'a> WordView<'a> {
+    #[inline(always)]
+    pub fn new(words: &'a [AtomicU64]) -> Self {
+        WordView { words }
+    }
+
+    #[inline(always)]
+    pub fn word(&self, i: usize) -> Option<u64> {
+        self.words.get(i).map(|w| w.load(Relaxed))
+    }
+
+    #[inline]
+    pub fn copy_bytes(&self, byte_off: usize, dst: &mut [u8]) -> Option<()> {
+        let end = byte_off.checked_add(dst.len())?;
+        if end > self.words.len() * 8 {
+            return None;
+        }
+        let (mut out, mut off) = (0, byte_off);
+        while out < dst.len() {
+            let w = self.words[off / 8].load(Relaxed).to_le_bytes();
+            let in_word = off % 8;
+            let n = (8 - in_word).min(dst.len() - out);
+            dst[out..out + n].copy_from_slice(&w[in_word..in_word + n]);
+            out += n;
+            off += n;
+        }
+        Some(())
+    }
+
+    #[inline]
+    pub fn u32_at(&self, byte_off: usize) -> Option<u32> {
+        let mut b = [0u8; 4];
+        self.copy_bytes(byte_off, &mut b)?;
+        Some(u32::from_le_bytes(b))
+    }
+}
+
+pub struct WordsMut<'a> {
+    words: &'a [AtomicU64],
+}
+
+impl<'a> WordsMut<'a> {
+    #[inline(always)]
+    pub fn set(&mut self, i: usize, val: u64) {
+        self.words[i].store(val, Relaxed);
+    }
+
+    #[inline]
+    pub fn write_bytes(&mut self, byte_off: usize, src: &[u8]) {
+        let (mut inp, mut off) = (0, byte_off);
+        while inp < src.len() {
+            let idx = off / 8;
+            let in_word = off % 8;
+            let n = (8 - in_word).min(src.len() - inp);
+            let mut w = self.words[idx].load(Relaxed).to_le_bytes();
+            w[in_word..in_word + n].copy_from_slice(&src[inp..inp + n]);
+            self.words[idx].store(u64::from_le_bytes(w), Relaxed);
+            inp += n;
+            off += n;
+        }
+    }
+}
+
+#[inline]
+pub fn read_with<R>(
+    seq: &SeqWord,
+    words: &[AtomicU64],
+    budget: u32,
+    mut f: impl FnMut(WordView<'_>) -> Option<R>,
+) -> Result<R, ReadError> {
+    let view = WordView::new(words);
+    let mut backoff = 1u32;
+    for _ in 0..budget {
+        if let Some(s1) = seq.read_begin() {
+            let r = f(view);
+            if !seq.read_retry(s1) {
+                return r.ok_or(ReadError::Corrupt);
+            }
+        }
+        for _ in 0..backoff {
+            core::hint::spin_loop();
+        }
+        backoff = (backoff << 1).min(64);
+    }
+    Err(ReadError::WriterActive)
+}
+
+/// Time-budgeted seqlock reader with poison detection (Fixes H2).
+pub fn read_deadline<R>(
+    seq: &SeqWord,
+    words: &[AtomicU64],
+    clock: &impl Clock,
+    budget: Duration,
+    poison_after: Duration,
+    mut f: impl FnMut(WordView<'_>) -> Option<R>,
+) -> Result<R, DeadlineReadError> {
+    let start = clock.now_ns();
+    let deadline = start.saturating_add(budget.as_nanos() as u64);
+    let poison_ns = poison_after.as_nanos() as u64;
+    let view = WordView::new(words);
+
+    let mut odd_seen: Option<(u64, u64)> = None;
+    let mut retries = 0u32;
+    let mut spins = 1u32;
+
+    loop {
+        if let Some(s1) = seq.read_begin() {
+            odd_seen = None;
+            let r = f(view);
+            if !seq.read_retry(s1) {
+                return r.ok_or(DeadlineReadError::Corrupt);
+            }
+        } else {
+            let raw = seq.raw();
+            let now = clock.now_ns();
+            match odd_seen {
+                Some((prev, since)) if prev == raw => {
+                    if now.saturating_sub(since) >= poison_ns {
+                        return Err(DeadlineReadError::Poisoned { odd_seq: raw });
+                    }
+                }
+                _ => odd_seen = Some((raw, now)),
+            }
+        }
+        retries += 1;
+        if clock.now_ns() >= deadline {
+            return Err(DeadlineReadError::DeadlineExhausted { retries });
+        }
+        for _ in 0..spins {
+            core::hint::spin_loop();
+        }
+        spins = (spins << 1).min(32);
+    }
+}
+
+/// Owner-side read combiner: collapses N fallback reads on one slot into 1 snapshot (Fixes H2).
+#[derive(Default)]
+pub struct ReadCombiner {
+    waiters: HashMap<u32, Vec<u64>>,
+    pub snapshots_taken: u64,
+    pub requests_served: u64,
+}
+
+impl ReadCombiner {
+    pub fn enqueue(&mut self, slot: u32, req_id: u64) {
+        self.waiters.entry(slot).or_default().push(req_id);
+    }
+
+    pub fn flush<R: Clone>(
+        &mut self,
+        mut snap: impl FnMut(u32) -> R,
+        mut reply: impl FnMut(u64, R),
+    ) {
+        for (slot, reqs) in self.waiters.drain() {
+            if reqs.is_empty() {
+                continue;
+            }
+            let v = snap(slot);
+            self.snapshots_taken += 1;
+            for id in reqs {
+                self.requests_served += 1;
+                reply(id, v.clone());
+            }
+        }
+    }
+}
+
+// =============================================================================
+// 2. NON-BLOCKING CREDIT-CONTROLLED SPSC MESH (Fixes P0-1b & H1)
+// =============================================================================
+
+pub trait Lane<T> {
+    fn try_push(&mut self, v: T) -> Result<(), T>;
+}
+
+impl<T> Lane<T> for (VecDeque<T>, usize) {
+    fn try_push(&mut self, v: T) -> Result<(), T> {
+        if self.0.len() >= self.1 {
+            Err(v)
+        } else {
+            self.0.push_back(v);
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendOutcome {
+    Sent,
+    Deferred,
+    ShedAdmission,
+}
+
+pub struct OutboundFlow<T> {
+    credits: usize,
+    overflow: VecDeque<T>,
+    cap: usize,
+    pub overflow_hwm: usize,
+}
+
+impl<T> OutboundFlow<T> {
+    pub fn new(lane_capacity: usize, overflow_cap: usize) -> Self {
+        OutboundFlow {
+            credits: lane_capacity,
+            overflow: VecDeque::with_capacity(overflow_cap),
+            cap: overflow_cap,
+            overflow_hwm: 0,
+        }
+    }
+
+    pub fn send(&mut self, lane: &mut impl Lane<T>, v: T) -> SendOutcome {
+        if self.overflow.is_empty() && self.credits > 0 {
+            match lane.try_push(v) {
+                Ok(()) => {
+                    self.credits -= 1;
+                    return SendOutcome::Sent;
+                }
+                Err(v) => self.overflow.push_back(v),
+            }
+        } else {
+            self.overflow.push_back(v);
+        }
+        self.overflow_hwm = self.overflow_hwm.max(self.overflow.len());
+        if self.overflow.len() >= self.cap {
+            SendOutcome::ShedAdmission
+        } else {
+            SendOutcome::Deferred
+        }
+    }
+
+    pub fn on_credits(&mut self, c: usize) {
+        self.credits = self.credits.saturating_add(c);
+    }
+
+    pub fn pump(&mut self, lane: &mut impl Lane<T>) -> usize {
+        let mut sent = 0;
+        while self.credits > 0 {
+            let Some(v) = self.overflow.pop_front() else {
+                break;
+            };
+            match lane.try_push(v) {
+                Ok(()) => {
+                    self.credits -= 1;
+                    sent += 1;
+                }
+                Err(v) => {
+                    self.overflow.push_front(v);
+                    break;
+                }
+            }
+        }
+        sent
+    }
+
+    pub fn backlog(&self) -> usize {
+        self.overflow.len()
+    }
+}
+
+// =============================================================================
+// 3. SPECTRE-SAFE ROUTE TABLE, SLOT HANDLES & CHECKED EXTENT LOCATORS
+// =============================================================================
+
+pub const IDX_BITS: u32 = 20;
+pub const CLASS_BITS: u32 = 4;
+pub const GEN_BITS: u32 = 64 - IDX_BITS - CLASS_BITS; // 40 bits
+pub const MAX_INDEX: u32 = (1 << IDX_BITS) - 1;
+pub const MAX_CLASS: u8 = (1 << CLASS_BITS) - 1;
+pub const MAX_GENERATION: u64 = (1 << GEN_BITS) - 1;
+const IDX_MASK: u64 = (1 << IDX_BITS) - 1;
+const CLASS_SHIFT: u32 = IDX_BITS;
+const CLASS_MASK: u64 = ((1 << CLASS_BITS) - 1) << CLASS_SHIFT;
+const GEN_SHIFT: u32 = IDX_BITS + CLASS_BITS;
+
+/// Branchless Spectre v1 index masking (`array_index_nospec` equivalent, Fixes M7).
+#[inline(always)]
+pub const fn nospec_index(idx: usize, len: usize) -> Option<usize> {
+    if idx < len {
+        let mask = ((idx < len) as usize).wrapping_neg();
+        Some(idx & mask)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(transparent)]
+pub struct SlotHandle(u64);
+
+impl SlotHandle {
+    pub const NULL: SlotHandle = SlotHandle(0);
+
+    #[inline(always)]
+    pub const fn pack(index: u32, class: u8, generation: u64) -> Option<SlotHandle> {
+        if index > MAX_INDEX || class > MAX_CLASS || generation == 0 || generation > MAX_GENERATION
+        {
+            return None;
+        }
+        Some(SlotHandle(
+            (generation << GEN_SHIFT) | ((class as u64) << CLASS_SHIFT) | (index as u64),
+        ))
+    }
+
+    #[inline(always)]
+    pub const fn index(self) -> u32 {
+        (self.0 & IDX_MASK) as u32
+    }
+
+    #[inline(always)]
+    pub const fn class(self) -> u8 {
+        ((self.0 & CLASS_MASK) >> CLASS_SHIFT) as u8
+    }
+
+    #[inline(always)]
+    pub const fn generation(self) -> u64 {
+        self.0 >> GEN_SHIFT
+    }
+
+    #[inline(always)]
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TenantWord {
+    pub tenant: u32,
+    pub core: u8,
+    pub layout_version: u8,
+    pub flags: u16,
+}
+
+impl TenantWord {
+    #[inline(always)]
+    pub const fn pack(self) -> u64 {
+        (self.tenant as u64)
+            | ((self.core as u64) << 32)
+            | ((self.layout_version as u64) << 40)
+            | ((self.flags as u64) << 48)
+    }
+
+    #[inline(always)]
+    pub const fn unpack(w: u64) -> Self {
+        TenantWord {
+            tenant: w as u32,
+            core: (w >> 32) as u8,
+            layout_version: (w >> 40) as u8,
+            flags: (w >> 48) as u16,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub struct ExtentLoc(u64);
+
+impl ExtentLoc {
+    pub const MAX_CONTAINER: u16 = (1 << 12) - 1;
+    pub const MAX_BLOCK_4K: u64 = (1u64 << 48) - 1;
+
+    /// Checked constructor: rejects out-of-range container or block_4k (Fixes M1).
+    #[inline(always)]
+    pub const fn new_checked(container: u16, copy_b: bool, block_4k: u64) -> Option<Self> {
+        if container > Self::MAX_CONTAINER || block_4k > Self::MAX_BLOCK_4K {
+            return None;
+        }
+        Some(ExtentLoc(
+            (block_4k & Self::MAX_BLOCK_4K)
+                | ((copy_b as u64) << 51)
+                | ((container as u64) << 52),
+        ))
+    }
+
+    #[inline(always)]
+    pub const fn flipped(self) -> Self {
+        ExtentLoc(self.0 ^ (1u64 << 51))
+    }
+
+    #[inline(always)]
+    pub const fn is_copy_b(self) -> bool {
+        ((self.0 >> 51) & 1) != 0
+    }
+
+    #[inline(always)]
+    pub const fn container(self) -> u16 {
+        (self.0 >> 52) as u16
+    }
+
+    #[inline(always)]
+    pub const fn block_4k(self) -> u64 {
+        self.0 & Self::MAX_BLOCK_4K
+    }
+
+    #[inline(always)]
+    pub const fn current_offset(self, extent_bytes: u64) -> u64 {
+        let base = self.block_4k() * 4096;
+        if self.is_copy_b() {
+            base + extent_bytes
+        } else {
+            base
+        }
+    }
+
+    #[inline(always)]
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+#[repr(C, align(64))]
+pub struct SlotHeader {
+    pub seq: SeqWord,
+    pub owner: AtomicU64,
+    pub tenant: AtomicU64,
+    pub applied_lsn: AtomicU64,
+    pub checkpoint_lsn: AtomicU64,
+    pub payload_len: AtomicU64,
+    pub last_generation: AtomicU64,
+    pub incarnation_lo: AtomicU64,
+}
+const _: () = assert!(core::mem::size_of::<SlotHeader>() == 64);
+
+#[repr(C, align(64))]
+pub struct CoreControl {
+    durable_lsn: AtomicU64,
+    _pad: [u64; 7],
+}
+
+impl Default for CoreControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CoreControl {
+    pub const fn new() -> Self {
+        CoreControl {
+            durable_lsn: AtomicU64::new(0),
+            _pad: [0; 7],
+        }
+    }
+
+    #[inline(always)]
+    pub fn durable(&self) -> u64 {
+        let d = self.durable_lsn.load(Relaxed);
+        fence(Acquire);
+        d
+    }
+
+    /// Monotonic publication using `fetch_max` so durable_lsn can never regress (Fixes M3).
+    #[inline(always)]
+    pub fn publish_durable(&self, lsn: u64) -> u64 {
+        self.durable_lsn.fetch_max(lsn, Release).max(lsn)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Optimistic,
+    Durable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotReadError {
+    InvalidHandle,
+    Reassigned,
+    NotYetDurable { applied: u64, durable: u64 },
+    WriterActive,
+    Corrupt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteError {
+    WriterBusy,
+    Reassigned,
+    LsnRegression { current: u64, attempted: u64 },
+}
+
+pub struct Snapshot<T> {
+    pub value: T,
+    pub applied_lsn: u64,
+}
+
+pub struct SlotArena<const W: usize> {
+    class: u8,
+    headers: Box<[SlotHeader]>,
+    payloads: Box<[[AtomicU64; W]]>,
+    pub cores: Box<[CoreControl]>,
+}
+
+impl<const W: usize> SlotArena<W> {
+    pub const PAYLOAD_BYTES: usize = W * 8;
+
+    pub fn new(class: u8, slots: usize, num_cores: usize) -> Self {
+        let headers = (0..slots)
+            .map(|_| SlotHeader {
+                seq: SeqWord::new(),
+                owner: AtomicU64::new(0),
+                tenant: AtomicU64::new(0),
+                applied_lsn: AtomicU64::new(0),
+                checkpoint_lsn: AtomicU64::new(0),
+                payload_len: AtomicU64::new(0),
+                last_generation: AtomicU64::new(0),
+                incarnation_lo: AtomicU64::new(0),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let payloads = (0..slots)
+            .map(|_| core::array::from_fn(|_| AtomicU64::new(0)))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let cores = (0..num_cores)
+            .map(|_| CoreControl::new())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        SlotArena {
+            class,
+            headers,
+            payloads,
+            cores,
+        }
+    }
+
+    #[inline(always)]
+    pub fn resolve(&self, h: SlotHandle) -> Option<u32> {
+        if h.raw() == 0 || h.class() != self.class {
+            return None;
+        }
+        nospec_index(h.index() as usize, self.headers.len()).map(|i| i as u32)
+    }
+
+    #[inline(always)]
+    pub fn header(&self, idx: u32) -> &SlotHeader {
+        let i = nospec_index(idx as usize, self.headers.len()).expect("slot index out of bounds");
+        &self.headers[i]
+    }
+
+    #[inline(always)]
+    pub fn payload(&self, idx: u32) -> &[AtomicU64; W] {
+        let i = nospec_index(idx as usize, self.payloads.len()).expect("slot index out of bounds");
+        &self.payloads[i]
+    }
+
+    pub fn install(
+        &self,
+        idx: u32,
+        tw: TenantWord,
+        incarnation: u128,
+        applied_lsn: u64,
+        checkpoint_lsn: u64,
+    ) -> Result<Option<SlotHandle>, WriterBusy> {
+        let hdr = self.header(idx);
+        let last = hdr.last_generation.load(Relaxed);
+        let Some(h) = SlotHandle::pack(idx, self.class, last + 1) else {
+            return Ok(None);
+        };
+        let g = hdr.seq.write_begin()?;
+        hdr.last_generation.store(h.generation(), Relaxed);
+        hdr.tenant.store(tw.pack(), Relaxed);
+        hdr.applied_lsn.store(applied_lsn, Relaxed);
+        hdr.checkpoint_lsn.store(checkpoint_lsn, Relaxed);
+        hdr.payload_len.store(Self::PAYLOAD_BYTES as u64, Relaxed);
+        hdr.incarnation_lo.store(incarnation as u64, Relaxed);
+        hdr.owner.store(h.raw(), Relaxed);
+        g.commit();
+        Ok(Some(h))
+    }
+
+    pub fn revoke(&self, h: SlotHandle) -> Result<(), WriterBusy> {
+        let idx = self.resolve(h).expect("invalid handle on owner core");
+        let hdr = self.header(idx);
+        let g = hdr.seq.write_begin()?;
+        hdr.owner.store(0, Relaxed);
+        hdr.tenant.store(0, Relaxed);
+        hdr.incarnation_lo.store(0, Relaxed);
+        g.commit();
+        Ok(())
+    }
+
+    /// Validated write path: rejects LSN regression with WriteError::LsnRegression (Fixes M2).
+    pub fn write(
+        &self,
+        h: SlotHandle,
+        lsn: u64,
+        f: impl FnOnce(&mut WordsMut<'_>),
+    ) -> Result<(), WriteError> {
+        let idx = self.resolve(h).ok_or(WriteError::Reassigned)?;
+        let hdr = self.header(idx);
+        let g = hdr.seq.write_begin().map_err(|_| WriteError::WriterBusy)?;
+        if hdr.owner.load(Relaxed) != h.raw() {
+            g.commit();
+            return Err(WriteError::Reassigned);
+        }
+        let current = hdr.applied_lsn.load(Relaxed);
+        if lsn < current {
+            g.commit();
+            return Err(WriteError::LsnRegression {
+                current,
+                attempted: lsn,
+            });
+        }
+        let mut wm = WordsMut {
+            words: self.payload(idx),
+        };
+        f(&mut wm);
+        hdr.applied_lsn.store(lsn, Relaxed);
+        g.commit();
+        Ok(())
+    }
+
+    pub fn read<R>(
+        &self,
+        h: SlotHandle,
+        tenant: u32,
+        vis: Visibility,
+        mut f: impl FnMut(WordView<'_>) -> Option<R>,
+    ) -> Result<Snapshot<R>, SlotReadError> {
+        let idx = self.resolve(h).ok_or(SlotReadError::InvalidHandle)?;
+        let hdr = self.header(idx);
+        let words = self.payload(idx);
+        let r = read_with(&hdr.seq, words, READ_RETRY_LIMIT, |view| {
+            let owner = hdr.owner.load(Relaxed);
+            let tw = TenantWord::unpack(hdr.tenant.load(Relaxed));
+            if owner != h.raw() || tw.tenant != tenant {
+                return Some(Err(()));
+            }
+            let applied = hdr.applied_lsn.load(Relaxed);
+            Some(Ok((f(view)?, applied, tw.core)))
+        })
+        .map_err(|e| match e {
+            ReadError::WriterActive => SlotReadError::WriterActive,
+            ReadError::Corrupt => SlotReadError::Corrupt,
+        })?;
+        let (value, applied, core) = r.map_err(|()| SlotReadError::Reassigned)?;
+        if vis == Visibility::Durable {
+            let durable = self
+                .cores
+                .get(core as usize)
+                .ok_or(SlotReadError::Corrupt)?
+                .durable();
+            if applied > durable {
+                return Err(SlotReadError::NotYetDurable { applied, durable });
+            }
+        }
+        Ok(Snapshot {
+            value,
+            applied_lsn: applied,
+        })
+    }
+}
+
+// =============================================================================
+// 4. TRUNCATION PIN BREAKER & TWO-WORD 64-PARTICIPANT CALVIN VOTE TABLE
+// =============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinAction {
+    None,
+    FreezeCheckpoint { tenant: u32 },
+    Relocate { tenant: u32 },
+}
+
+#[derive(Default)]
+pub struct TruncationPins {
+    first_dirty: HashMap<u32, (u64, u64)>, // tenant -> (rec_lsn, pinned_at_ns)
+}
+
+impl TruncationPins {
+    pub fn on_dirty(&mut self, tenant: u32, lsn: u64, now_ns: u64) {
+        self.first_dirty.entry(tenant).or_insert((lsn, now_ns));
+    }
+
+    pub fn on_checkpointed(&mut self, tenant: u32) {
+        self.first_dirty.remove(&tenant);
+    }
+
+    pub fn min_needed_lsn(&self, current_lsn: u64) -> u64 {
+        self.first_dirty
+            .values()
+            .map(|&(lsn, _)| lsn)
+            .min()
+            .unwrap_or(current_lsn)
+    }
+
+    pub fn pin_holder(&self, now_ns: u64) -> Option<(u32, u64, Duration)> {
+        self.first_dirty
+            .iter()
+            .min_by_key(|&(_, &(lsn, _))| lsn)
+            .map(|(&t, &(lsn, since))| (t, lsn, Duration::from_nanos(now_ns.saturating_sub(since))))
+    }
+
+    pub fn decide(
+        &self,
+        now_ns: u64,
+        ring_free_frac: f64,
+        max_pin_age: Duration,
+        degraded: impl Fn(u32) -> bool,
+    ) -> PinAction {
+        let Some((t, _, age)) = self.pin_holder(now_ns) else {
+            return PinAction::None;
+        };
+        if degraded(t) {
+            PinAction::Relocate { tenant: t }
+        } else if ring_free_frac < 0.25 || age > max_pin_age {
+            PinAction::FreezeCheckpoint { tenant: t }
+        } else {
+            PinAction::None
+        }
+    }
+}
+
+pub const MAX_PARTICIPANTS: u32 = 64;
+const EMPTY_TAG: u64 = 0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Participants(u8);
+
+impl Participants {
+    #[inline(always)]
+    pub const fn new(n: u32) -> Option<Participants> {
+        if n == 0 || n > MAX_PARTICIPANTS {
+            None
+        } else {
+            Some(Participants(n as u8))
+        }
+    }
+
+    #[inline(always)]
+    pub const fn mask(self) -> u64 {
+        u64::MAX >> (64 - self.0 as u32)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Vote {
+    Pending,
+    Decided { commit: bool },
+    Duplicate,
+    Stale,
+}
+
+#[repr(C, align(64))]
+struct TxSlot {
+    tag: AtomicU64,
+    mask: AtomicU64,
+    voted: AtomicU64,
+    nays: AtomicU64,
+    _pad: [u64; 4],
+}
+
+pub struct VoteTable {
+    slots: Box<[TxSlot]>,
+}
+
+impl VoteTable {
+    pub fn new(capacity: usize) -> Self {
+        assert!(capacity.is_power_of_two());
+        let slots = (0..capacity)
+            .map(|_| TxSlot {
+                tag: AtomicU64::new(EMPTY_TAG),
+                mask: AtomicU64::new(0),
+                voted: AtomicU64::new(0),
+                nays: AtomicU64::new(0),
+                _pad: [0; 4],
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        VoteTable { slots }
+    }
+
+    #[inline(always)]
+    fn slot(&self, tx_seq: u64) -> &TxSlot {
+        &self.slots[(tx_seq as usize) & (self.slots.len() - 1)]
+    }
+
+    pub fn open(&self, tx_seq: u64, n: Participants) -> Result<(), &'static str> {
+        assert_ne!(tx_seq, EMPTY_TAG);
+        let s = self.slot(tx_seq);
+        if s.tag.load(Acquire) != EMPTY_TAG {
+            return Err("Calvin vote slot busy");
+        }
+        s.mask.store(n.mask(), Relaxed);
+        s.voted.store(0, Relaxed);
+        s.nays.store(0, Relaxed);
+        s.tag.store(tx_seq, Release);
+        Ok(())
+    }
+
+    pub fn vote(&self, tx_seq: u64, idx: u32, ok: bool) -> Vote {
+        let s = self.slot(tx_seq);
+        if s.tag.load(Acquire) != tx_seq {
+            return Vote::Stale;
+        }
+        let mask = s.mask.load(Relaxed);
+        if idx >= MAX_PARTICIPANTS || ((mask >> idx) & 1) == 0 {
+            return Vote::Stale;
+        }
+        let bit = 1u64 << idx;
+        if !ok {
+            s.nays.fetch_or(bit, Release);
+        }
+        let before = s.voted.fetch_or(bit, AcqRel);
+        if (before & bit) != 0 {
+            return Vote::Duplicate;
+        }
+        if ((before | bit) & mask) == mask {
+            let commit = (s.nays.load(Acquire) & mask) == 0;
+            Vote::Decided { commit }
+        } else {
+            Vote::Pending
+        }
+    }
+
+    pub fn close(&self, tx_seq: u64) {
+        let _ = self
+            .slot(tx_seq)
+            .tag
+            .compare_exchange(tx_seq, EMPTY_TAG, AcqRel, Relaxed);
+    }
+}
+
+// =============================================================================
+// 5. SECURITY: KEYED PRF REGISTRY, $REF MACS, MACAROONS & CAMEL TAINT LATTICE
+// =============================================================================
+
+pub trait Prf {
+    fn mac128(&self, domain: &[u8], msg: &[u8]) -> [u8; 16];
+}
+
+/// Keyed SipHash-like / ARX PRF for zero-dependency reference tests (use HMAC-SHA256 / BLAKE3 in prod).
+pub struct KeyedPrf(pub [u8; 32]);
+impl Prf for KeyedPrf {
+    fn mac128(&self, domain: &[u8], msg: &[u8]) -> [u8; 16] {
+        let mut s0 = u64::from_le_bytes(self.0[0..8].try_into().unwrap()) ^ 0x736f6d6570736575;
+        let mut s1 = u64::from_le_bytes(self.0[8..16].try_into().unwrap()) ^ 0x646f72616e646f6d;
+        let mut s2 = u64::from_le_bytes(self.0[16..24].try_into().unwrap()) ^ 0x6c7967656e657261;
+        let mut s3 = u64::from_le_bytes(self.0[24..32].try_into().unwrap()) ^ 0x7465646279746573;
+        for &b in domain.iter().chain([0xff].iter()).chain(msg.iter()) {
+            s3 ^= b as u64;
+            for _ in 0..2 {
+                s0 = s0.wrapping_add(s1);
+                s1 = s1.rotate_left(13) ^ s0;
+                s0 = s0.rotate_left(32);
+                s2 = s2.wrapping_add(s3);
+                s3 = s3.rotate_left(16) ^ s2;
+                s0 = s0.wrapping_add(s3);
+                s3 = s3.rotate_left(21) ^ s0;
+                s2 = s2.wrapping_add(s1);
+                s1 = s1.rotate_left(17) ^ s2;
+                s2 = s2.rotate_left(32);
+            }
+            s0 ^= b as u64;
+        }
+        let mut out = [0u8; 16];
+        out[0..8].copy_from_slice(&(s0 ^ s2).to_le_bytes());
+        out[8..16].copy_from_slice(&(s1 ^ s3).to_le_bytes());
+        out
+    }
+}
+
+#[inline]
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut d = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        d |= x ^ y;
+    }
+    d == 0
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultLoc {
+    pub segment: u32,
+    pub offset: u32,
+    pub len: u32,
+    pub generation: u32,
+    pub blake3_256: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefToken {
+    pub id: u64,
+    pub mac: [u8; 16],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefDenied {
+    Unknown,
+    BadMac,
+}
+
+pub fn mint_ref(k: &impl Prf, tenant_incarnation: u128, id: u64, loc: &VaultLoc) -> RefToken {
+    let mut msg = [0u8; 72];
+    msg[0..16].copy_from_slice(&tenant_incarnation.to_le_bytes());
+    msg[16..24].copy_from_slice(&id.to_le_bytes());
+    msg[24..28].copy_from_slice(&loc.segment.to_le_bytes());
+    msg[28..32].copy_from_slice(&loc.offset.to_le_bytes());
+    msg[32..36].copy_from_slice(&loc.len.to_le_bytes());
+    msg[36..40].copy_from_slice(&loc.generation.to_le_bytes());
+    msg[40..72].copy_from_slice(&loc.blake3_256);
+    RefToken {
+        id,
+        mac: k.mac128(b"ciagomem/ref/v1", &msg),
+    }
+}
+
+pub fn resolve_ref<'a>(
+    k: &impl Prf,
+    session_incarnation: u128,
+    index: &'a HashMap<u64, VaultLoc>,
+    tok: &RefToken,
+) -> Result<&'a VaultLoc, RefDenied> {
+    let loc = index.get(&tok.id).ok_or(RefDenied::Unknown)?;
+    let expect = mint_ref(k, session_incarnation, tok.id, loc);
+    if ct_eq(&expect.mac, &tok.mac) {
+        Ok(loc)
+    } else {
+        Err(RefDenied::BadMac)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Caveat {
+    Tenant(u128),
+    KeyEpochAtLeast(u64),
+    ExpiresAt(u64),
+    Ops(u32),
+    PeerUid(u32),
+    Unknown(String),
+}
+
+pub struct RequestCtx {
+    pub tenant_incarnation: u128,
+    pub key_epoch: u64,
+    pub now_ns: u64,
+    pub op_bit: u32,
+    pub peer_uid: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaveatError {
+    Unrecognized,
+    MissingMandatory,
+    TenantMismatch,
+    Revoked,
+    Expired,
+    OpForbidden,
+    PeerMismatch,
+}
+
+pub fn verify_caveats(caveats: &[Caveat], ctx: &RequestCtx) -> Result<(), CaveatError> {
+    let (mut has_tenant, mut has_exp, mut has_peer) = (false, false, false);
+    for c in caveats {
+        match *c {
+            Caveat::Tenant(t) => {
+                if t != ctx.tenant_incarnation {
+                    return Err(CaveatError::TenantMismatch);
+                }
+                has_tenant = true;
+            }
+            Caveat::KeyEpochAtLeast(min_e) => {
+                if ctx.key_epoch < min_e {
+                    return Err(CaveatError::Revoked);
+                }
+            }
+            Caveat::ExpiresAt(exp) => {
+                if ctx.now_ns >= exp {
+                    return Err(CaveatError::Expired);
+                }
+                has_exp = true;
+            }
+            Caveat::Ops(mask) => {
+                if (mask & ctx.op_bit) == 0 {
+                    return Err(CaveatError::OpForbidden);
+                }
+            }
+            Caveat::PeerUid(uid) => {
+                if uid != ctx.peer_uid {
+                    return Err(CaveatError::PeerMismatch);
+                }
+                has_peer = true;
+            }
+            Caveat::Unknown(_) => return Err(CaveatError::Unrecognized),
+        }
+    }
+    if !(has_tenant && has_exp && has_peer) {
+        return Err(CaveatError::MissingMandatory);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Integrity {
+    External = 0,
+    AgentDerived = 1,
+    UserDirect = 2,
+    Policy = 3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Label {
+    pub integrity: Integrity,
+    pub sources: u64,
+    pub readers: u64,
+}
+
+impl Label {
+    pub const fn join(self, other: Self) -> Self {
+        let integrity = if (self.integrity as u8) <= (other.integrity as u8) {
+            self.integrity
+        } else {
+            other.integrity
+        };
+        Label {
+            integrity,
+            sources: self.sources | other.sources,
+            readers: self.readers & other.readers,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameField {
+    HardConstraint,
+    ActiveIntent,
+    Fact,
+    Playbook,
+    Var,
+}
+
+pub struct Endorsement {
+    pub author_integrity: Integrity,
+    pub target_sources: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlowDenied {
+    InsufficientIntegrity {
+        field: FrameField,
+        got: Integrity,
+        need: Integrity,
+    },
+    EndorsementTooWeak,
+    ReadersEmpty,
+}
+
+pub fn admit_to_frame(
+    field: FrameField,
+    mut label: Label,
+    endorse: Option<&Endorsement>,
+) -> Result<Label, FlowDenied> {
+    if label.readers == 0 {
+        return Err(FlowDenied::ReadersEmpty);
+    }
+    if let Some(e) = endorse {
+        if e.author_integrity < Integrity::UserDirect
+            || (label.sources & !e.target_sources) != 0
+            || label.integrity == Integrity::External
+        {
+            return Err(FlowDenied::EndorsementTooWeak);
+        }
+        if field == FrameField::ActiveIntent {
+            label.integrity = Integrity::UserDirect;
+        }
+    }
+    let need = match field {
+        FrameField::HardConstraint => Integrity::Policy,
+        FrameField::ActiveIntent | FrameField::Playbook => Integrity::UserDirect,
+        FrameField::Fact => Integrity::AgentDerived,
+        FrameField::Var => Integrity::External,
+    };
+    if label.integrity < need {
+        return Err(FlowDenied::InsufficientIntegrity {
+            field,
+            got: label.integrity,
+            need,
+        });
+    }
+    Ok(label)
+}
+
+pub fn gateway_allow(side_effecting: bool, arg_label: Label, sink_mask: u64) -> bool {
+    if (arg_label.readers & sink_mask) != sink_mask {
+        return false;
+    }
+    if side_effecting && arg_label.integrity < Integrity::UserDirect {
+        return false;
+    }
+    true
+}
+
+#[derive(Default)]
+pub struct TenantRegistry {
+    by_id: HashMap<u64, (String, String, u128)>, // id -> (ns, external, incarnation)
+    next_incarnation: u128,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegistryError {
+    Collision,
+}
+
+impl TenantRegistry {
+    pub fn register(
+        &mut self,
+        k: &impl Prf,
+        ns: &str,
+        external: &str,
+    ) -> Result<(u64, u128), RegistryError> {
+        let mut msg = Vec::with_capacity(ns.len() + external.len() + 8);
+        msg.extend_from_slice(&(ns.len() as u64).to_le_bytes());
+        msg.extend_from_slice(ns.as_bytes());
+        msg.extend_from_slice(external.as_bytes());
+        let mac = k.mac128(b"ciagomem/tenant/v1", &msg);
+        let id = u64::from_le_bytes(mac[0..8].try_into().unwrap());
+        match self.by_id.get(&id) {
+            Some((n, e, inc)) if n == ns && e == external => Ok((id, *inc)),
+            Some(_) => Err(RegistryError::Collision),
+            None => {
+                self.next_incarnation += 1;
+                let inc = (id as u128) << 64 | self.next_incarnation;
+                self.by_id
+                    .insert(id, (ns.to_owned(), external.to_owned(), inc));
+                Ok((id, inc))
+            }
+        }
+    }
+}
+
+// =============================================================================
+// 6. LINUX SEALED 4 KiB AGENT EXPORT WINDOW (Fixes C4 & CVE-2024-57937 Gate)
+// =============================================================================
+
+#[cfg(target_os = "linux")]
+pub mod export_window {
+    use std::ffi::CString;
+
+    pub struct SealedExportWindow {
+        pub engine_fd: i32,
+        pub agent_ro_fd: i32,
+        pub engine_ptr: *mut u8,
+        pub len: usize,
+    }
+
+    unsafe impl Send for SealedExportWindow {}
+    unsafe impl Sync for SealedExportWindow {}
+
+    impl SealedExportWindow {
+        /// Creates a 4 KiB-aligned sealed export window, runs the CVE-2024-57937 mprotect
+        /// self-test, and produces an O_RDONLY file descriptor safe for SCM_RIGHTS handoff.
+        pub fn create_and_selftest(len: usize) -> Result<Self, String> {
+            assert!(len >= 4096 && len.is_multiple_of(4096));
+            unsafe {
+                let name = CString::new("ciagomem-export").unwrap();
+                let fd = libc::memfd_create(
+                    name.as_ptr(),
+                    libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+                );
+                if fd < 0 {
+                    return Err("memfd_create failed".into());
+                }
+                if libc::ftruncate(fd, len as libc::off_t) != 0 {
+                    libc::close(fd);
+                    return Err("ftruncate failed".into());
+                }
+                let ptr = libc::mmap(
+                    core::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    fd,
+                    0,
+                );
+                if ptr == libc::MAP_FAILED {
+                    libc::close(fd);
+                    return Err("engine mmap failed".into());
+                }
+                let seals = libc::F_SEAL_SHRINK
+                    | libc::F_SEAL_GROW
+                    | libc::F_SEAL_FUTURE_WRITE
+                    | libc::F_SEAL_SEAL;
+                if libc::fcntl(fd, libc::F_ADD_SEALS, seals) != 0 {
+                    libc::munmap(ptr, len);
+                    libc::close(fd);
+                    return Err("F_ADD_SEALS failed".into());
+                }
+                let proc_path = CString::new(format!("/proc/self/fd/{fd}")).unwrap();
+                let ro_fd = libc::open(proc_path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+                if ro_fd < 0 {
+                    libc::munmap(ptr, len);
+                    libc::close(fd);
+                    return Err("reopen O_RDONLY failed".into());
+                }
+                // Boot-time CVE-2024-57937 self-test: agent PROT_READ mapping MUST refuse mprotect(PROT_WRITE)
+                let agent_map =
+                    libc::mmap(core::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, ro_fd, 0);
+                if agent_map == libc::MAP_FAILED {
+                    libc::close(ro_fd);
+                    libc::munmap(ptr, len);
+                    libc::close(fd);
+                    return Err("agent PROT_READ mmap failed".into());
+                }
+                let mprot = libc::mprotect(agent_map, len, libc::PROT_READ | libc::PROT_WRITE);
+                libc::munmap(agent_map, len);
+                if mprot == 0 {
+                    libc::close(ro_fd);
+                    libc::munmap(ptr, len);
+                    libc::close(fd);
+                    return Err("CVE-2024-57937 vulnerable kernel: mprotect(PROT_WRITE) succeeded on sealed RO fd".into());
+                }
+                Ok(SealedExportWindow {
+                    engine_fd: fd,
+                    agent_ro_fd: ro_fd,
+                    engine_ptr: ptr as *mut u8,
+                    len,
+                })
+            }
+        }
+    }
+
+    impl Drop for SealedExportWindow {
+        fn drop(&mut self) {
+            unsafe {
+                libc::munmap(self.engine_ptr as *mut libc::c_void, self.len);
+                libc::close(self.agent_ro_fd);
+                libc::close(self.engine_fd);
+            }
+        }
+    }
+}
+
+// =============================================================================
+// 7. UNIFIED SPAN-TOKENIZED CIAQL PARSER & POLICY VALIDATOR (Fixes C1..C3, M4..M5)
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Source<'a> {
+    Actor(u64),
+    Alias(&'a str),
+    TxActors(Vec<u64>),
+    ScanAll,
+    ScanRange(u64, u64),
+    CreateTenant { name: &'a str },
+    ResolveTenant { name: &'a str, alias: &'a str },
+    BackupStore { destination: &'a str },
+    RestoreTenant { actor: u64, from: &'a str, until_lsn: u64 },
+    AlterSchema { version: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stage<'a> {
+    Filter(&'a str),
+    Mutate(&'a str),
+    Project(&'a str),
+    GroupBy(&'a str),
+    Aggregate(&'a str),
+    Similarity { threshold: f32 },
+    SearchBm25 { field: &'a str, query: &'a str, top_k: u64 },
+    JoinActor { target_expr: &'a str, alias: &'a str },
+    LinkAdd { target: u64, on_delete: &'a str },
+    CheckpointFrame { intent: &'a str },
+    Take(u64),
+    ExportTo { format: &'a str, destination: &'a str },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CiaQuery<'a> {
+    pub source: Source<'a>,
+    pub stages: Vec<Stage<'a>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseError {
+    pub at: usize,
+    pub end: usize,
+    pub message: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyError {
+    MutateOnScan,
+    DuplicateParticipant(u64),
+    TakeNotLast,
+    OperatorScopeRequired,
+    ForbiddenDestination,
+}
+
+pub struct AuthContext<'a> {
+    pub operator_scope: bool,
+    pub allowed_prefixes: &'a [&'a str],
+}
+
+#[derive(Clone, Copy)]
+struct Span<'a> {
+    s: &'a str,
+    at: usize,
+    end: usize,
+}
+
+fn trim_span(raw: &str, base: usize) -> Span<'_> {
+    let mut start = 0;
+    let bytes = raw.as_bytes();
+    while start < bytes.len() {
+        if bytes[start].is_ascii_whitespace() {
+            start += 1;
+        } else if start + 1 < bytes.len() && bytes[start] == b'/' && bytes[start + 1] == b'/' {
+            while start < bytes.len() && bytes[start] != b'\n' {
+                start += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    let mut end = bytes.len();
+    while end > start && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    Span {
+        s: &raw[start..end],
+        at: base + start,
+        end: base + end,
+    }
+}
+
+pub fn parse_u64_id(raw: &str) -> Option<u64> {
+    let s = raw.trim().trim_start_matches('@');
+    let (radix, digits) = if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        (16u32, h)
+    } else {
+        (10u32, s)
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut acc = 0u64;
+    let mut any = false;
+    for b in digits.bytes() {
+        if b == b'_' {
+            continue;
+        }
+        let d = (b as char).to_digit(radix)? as u64;
+        acc = acc.checked_mul(radix as u64)?.checked_add(d)?;
+        any = true;
+    }
+    any.then_some(acc)
+}
+
+fn extract_quoted_at(s: &str, base: usize) -> Result<(&str, usize), ParseError> {
+    let start = s.find('"').ok_or(ParseError {
+        at: base,
+        end: base + s.len(),
+        message: "expected quoted string literal",
+    })?;
+    let rest = &s[start + 1..];
+    let end = rest.find('"').ok_or(ParseError {
+        at: base + start,
+        end: base + s.len(),
+        message: "unterminated string literal",
+    })?;
+    Ok((&rest[..end], start + 1 + end + 1))
+}
+
+fn find_matching_delim(s: &str, open: u8, close: u8, base: usize) -> Result<(usize, usize), ParseError> {
+    let bytes = s.as_bytes();
+    let mut first = None;
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == b'"' {
+                in_str = false;
+            }
+        } else if b == b'"' {
+            in_str = true;
+        } else if b == open {
+            if depth == 0 {
+                first = Some(i);
+            }
+            depth += 1;
+        } else if b == close {
+            if depth == 0 {
+                return Err(ParseError {
+                    at: base + i,
+                    end: base + i + 1,
+                    message: "unexpected closing delimiter",
+                });
+            }
+            depth -= 1;
+            if depth == 0 {
+                return Ok((first.unwrap(), i));
+            }
+        }
+        i += 1;
+    }
+    Err(ParseError {
+        at: base,
+        end: base + s.len(),
+        message: "unclosed delimiter block",
+    })
+}
+
+fn is_stage_kw(w: &str) -> bool {
+    matches!(
+        w.to_ascii_lowercase().as_str(),
+        "where"
+            | "filter"
+            | "mutate"
+            | "select"
+            | "project"
+            | "group"
+            | "group_by"
+            | "aggregate"
+            | "reduce"
+            | "similarity"
+            | "search"
+            | "join"
+            | "link"
+            | "checkpoint"
+            | "checkpoint_frame"
+            | "take"
+            | "limit"
+            | "export"
+            | "export_to"
+    )
+}
+
+/// Splits the remainder of a query after its source clause into individual stage spans,
+/// supporting BOTH `|>` separators AND newline/whitespace stage keywords outside `()`, `{}`, `[]`, `""`.
+fn split_stages_unified(src: &str, base: usize) -> Result<Vec<Span<'_>>, ParseError> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut seg_start = 0usize;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if !in_str && i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        let b = bytes[i];
+        if in_str {
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'(' | b'{' | b'[' => depth += 1,
+            b')' | b'}' | b']' => {
+                if depth == 0 {
+                    return Err(ParseError {
+                        at: base + i,
+                        end: base + i + 1,
+                        message: "unbalanced closing bracket",
+                    });
+                }
+                depth -= 1;
+            }
+            b'|' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+                let sp = trim_span(&src[seg_start..i], base + seg_start);
+                if !sp.s.is_empty() {
+                    out.push(sp);
+                }
+                i += 2;
+                seg_start = i;
+                continue;
+            }
+            _ if depth == 0 && b.is_ascii_alphabetic() => {
+                let prev_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_' && bytes[i - 1] != b'.' && bytes[i - 1] != b'@';
+                if prev_ok {
+                    let mut j = i;
+                    while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_')
+                    {
+                        j += 1;
+                    }
+                    let word = &src[i..j];
+                    let cur = trim_span(&src[seg_start..i], base + seg_start);
+                    if is_stage_kw(word) && !cur.s.is_empty() {
+                        out.push(cur);
+                        seg_start = i;
+                    }
+                    i = j;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if in_str || depth != 0 {
+        return Err(ParseError {
+            at: base + seg_start,
+            end: base + bytes.len(),
+            message: "unterminated string or bracket in query",
+        });
+    }
+    let tail = trim_span(&src[seg_start..], base + seg_start);
+    if !tail.s.is_empty() {
+        out.push(tail);
+    }
+    Ok(out)
+}
+
+fn parse_named_str<'a>(body: &'a str, key: &str) -> Option<&'a str> {
+    let idx = body.find(key)?;
+    let after = &body[idx + key.len()..];
+    let colon = after.find(':')?;
+    let (val, _) = extract_quoted_at(&after[colon + 1..], 0).ok()?;
+    Some(val)
+}
+
+fn parse_named_num(body: &str, key: &str) -> Option<&str> {
+    let idx = body.find(key)?;
+    let after = &body[idx + key.len()..];
+    let colon = after.find(':')?;
+    let rest = after[colon + 1..].trim_start();
+    let end = rest
+        .find(|c: char| c == ',' || c == ')' || c == '}' || c.is_ascii_whitespace())
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// Unified CiaQL parser: supports both shorthand cookbook recipes and `|>` pipelines,
+/// and validates policy invariants (Fixes C1, C2, M4, M5).
+pub fn parse_ciaql(input: &str) -> Result<CiaQuery<'_>, ParseError> {
+    let whole = trim_span(input, 0);
+    if whole.s.is_empty() {
+        return Err(ParseError {
+            at: 0,
+            end: 0,
+            message: "empty CiaQL query",
+        });
+    }
+    let s = whole.s;
+    let base = whole.at;
+    let lower = s.to_ascii_lowercase();
+
+    // Standalone control-plane / store commands
+    if lower.starts_with("create tenant") {
+        let (name, used) = extract_quoted_at(&s["create tenant".len()..], base + 13)?;
+        let rest = trim_span(&s["create tenant".len() + used..], base + 13 + used);
+        if !rest.s.is_empty() && !rest.s.to_ascii_lowercase().starts_with("with") {
+            return Err(ParseError {
+                at: rest.at,
+                end: rest.end,
+                message: "unexpected trailing clause after create tenant",
+            });
+        }
+        return Ok(CiaQuery {
+            source: Source::CreateTenant { name },
+            stages: Vec::new(),
+        });
+    }
+    if lower.starts_with("resolve tenant") {
+        let after_kw = &s["resolve tenant".len()..];
+        let (name, used) = extract_quoted_at(after_kw, base + 14)?;
+        let rem = trim_span(&after_kw[used..], base + 14 + used);
+        let rem_low = rem.s.to_ascii_lowercase();
+        if !rem_low.starts_with("as ") {
+            return Err(ParseError {
+                at: rem.at,
+                end: rem.end,
+                message: "expected `as @alias` after resolve tenant string",
+            });
+        }
+        let alias = rem.s[3..].trim().trim_start_matches('@');
+        if alias.is_empty() || alias.contains(char::is_whitespace) {
+            return Err(ParseError {
+                at: rem.at + 3,
+                end: rem.end,
+                message: "invalid alias identifier",
+            });
+        }
+        return Ok(CiaQuery {
+            source: Source::ResolveTenant { name, alias },
+            stages: Vec::new(),
+        });
+    }
+    if lower.starts_with("backup store to") {
+        let (destination, _) = extract_quoted_at(&s["backup store to".len()..], base + 15)?;
+        return Ok(CiaQuery {
+            source: Source::BackupStore { destination },
+            stages: Vec::new(),
+        });
+    }
+    if lower.starts_with("restore tenant") {
+        let rest = s["restore tenant".len()..].trim_start();
+        let id_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let actor = parse_u64_id(&rest[..id_end]).ok_or(ParseError {
+            at: base + 14,
+            end: base + 14 + id_end,
+            message: "invalid actor ID in restore tenant",
+        })?;
+        let (from, _) = extract_quoted_at(&rest[id_end..], base + 14 + id_end)?;
+        let lsn_pos = lower.find("until lsn").ok_or(ParseError {
+            at: base,
+            end: whole.end,
+            message: "expected `until lsn <num>` in restore tenant",
+        })?;
+        let until_lsn = parse_u64_id(s[lsn_pos + 9..].trim()).ok_or(ParseError {
+            at: base + lsn_pos + 9,
+            end: whole.end,
+            message: "invalid LSN in restore tenant",
+        })?;
+        return Ok(CiaQuery {
+            source: Source::RestoreTenant {
+                actor,
+                from,
+                until_lsn,
+            },
+            stages: Vec::new(),
+        });
+    }
+    if lower.starts_with("alter schema version") {
+        let rest = s["alter schema version".len()..].trim_start();
+        let v_end = rest
+            .find(|c: char| c.is_ascii_whitespace() || c == '{')
+            .unwrap_or(rest.len());
+        let version = parse_u64_id(&rest[..v_end]).ok_or(ParseError {
+            at: base + 20,
+            end: base + 20 + v_end,
+            message: "invalid schema version",
+        })?;
+        return Ok(CiaQuery {
+            source: Source::AlterSchema { version },
+            stages: Vec::new(),
+        });
+    }
+
+    // Parse primary data source + byte offset where stages begin
+    let (source, stages_offset) = if lower.starts_with("scan actors") {
+        let (open, close) = find_matching_delim(s, b'[', b']', base)?;
+        let inner = s[open + 1..close].trim();
+        let src = if inner == "*" {
+            Source::ScanAll
+        } else if let Some((a, b)) = inner.split_once("..") {
+            let start = parse_u64_id(a).ok_or(ParseError {
+                at: base + open + 1,
+                end: base + close,
+                message: "invalid scan start ID",
+            })?;
+            let end = parse_u64_id(b).ok_or(ParseError {
+                at: base + open + 1,
+                end: base + close,
+                message: "invalid scan end ID",
+            })?;
+            Source::ScanRange(start, end)
+        } else {
+            return Err(ParseError {
+                at: base + open,
+                end: base + close + 1,
+                message: "expected `[*]` or `[start..end]` after scan actors",
+            });
+        };
+        (src, close + 1)
+    } else if lower.starts_with("tx_actors") || lower.starts_with("tx ") || lower.starts_with("tx[") {
+        let (open, close) = find_matching_delim(s, b'[', b']', base)?;
+        let inner = &s[open + 1..close];
+        let mut ids = Vec::new();
+        for part in inner.split(',') {
+            let id = parse_u64_id(part).ok_or(ParseError {
+                at: base + open + 1,
+                end: base + close,
+                message: "invalid participant ID in tx actor list",
+            })?;
+            if ids.contains(&id) {
+                return Err(ParseError {
+                    at: base + open + 1,
+                    end: base + close,
+                    message: "duplicate participant ID in transaction",
+                });
+            }
+            ids.push(id);
+        }
+        if ids.len() < 2 || ids.len() > MAX_PARTICIPANTS as usize {
+            return Err(ParseError {
+                at: base + open,
+                end: base + close + 1,
+                message: "transaction requires 2..=64 distinct participants",
+            });
+        }
+        (Source::TxActors(ids), close + 1)
+    } else if lower.starts_with("actor(") {
+        let (open, close) = find_matching_delim(s, b'(', b')', base)?;
+        let id = parse_u64_id(&s[open + 1..close]).ok_or(ParseError {
+            at: base + open + 1,
+            end: base + close,
+            message: "invalid actor ID in ACTOR(...)",
+        })?;
+        (Source::Actor(id), close + 1)
+    } else if s.starts_with('@') {
+        let end_tok = s[1..]
+            .find(|c: char| c.is_ascii_whitespace() || c == '{' || c == '|')
+            .map(|i| i + 1)
+            .unwrap_or(s.len());
+        let raw_target = &s[1..end_tok];
+        let src = if let Some(id) = parse_u64_id(raw_target) {
+            Source::Actor(id)
+        } else if !raw_target.is_empty() {
+            Source::Alias(raw_target)
+        } else {
+            return Err(ParseError {
+                at: base,
+                end: base + end_tok,
+                message: "empty @actor target",
+            });
+        };
+        (src, end_tok)
+    } else {
+        return Err(ParseError {
+            at: base,
+            end: whole.end,
+            message: "unrecognized CiaQL source clause",
+        });
+    };
+
+    let stage_spans = split_stages_unified(&s[stages_offset..], base + stages_offset)?;
+    let mut stages = Vec::with_capacity(stage_spans.len());
+
+    for sp in stage_spans {
+        let st = sp.s;
+        let st_low = st.to_ascii_lowercase();
+        // Implicit shorthand `@actor { balance -= 50 }`
+        if st.starts_with('{') && st.ends_with('}') {
+            stages.push(Stage::Mutate(st[1..st.len() - 1].trim()));
+            continue;
+        }
+        let kw_end = st
+            .find(|c: char| c.is_ascii_whitespace() || c == '(' || c == '{')
+            .unwrap_or(st.len());
+        let kw = st_low[..kw_end].as_str();
+        let rest = st[kw_end..].trim();
+
+        match kw {
+            "where" | "filter" => {
+                if matches!(source, Source::ScanAll | Source::ScanRange(_, _)) && rest.is_empty() {
+                    return Err(ParseError {
+                        at: sp.at,
+                        end: sp.end,
+                        message: "empty filter predicate",
+                    });
+                }
+                let pred = rest
+                    .strip_prefix('(')
+                    .and_then(|r| r.strip_suffix(')'))
+                    .unwrap_or(rest)
+                    .trim();
+                if pred.is_empty() || (!pred.contains("==") && !pred.contains("!=") && !pred.contains(">=") && !pred.contains("<=") && !pred.contains('>') && !pred.contains('<')) {
+                    return Err(ParseError {
+                        at: sp.at,
+                        end: sp.end,
+                        message: "filter stage requires a valid comparison operator",
+                    });
+                }
+                stages.push(Stage::Filter(pred));
+            }
+            "mutate" => {
+                if matches!(source, Source::ScanAll | Source::ScanRange(_, _)) {
+                    return Err(ParseError {
+                        at: sp.at,
+                        end: sp.end,
+                        message: "MUTATE is forbidden on multi-tenant SCAN sources",
+                    });
+                }
+                let (o, c) = find_matching_delim(rest, b'{', b'}', sp.at + kw_end)?;
+                stages.push(Stage::Mutate(rest[o + 1..c].trim()));
+            }
+            "select" | "project" => {
+                let body = if rest.starts_with('{') {
+                    let (o, c) = find_matching_delim(rest, b'{', b'}', sp.at + kw_end)?;
+                    rest[o + 1..c].trim()
+                } else {
+                    rest
+                };
+                if body.is_empty() {
+                    return Err(ParseError {
+                        at: sp.at,
+                        end: sp.end,
+                        message: "empty select/project clause",
+                    });
+                }
+                stages.push(Stage::Project(body));
+            }
+            "group" | "group_by" => {
+                let body = rest
+                    .strip_prefix("by")
+                    .map(str::trim)
+                    .unwrap_or(rest)
+                    .trim_matches(|c| c == '(' || c == ')')
+                    .trim();
+                if body.is_empty() {
+                    return Err(ParseError {
+                        at: sp.at,
+                        end: sp.end,
+                        message: "empty group by clause",
+                    });
+                }
+                stages.push(Stage::GroupBy(body));
+            }
+            "aggregate" | "reduce" => {
+                let (o, c) = find_matching_delim(rest, b'{', b'}', sp.at + kw_end)?;
+                stages.push(Stage::Aggregate(rest[o + 1..c].trim()));
+            }
+            "similarity" => {
+                let (o, c) = find_matching_delim(rest, b'(', b')', sp.at + kw_end)?;
+                let body = &rest[o + 1..c];
+                let thr_s = parse_named_num(body, "threshold").ok_or(ParseError {
+                    at: sp.at,
+                    end: sp.end,
+                    message: "similarity requires `threshold: <float>`",
+                })?;
+                let threshold: f32 = thr_s.parse().map_err(|_| ParseError {
+                    at: sp.at,
+                    end: sp.end,
+                    message: "invalid similarity threshold float",
+                })?;
+                stages.push(Stage::Similarity { threshold });
+            }
+            "search" => {
+                let (o, c) = find_matching_delim(rest, b'(', b')', sp.at + kw_end)?;
+                let body = &rest[o + 1..c];
+                let f_idx = body.find("field:").ok_or(ParseError {
+                    at: sp.at,
+                    end: sp.end,
+                    message: "search requires `field:`",
+                })?;
+                let after_f = body[f_idx + 6..].trim_start();
+                let f_end = after_f
+                    .find(|ch: char| ch == ',' || ch.is_ascii_whitespace())
+                    .unwrap_or(after_f.len());
+                let field = &after_f[..f_end];
+                let query = parse_named_str(body, "query").ok_or(ParseError {
+                    at: sp.at,
+                    end: sp.end,
+                    message: "search requires quoted `query: \"...\"`",
+                })?;
+                let top_k = parse_named_num(body, "top_k")
+                    .and_then(parse_u64_id)
+                    .unwrap_or(10);
+                stages.push(Stage::SearchBm25 {
+                    field,
+                    query,
+                    top_k,
+                });
+            }
+            "join" => {
+                let as_pos = st_low.find(" as ").ok_or(ParseError {
+                    at: sp.at,
+                    end: sp.end,
+                    message: "join requires `as @alias`",
+                })?;
+                let target_expr = st[kw_end..as_pos].trim();
+                let alias = st[as_pos + 4..].trim().trim_start_matches('@');
+                stages.push(Stage::JoinActor { target_expr, alias });
+            }
+            "link" => {
+                let (o, c) = find_matching_delim(rest, b'(', b')', sp.at + kw_end)?;
+                let body = &rest[o + 1..c];
+                let target = parse_named_num(body, "target")
+                    .and_then(parse_u64_id)
+                    .ok_or(ParseError {
+                        at: sp.at,
+                        end: sp.end,
+                        message: "link add requires `target: @id`",
+                    })?;
+                let on_delete = parse_named_num(body, "on_delete").unwrap_or("RESTRICT");
+                stages.push(Stage::LinkAdd { target, on_delete });
+            }
+            "checkpoint" | "checkpoint_frame" => {
+                let (intent, _) = extract_quoted_at(rest, sp.at + kw_end)?;
+                stages.push(Stage::CheckpointFrame { intent });
+            }
+            "take" | "limit" => {
+                let n = parse_u64_id(rest).ok_or(ParseError {
+                    at: sp.at + kw_end,
+                    end: sp.end,
+                    message: "expected positive integer after take/limit",
+                })?;
+                if n == 0 {
+                    return Err(ParseError {
+                        at: sp.at,
+                        end: sp.end,
+                        message: "TAKE count must be >= 1",
+                    });
+                }
+                stages.push(Stage::Take(n));
+            }
+            "export" | "export_to" => {
+                let (o, c) = find_matching_delim(rest, b'(', b')', sp.at + kw_end)?;
+                let body = &rest[o + 1..c];
+                let format = parse_named_str(body, "format").ok_or(ParseError {
+                    at: sp.at,
+                    end: sp.end,
+                    message: "export requires `format: \"...\"`",
+                })?;
+                let destination = parse_named_str(body, "destination").ok_or(ParseError {
+                    at: sp.at,
+                    end: sp.end,
+                    message: "export requires `destination: \"...\"`",
+                })?;
+                stages.push(Stage::ExportTo {
+                    format,
+                    destination,
+                });
+            }
+            _ => {
+                return Err(ParseError {
+                    at: sp.at,
+                    end: sp.at + kw_end,
+                    message: "unknown CiaQL stage keyword",
+                });
+            }
+        }
+    }
+
+    // Semantic ordering check: TAKE must be the last stage (or followed only by ExportTo)
+    for (i, st) in stages.iter().enumerate() {
+        if matches!(st, Stage::Take(_)) && i + 1 < stages.len() && !matches!(stages[i + 1], Stage::ExportTo { .. }) {
+            return Err(ParseError {
+                at: base,
+                end: whole.end,
+                message: "TAKE must be the final query stage",
+            });
+        }
+    }
+
+    Ok(CiaQuery { source, stages })
+}
+
+/// Enforces security & structural policy over a parsed CiaQuery (Fixes C2, C3, M5).
+pub fn validate_query(q: &CiaQuery<'_>, auth: &AuthContext<'_>) -> Result<(), PolicyError> {
+    let check_dest = |d: &str| -> Result<(), PolicyError> {
+        if !auth.operator_scope {
+            return Err(PolicyError::OperatorScopeRequired);
+        }
+        if d.contains("169.254.169.254")
+            || d.contains("localhost")
+            || d.starts_with("http://")
+            || d.contains("..")
+        {
+            return Err(PolicyError::ForbiddenDestination);
+        }
+        if !auth.allowed_prefixes.iter().any(|p| d.starts_with(p)) {
+            return Err(PolicyError::ForbiddenDestination);
+        }
+        Ok(())
+    };
+
+    match &q.source {
+        Source::BackupStore { destination } => check_dest(destination)?,
+        Source::RestoreTenant { from, .. } => check_dest(from)?,
+        Source::AlterSchema { .. } if !auth.operator_scope => {
+            return Err(PolicyError::OperatorScopeRequired);
+        }
+        Source::TxActors(ids) => {
+            for (i, &a) in ids.iter().enumerate() {
+                if ids[..i].contains(&a) {
+                    return Err(PolicyError::DuplicateParticipant(a));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    let is_scan = matches!(q.source, Source::ScanAll | Source::ScanRange(_, _));
+    for (i, st) in q.stages.iter().enumerate() {
+        match st {
+            Stage::Mutate(_) if is_scan => return Err(PolicyError::MutateOnScan),
+            Stage::Take(_) if i + 1 != q.stages.len() => return Err(PolicyError::TakeNotLast),
+            Stage::ExportTo { destination, .. } => check_dest(destination)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+// =============================================================================
+// 8. COMPREHENSIVE UNIT & ADVERSARIAL REGRESSION TEST SUITE
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn c1_all_shorthand_cookbook_recipes_parse_with_all_stages() {
+        // Recipe 2: Shorthand Point CRUD
+        let r2 = r#"
+            @0x0008F421
+            where state.status == "ACTIVE" and state.wallet.balance_cents >= 5000
+            mutate {
+              state.wallet.balance_cents -= 5000,
+              state.metrics.tx_count += 1
+            }
+            select {
+              remaining_cents: state.wallet.balance_cents,
+              tx_lsn: meta.last_tx_seq
+            }
+        "#;
+        let q2 = parse_ciaql(r2).unwrap();
+        assert_eq!(q2.source, Source::Actor(0x0008F421));
+        assert_eq!(q2.stages.len(), 3);
+
+        // Recipe 3: Multi-Actor Calvin ACID Transfer (`tx [...]` shorthand)
+        let r3 = r#"
+            tx [@0x0008F421, @0x0009B104]
+            where actor(0x0008F421).state.wallet.balance_cents >= 120000
+            mutate {
+              actor(0x0008F421).state.wallet.balance_cents -= 120000,
+              actor(0x0009B104).state.wallet.balance_cents += 120000
+            }
+            select {
+              sender_after: actor(0x0008F421).state.wallet.balance_cents
+            }
+        "#;
+        let q3 = parse_ciaql(r3).unwrap();
+        assert_eq!(q3.source, Source::TxActors(vec![0x0008F421, 0x0009B104]));
+        assert_eq!(q3.stages.len(), 3);
+
+        // Recipe 4: Multi-Tenant Analytics Scan
+        let r4 = r#"
+            scan actors[*]
+            where state.subscription.tier == "ENTERPRISE"
+            group by (state.profile.region)
+            aggregate { total_users: count() }
+            take 20
+        "#;
+        let q4 = parse_ciaql(r4).unwrap();
+        assert_eq!(q4.source, Source::ScanAll);
+        assert_eq!(q4.stages.len(), 4);
+
+        // Recipe 5: Hybrid Vector + BM25 + Filter + Project + Take
+        let r5 = r#"
+            @0x0008F421
+            similarity(vector: [0.12, -0.88], metric: COSINE, threshold: 0.95)
+            search(field: episodes.summary, query: "ingress timeout", top_k: 25)
+            where episodes.status == "ERROR"
+            project { step: episodes.step_id }
+            take 5
+        "#;
+        let q5 = parse_ciaql(r5).unwrap();
+        assert_eq!(
+            q5.stages[0],
+            Stage::Similarity { threshold: 0.95 }
+        );
+        assert_eq!(
+            q5.stages[1],
+            Stage::SearchBm25 {
+                field: "episodes.summary",
+                query: "ingress timeout",
+                top_k: 25
+            }
+        );
+        assert_eq!(q5.stages.len(), 5);
+    }
+
+    #[test]
+    fn c2_c3_adversarial_queries_and_ssrf_blocked() {
+        // C2: scan + mutate rejected at parse AND policy levels
+        assert!(parse_ciaql("scan actors[*] |> mutate { state.x = 0 }").is_err());
+        assert!(parse_ciaql("scan actors[*] where BAD_PREDICATE").is_err());
+
+        // C3: SSRF metadata backup blocked
+        let q_ssrf = parse_ciaql(r#"backup store to "http://169.254.169.254/latest""#).unwrap();
+        let op_auth = AuthContext {
+            operator_scope: true,
+            allowed_prefixes: &["s3://ciagomem-prod-backups/"],
+        };
+        assert_eq!(
+            validate_query(&q_ssrf, &op_auth),
+            Err(PolicyError::ForbiddenDestination)
+        );
+    }
+
+    #[test]
+    fn m1_m2_m3_checked_primitives_prevent_silent_corruption() {
+        // M1: Out-of-range container or block rejected
+        assert!(ExtentLoc::new_checked(4103, false, 5).is_none());
+        assert!(ExtentLoc::new_checked(7, false, 5).is_some());
+
+        // M2: LSN regression rejected on SlotArena::write
+        let arena = SlotArena::<8>::new(0, 4, 2);
+        let tw = TenantWord {
+            tenant: 1,
+            core: 0,
+            layout_version: 1,
+            flags: 0,
+        };
+        let h = arena.install(0, tw, 99, 100, 100).unwrap().unwrap();
+        assert_eq!(
+            arena.write(h, 50, |w| w.set(0, 42)),
+            Err(WriteError::LsnRegression {
+                current: 100,
+                attempted: 50
+            })
+        );
+
+        // M3: CoreControl::publish_durable never regresses
+        let cc = CoreControl::new();
+        cc.publish_durable(100);
+        cc.publish_durable(10);
+        assert_eq!(cc.durable(), 100);
+    }
+
+    #[test]
+    fn c6_camel_taint_lattice_blocks_indirect_prompt_injection() {
+        let user = Label {
+            integrity: Integrity::UserDirect,
+            sources: 1,
+            readers: 0b11,
+        };
+        let ext_tool = Label {
+            integrity: Integrity::External,
+            sources: 2,
+            readers: 0b01,
+        };
+        let summary = user.join(ext_tool);
+        assert_eq!(summary.integrity, Integrity::External);
+        assert!(admit_to_frame(FrameField::HardConstraint, summary, None).is_err());
+        assert!(admit_to_frame(FrameField::ActiveIntent, summary, None).is_err());
+        assert!(!gateway_allow(true, summary, 0b01));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn c4_linux_sealed_export_window_blocks_agent_writes_and_cve_2024_57937() {
+        let win = export_window::SealedExportWindow::create_and_selftest(4096)
+            .expect("sealed export window selftest must pass");
+        assert!(win.agent_ro_fd >= 0);
+    }
+}

@@ -9,15 +9,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
+name = "block-buffer"
+version = "0.10.4"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "ciagomem-crypto"
+version = "0.3.0"
+dependencies = [
+ "hmac",
+ "sha2",
+ "subtle",
+]
+
+[[package]]
 name = "coagomem-core"
 version = "0.3.0"
 dependencies = [
+ "ciagomem-crypto",
+ "coagomem-ql",
  "io-uring",
  "libc",
 ]
@@ -25,9 +43,6 @@ dependencies = [
 [[package]]
 name = "coagomem-ql"
 version = "0.3.0"
-dependencies = [
- "coagomem-core",
-]
 
 [[package]]
 name = "coagomem-wal"
@@ -36,6 +51,45 @@ dependencies = [
  "coagomem-core",
  "io-uring",
  "libc",
+]
+
+[[package]]
+name = "cpufeatures"
+version = "0.2.17"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "crypto-common"
+version = "0.1.6"
+dependencies = [
+ "generic-array",
+ "typenum",
+]
+
+[[package]]
+name = "digest"
+version = "0.10.7"
+dependencies = [
+ "block-buffer",
+ "crypto-common",
+ "subtle",
+]
+
+[[package]]
+name = "generic-array"
+version = "0.14.7"
+dependencies = [
+ "typenum",
+ "version_check",
+]
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+dependencies = [
+ "digest",
 ]
 
 [[package]]
@@ -54,3 +108,24 @@ name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
+name = "subtle"
+version = "2.6.1"
+
+[[package]]
+name = "typenum"
+version = "1.17.0"
+
+[[package]]
+name = "version_check"
+version = "0.9.5"

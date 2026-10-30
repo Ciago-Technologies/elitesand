@@ -29,7 +29,10 @@
 //! superblock before the first append), which makes stale records from older laps or
 //! from a crashed incarnation unambiguous during recovery.
 
-use crate::envelope::{KIND_PAD, REC_HDR, RecHeader, crc32c, decode_record, encode_pad_in_place, encode_record, record_size};
+use crate::envelope::{
+    KIND_PAD, REC_HDR, RecHeader, crc32c, decode_record, encode_pad_in_place, encode_record,
+    record_size,
+};
 use coagomem_core::io::{IoBackend, Op, UserData};
 use coagomem_core::slot::CoreControl;
 use core::ptr::NonNull;
@@ -68,7 +71,10 @@ impl LogConfig {
     pub fn validate(&self) {
         assert!(self.block.is_power_of_two() && self.block >= 512);
         assert!(self.buf_bytes % self.block == 0 && self.buf_bytes >= 2 * self.block);
-        assert!(self.capacity % self.block as u64 == 0 && self.capacity >= (self.buffers * self.buf_bytes) as u64);
+        assert!(
+            self.capacity % self.block as u64 == 0
+                && self.capacity >= (self.buffers * self.buf_bytes) as u64
+        );
         assert!(self.buffers >= 2 && self.max_inflight >= 1 && self.max_inflight < self.buffers);
         assert!(self.buffers < (1 << 24));
     }
@@ -114,7 +120,8 @@ impl AlignedBuf {
     fn new(len: usize, align: usize) -> Self {
         let layout = std::alloc::Layout::from_size_align(len, align).unwrap();
         // SAFETY: non-zero size.
-        let ptr = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).unwrap_or_else(|| std::alloc::handle_alloc_error(layout));
+        let ptr = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
+            .unwrap_or_else(|| std::alloc::handle_alloc_error(layout));
         AlignedBuf { ptr, len }
     }
     fn slice_mut(&mut self) -> &mut [u8] {
@@ -131,7 +138,12 @@ impl Drop for AlignedBuf {
     fn drop(&mut self) {
         // SAFETY: matches `new`. Buffers are dropped only with the log, after the
         // owner has drained all CQEs (see `GroupCommitLog::quiescent`).
-        unsafe { std::alloc::dealloc(self.ptr.as_ptr(), std::alloc::Layout::from_size_align(self.len, 4096).unwrap()) }
+        unsafe {
+            std::alloc::dealloc(
+                self.ptr.as_ptr(),
+                std::alloc::Layout::from_size_align(self.len, 4096).unwrap(),
+            )
+        }
     }
 }
 
@@ -184,7 +196,9 @@ impl Superblock {
         block[40..44].copy_from_slice(&c.to_le_bytes());
     }
     pub fn decode(block: &[u8]) -> Option<Superblock> {
-        if u64::from_le_bytes(block[0..8].try_into().unwrap()) != SB_MAGIC || crc32c(&[&block[0..40]]) != u32::from_le_bytes(block[40..44].try_into().unwrap()) {
+        if u64::from_le_bytes(block[0..8].try_into().unwrap()) != SB_MAGIC
+            || crc32c(&[&block[0..40]]) != u32::from_le_bytes(block[40..44].try_into().unwrap())
+        {
             return None;
         }
         Some(Superblock {
@@ -232,7 +246,18 @@ pub struct Recovery {
 
 impl Recovery {
     pub fn fresh() -> Recovery {
-        Recovery { sb: Superblock { seq: 0, epoch: 0, start_logical: 0, start_lsn: 1 }, end_logical: 0, next_lsn: 1, max_epoch: 0, records: 0 }
+        Recovery {
+            sb: Superblock {
+                seq: 0,
+                epoch: 0,
+                start_logical: 0,
+                start_lsn: 1,
+            },
+            end_logical: 0,
+            next_lsn: 1,
+            max_epoch: 0,
+            records: 0,
+        }
     }
 }
 
@@ -273,7 +298,12 @@ impl GroupCommitLog {
     pub fn open(cfg: LogConfig, rec: &Recovery) -> (GroupCommitLog, Superblock) {
         cfg.validate();
         let epoch = rec.max_epoch.max(rec.sb.epoch) + 1;
-        let sb = Superblock { seq: rec.sb.seq + 1, epoch, start_logical: rec.sb.start_logical, start_lsn: rec.sb.start_lsn };
+        let sb = Superblock {
+            seq: rec.sb.seq + 1,
+            epoch,
+            start_logical: rec.sb.start_logical,
+            start_lsn: rec.sb.start_lsn,
+        };
         let bufs = (0..cfg.buffers)
             .map(|_| LogBuf {
                 mem: AlignedBuf::new(cfg.buf_bytes, 4096.max(cfg.block)),
@@ -337,14 +367,20 @@ impl GroupCommitLog {
     }
     /// Registered-buffer regions (for `UringIo::new`).
     pub fn buffer_regions(&self) -> Vec<(*mut u8, usize)> {
-        self.bufs.iter().map(|b| (b.mem.ptr.as_ptr(), b.mem.len)).collect()
+        self.bufs
+            .iter()
+            .map(|b| (b.mem.ptr.as_ptr(), b.mem.len))
+            .collect()
     }
     /// True when no write is in flight (safe to drop the log).
     pub fn quiescent(&self) -> bool {
         self.bufs.iter().all(|b| b.state != BufState::InFlight)
     }
     fn in_pipeline_not_done(&self) -> usize {
-        self.pipeline.iter().filter(|&&i| self.bufs[i].state != BufState::Done).count()
+        self.pipeline
+            .iter()
+            .filter(|&&i| self.bufs[i].state != BufState::Done)
+            .count()
     }
     fn phys(&self, logical: u64) -> u64 {
         self.cfg.data_offset() + logical % self.cfg.capacity
@@ -440,12 +476,28 @@ impl GroupCommitLog {
     fn header(&self, i: usize, kind: u8, tenant: u32, len: usize) -> RecHeader {
         let b = &self.bufs[i];
         let logical = b.logical + b.used as u64;
-        RecHeader { kind, flags: 0, len: len as u32, lsn: self.next_lsn, tenant, lap: (logical / self.cfg.capacity) as u32, epoch: self.epoch }
+        RecHeader {
+            kind,
+            flags: 0,
+            len: len as u32,
+            lsn: self.next_lsn,
+            tenant,
+            lap: (logical / self.cfg.capacity) as u32,
+            epoch: self.epoch,
+        }
     }
 
     /// Append one record. Returns its LSN; `ack` is released (in LSN order) once the
     /// record and everything before it are durable.
-    pub fn append<I: IoBackend>(&mut self, tenant: u32, kind: u8, payload: &[u8], ack: Option<u64>, now_ns: u64, io: &mut I) -> Result<u64, LogError> {
+    pub fn append<I: IoBackend>(
+        &mut self,
+        tenant: u32,
+        kind: u8,
+        payload: &[u8],
+        ack: Option<u64>,
+        now_ns: u64,
+        io: &mut I,
+    ) -> Result<u64, LogError> {
         if let Some(e) = self.fenced {
             return Err(LogError::Fenced(e));
         }
@@ -503,7 +555,9 @@ impl GroupCommitLog {
                 end_logical = self.bufs[i].logical + self.bufs[i].used as u64;
             }
             TailMode::Rewrite => {
-                let at_wrap = (self.bufs[i].logical + used.next_multiple_of(block) as u64) % self.cfg.capacity == 0;
+                let at_wrap = (self.bufs[i].logical + used.next_multiple_of(block) as u64)
+                    % self.cfg.capacity
+                    == 0;
                 if at_wrap && rem >= REC_HDR {
                     // The last block of a lap is never carried: close it like Pad mode.
                     self.write_pad(i, rem);
@@ -515,7 +569,8 @@ impl GroupCommitLog {
                 let tail_start = used / block * block;
                 if rem > 0 && !at_wrap {
                     self.carry.clear();
-                    self.carry.extend_from_slice(&b.mem.slice()[tail_start..used]);
+                    self.carry
+                        .extend_from_slice(&b.mem.slice()[tail_start..used]);
                     self.carry_logical = Some(b.logical + tail_start as u64);
                 }
                 end_logical = b.logical + used.next_multiple_of(block) as u64;
@@ -535,12 +590,19 @@ impl GroupCommitLog {
         let (s, e) = (b.logical, b.logical + b.submit_len as u64);
         self.pipeline.iter().any(|&j| {
             let o = &self.bufs[j];
-            j != i && o.state == BufState::InFlight && s < o.logical + o.submit_len as u64 && o.logical < e
+            j != i
+                && o.state == BufState::InFlight
+                && s < o.logical + o.submit_len as u64
+                && o.logical < e
         })
     }
 
     fn try_submit<I: IoBackend>(&mut self, io: &mut I) {
-        let inflight = self.pipeline.iter().filter(|&&j| self.bufs[j].state == BufState::InFlight).count();
+        let inflight = self
+            .pipeline
+            .iter()
+            .filter(|&&j| self.bufs[j].state == BufState::InFlight)
+            .count();
         let mut budget = self.cfg.max_inflight.saturating_sub(inflight);
         for k in 0..self.pipeline.len() {
             let i = self.pipeline[k];
@@ -556,12 +618,26 @@ impl GroupCommitLog {
             }
             let b = &self.bufs[i];
             let ticket = b.ticket.wrapping_add(1);
-            let ud = UserData { op: Op::LogWrite, object: i as u32, ticket }.encode();
+            let ud = UserData {
+                op: Op::LogWrite,
+                object: i as u32,
+                ticket,
+            }
+            .encode();
             let off = self.phys(b.logical) + b.written as u64;
             let len = (b.submit_len - b.written) as u32;
             // SAFETY: the buffer is Sealed: no CPU writes until it is recycled after its
             // CQE. It is not freed before the log is quiescent.
-            let r = unsafe { io.write_at(ud, self.cfg.file, b.mem.ptr.as_ptr().add(b.written), len, off, true) };
+            let r = unsafe {
+                io.write_at(
+                    ud,
+                    self.cfg.file,
+                    b.mem.ptr.as_ptr().add(b.written),
+                    len,
+                    off,
+                    true,
+                )
+            };
             if r.is_err() {
                 return;
             }
@@ -585,7 +661,10 @@ impl GroupCommitLog {
                 let age = now_ns.saturating_sub(b.opened_ns);
                 // Big enough or old enough: pipeline it. Idle with the device idle: flush
                 // now for latency. Otherwise keep batching behind the in-flight write.
-                if b.used >= self.cfg.min_batch_bytes || age >= self.cfg.max_delay_ns || (idle && not_done == 0) {
+                if b.used >= self.cfg.min_batch_bytes
+                    || age >= self.cfg.max_delay_ns
+                    || (idle && not_done == 0)
+                {
                     self.seal(io);
                 }
             }
@@ -596,10 +675,23 @@ impl GroupCommitLog {
     /// Feed every `Op::LogWrite` CQE here. Durable acknowledgements (in LSN order) are
     /// appended to `acks`; if the log fences, every pending acknowledgement is moved to
     /// `failed` and `Err(Fenced)` is returned.
-    pub fn on_cqe<I: IoBackend>(&mut self, user_data: u64, res: i32, core: &CoreControl, io: &mut I, acks: &mut Vec<u64>, failed: &mut Vec<u64>) -> Result<(), LogError> {
-        let Some(ud) = UserData::decode(user_data) else { return Ok(()) };
+    pub fn on_cqe<I: IoBackend>(
+        &mut self,
+        user_data: u64,
+        res: i32,
+        core: &CoreControl,
+        io: &mut I,
+        acks: &mut Vec<u64>,
+        failed: &mut Vec<u64>,
+    ) -> Result<(), LogError> {
+        let Some(ud) = UserData::decode(user_data) else {
+            return Ok(());
+        };
         let i = ud.object as usize;
-        if i >= self.bufs.len() || self.bufs[i].state != BufState::InFlight || self.bufs[i].ticket != ud.ticket {
+        if i >= self.bufs.len()
+            || self.bufs[i].state != BufState::InFlight
+            || self.bufs[i].ticket != ud.ticket
+        {
             self.stats.stale_cqes += 1;
             return Ok(());
         }
@@ -639,7 +731,8 @@ impl GroupCommitLog {
             let b = &mut self.bufs[i];
             if b.records > 0 {
                 self.durable_lsn = b.last_lsn;
-                self.lsn_index.push_back((b.first_lsn, b.first_record_logical));
+                self.lsn_index
+                    .push_back((b.first_lsn, b.first_record_logical));
             }
             acks.append(&mut b.acks);
             b.state = BufState::Free;
@@ -676,7 +769,12 @@ impl GroupCommitLog {
         let (lsn, logical) = pick?;
         // Keep the chosen point so a later call can still start there.
         self.lsn_index.push_front((lsn, logical));
-        (logical > self.sb.start_logical).then(|| Superblock { seq: self.sb.seq + 1, epoch: self.epoch, start_logical: logical, start_lsn: lsn })
+        (logical > self.sb.start_logical).then(|| Superblock {
+            seq: self.sb.seq + 1,
+            epoch: self.epoch,
+            start_logical: logical,
+            start_lsn: lsn,
+        })
     }
 }
 
@@ -691,15 +789,31 @@ pub fn recover(
     let block = cfg.block;
     let mut sbuf = vec![0u8; 2 * block];
     read(0, &mut sbuf)?;
-    let sb = [Superblock::decode(&sbuf[..block]), Superblock::decode(&sbuf[block..])].into_iter().flatten().max_by_key(|s| s.seq);
-    let Some(sb) = sb else { return Ok(Recovery::fresh()) };
+    let sb = [
+        Superblock::decode(&sbuf[..block]),
+        Superblock::decode(&sbuf[block..]),
+    ]
+    .into_iter()
+    .flatten()
+    .max_by_key(|s| s.seq);
+    let Some(sb) = sb else {
+        return Ok(Recovery::fresh());
+    };
 
     let chunk = cfg.buf_bytes;
     let mut win = vec![0u8; 2 * chunk];
     let mut win_start = u64::MAX; // logical offset of win[0]
     let mut win_len = 0usize;
-    let mut fill = |pos: u64, need: usize, win: &mut Vec<u8>, win_start: &mut u64, win_len: &mut usize| -> std::io::Result<bool> {
-        if *win_start != u64::MAX && pos >= *win_start && pos + need as u64 <= *win_start + *win_len as u64 {
+    let mut fill = |pos: u64,
+                    need: usize,
+                    win: &mut Vec<u8>,
+                    win_start: &mut u64,
+                    win_len: &mut usize|
+     -> std::io::Result<bool> {
+        if *win_start != u64::MAX
+            && pos >= *win_start
+            && pos + need as u64 <= *win_start + *win_len as u64
+        {
             return Ok(true);
         }
         let start = pos / block as u64 * block as u64;
@@ -721,7 +835,13 @@ pub fn recover(
     let mut records = 0u64;
 
     // Try to accept a record at `at`; returns its size.
-    let mut try_at = |at: u64, expect: u64, last_epoch: Option<u32>, win: &mut Vec<u8>, ws: &mut u64, wl: &mut usize| -> std::io::Result<Option<(RecHeader, usize)>> {
+    let mut try_at = |at: u64,
+                      expect: u64,
+                      last_epoch: Option<u32>,
+                      win: &mut Vec<u8>,
+                      ws: &mut u64,
+                      wl: &mut usize|
+     -> std::io::Result<Option<(RecHeader, usize)>> {
         if !fill(at, REC_HDR, win, ws, wl)? {
             return Ok(None);
         }
@@ -732,7 +852,9 @@ pub fn recover(
             return Ok(None);
         }
         let off = (at - *ws) as usize;
-        let Some((h, _)) = decode_record(&win[off..off + size]) else { return Ok(None) };
+        let Some((h, _)) = decode_record(&win[off..off + size]) else {
+            return Ok(None);
+        };
         let lap_ok = h.lap as u64 == at / cfg.capacity;
         let epoch_ok = h.epoch <= sb.epoch
             && match last_epoch {
@@ -747,12 +869,26 @@ pub fn recover(
         if rem < REC_HDR as u64 && rem != block as u64 {
             pos += rem;
         }
-        let mut hit = try_at(pos, expect, last_epoch, &mut win, &mut win_start, &mut win_len)?;
+        let mut hit = try_at(
+            pos,
+            expect,
+            last_epoch,
+            &mut win,
+            &mut win_start,
+            &mut win_len,
+        )?;
         if hit.is_none() && pos % block as u64 != 0 {
             // A hole is legal only up to the next block boundary and only where a new
             // incarnation (higher epoch) starts.
             let b = pos.next_multiple_of(block as u64);
-            if let Some((h, s)) = try_at(b, expect, last_epoch, &mut win, &mut win_start, &mut win_len)? {
+            if let Some((h, s)) = try_at(
+                b,
+                expect,
+                last_epoch,
+                &mut win,
+                &mut win_start,
+                &mut win_len,
+            )? {
                 if last_epoch.is_some_and(|e| h.epoch > e) {
                     pos = b;
                     hit = Some((h, s));
@@ -770,7 +906,13 @@ pub fn recover(
         expect += 1;
         pos += size as u64;
     }
-    Ok(Recovery { sb, end_logical: pos, next_lsn: expect, max_epoch, records })
+    Ok(Recovery {
+        sb,
+        end_logical: pos,
+        next_lsn: expect,
+        max_epoch,
+        records,
+    })
 }
 
 #[cfg(test)]
@@ -802,7 +944,9 @@ mod tests {
 
     fn payload(seed: u64, rng: &mut Rng) -> Vec<u8> {
         let n = 1 + rng.below(700) as usize;
-        (0..n).map(|i| (seed.wrapping_mul(31) as usize + i) as u8).collect()
+        (0..n)
+            .map(|i| (seed.wrapping_mul(31) as usize + i) as u8)
+            .collect()
     }
 
     struct Model {
@@ -816,7 +960,16 @@ mod tests {
 
     /// Random workload with random CQE order, short writes and transient errors.
     /// Returns when `steps` are done, leaving I/O in flight for a power-loss.
-    fn run(log: &mut GroupCommitLog, io: &mut SimIo, core: &CoreControl, m: &mut Model, rng: &mut Rng, steps: usize, cfg: &LogConfig, now: &mut u64) {
+    fn run(
+        log: &mut GroupCommitLog,
+        io: &mut SimIo,
+        core: &CoreControl,
+        m: &mut Model,
+        rng: &mut Rng,
+        steps: usize,
+        cfg: &LogConfig,
+        now: &mut u64,
+    ) {
         let mut acks = Vec::new();
         let mut failed = Vec::new();
         for step in 0..steps {
@@ -847,10 +1000,14 @@ mod tests {
                     _ => Outcome::Ok,
                 };
                 let (ud, res) = io.complete(i, outcome);
-                log.on_cqe(ud, res, core, io, &mut acks, &mut failed).unwrap();
+                log.on_cqe(ud, res, core, io, &mut acks, &mut failed)
+                    .unwrap();
                 for a in acks.drain(..) {
                     let lsn = m.ack_lsn[&a];
-                    assert!(lsn <= log.durable_lsn() && lsn <= core.durable(), "ack {a} (lsn {lsn}) before durability");
+                    assert!(
+                        lsn <= log.durable_lsn() && lsn <= core.durable(),
+                        "ack {a} (lsn {lsn}) before durability"
+                    );
                     assert!(m.acked.last().is_none_or(|&p| p < a), "acks out of order");
                     m.acked.push(a);
                 }
@@ -879,7 +1036,10 @@ mod tests {
         )
         .unwrap();
         for (lsn, tenant, p) in &seen {
-            let (t, want) = m.appended.get(lsn).expect("recovered a record that was never appended");
+            let (t, want) = m
+                .appended
+                .get(lsn)
+                .expect("recovered a record that was never appended");
             assert_eq!((t, want), (tenant, p), "payload mismatch at lsn {lsn}");
         }
         assert!(seen.windows(2).all(|w| w[0].0 < w[1].0));
@@ -887,7 +1047,11 @@ mod tests {
         for a in &m.acked {
             let lsn = m.ack_lsn[a];
             if lsn >= rec.sb.start_lsn {
-                assert!(recovered.contains(&lsn), "acknowledged lsn {lsn} lost (start {})", rec.sb.start_lsn);
+                assert!(
+                    recovered.contains(&lsn),
+                    "acknowledged lsn {lsn} lost (start {})",
+                    rec.sb.start_lsn
+                );
             }
         }
         rec
@@ -898,34 +1062,59 @@ mod tests {
         let mut io = SimIo::new(1, (cfg.data_offset() + cfg.capacity) as usize);
         let core = CoreControl::default();
         let mut rng = Rng(seed);
-        let mut m = Model { appended: BTreeMap::new(), ack_lsn: BTreeMap::new(), acked: Vec::new(), next_ack: 1 };
+        let mut m = Model {
+            appended: BTreeMap::new(),
+            ack_lsn: BTreeMap::new(),
+            acked: Vec::new(),
+            next_ack: 1,
+        };
         let mut now = 0;
         let mut rec = Recovery::fresh();
         for incarnation in 0..4 {
             let (mut log, sb) = GroupCommitLog::open(cfg, &rec);
-            assert_eq!(log.append(1, KIND_DATA, b"x", None, now, &mut io), Err(LogError::NotReady));
+            assert_eq!(
+                log.append(1, KIND_DATA, b"x", None, now, &mut io),
+                Err(LogError::NotReady)
+            );
             write_sb(&mut io, &cfg, &sb);
             log.superblock_durable(&sb);
             assert_eq!(log.epoch() as usize, incarnation + 1);
-            run(&mut log, &mut io, &core, &mut m, &mut rng, 400, &cfg, &mut now);
+            run(
+                &mut log, &mut io, &core, &mut m, &mut rng, 400, &cfg, &mut now,
+            );
             // Power loss: in-flight writes persist a random 4 KiB-granular prefix.
             let mut r2 = rng.clone();
             io.power_loss(|_, op| r2.below(op.len as u64 + 1) as u32);
             rng.next();
             rec = recover_and_check(&io, &cfg, &m);
             if std::env::var("GCLOG_TRACE").is_ok() {
-                eprintln!("{tail:?} inc {incarnation}: acked {} next_logical {} rec {:?} stats {:?}", m.acked.len(), log.next_logical, rec, log.stats);
+                eprintln!(
+                    "{tail:?} inc {incarnation}: acked {} next_logical {} rec {:?} stats {:?}",
+                    m.acked.len(),
+                    log.next_logical,
+                    rec,
+                    log.stats
+                );
             }
             core.publish_durable(core.durable().max(rec.next_lsn - 1));
             // Records beyond the recovered end were never acknowledged; forget them.
             m.appended.retain(|&l, _| l < rec.next_lsn);
-            let keep: Vec<u64> = m.ack_lsn.iter().filter(|&(_, &l)| l >= rec.next_lsn).map(|(&a, _)| a).collect();
+            let keep: Vec<u64> = m
+                .ack_lsn
+                .iter()
+                .filter(|&(_, &l)| l >= rec.next_lsn)
+                .map(|(&a, _)| a)
+                .collect();
             for a in keep {
                 m.ack_lsn.remove(&a);
             }
             drop(log); // SimIo holds no in-flight ops after power_loss
         }
-        assert!(m.acked.len() > 2500, "workload too small: {}", m.acked.len());
+        assert!(
+            m.acked.len() > 2500,
+            "workload too small: {}",
+            m.acked.len()
+        );
     }
 
     #[test]
@@ -951,7 +1140,8 @@ mod tests {
         log.superblock_durable(&sb);
         // Three sealed batches.
         for b in 0..3u64 {
-            log.append(7, KIND_DATA, &[b as u8; 100], Some(b), 0, &mut io).unwrap();
+            log.append(7, KIND_DATA, &[b as u8; 100], Some(b), 0, &mut io)
+                .unwrap();
             log.poll(1_000_000, true, &mut io); // idle + device idle only for the first
             log.poll(1_000_000, false, &mut io); // age >= max_delay seals the rest
         }
@@ -961,15 +1151,18 @@ mod tests {
         for _ in 0..2 {
             let i = io.inflight.len() - 1;
             let (ud, res) = io.complete(i, Outcome::Ok);
-            log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed).unwrap();
+            log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed)
+                .unwrap();
         }
         assert!(acks.is_empty() && log.durable_lsn() == 0 && core.durable() == 0);
         let (ud, res) = io.complete(0, Outcome::Ok);
-        log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed).unwrap();
+        log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed)
+            .unwrap();
         assert_eq!(acks, vec![0, 1, 2]);
         assert_eq!(core.durable(), log.durable_lsn());
         // A duplicate/stale CQE is ignored.
-        log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed).unwrap();
+        log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed)
+            .unwrap();
         assert_eq!(log.stats.stale_cqes, 1);
         assert!(log.quiescent());
     }
@@ -981,9 +1174,11 @@ mod tests {
         let core = CoreControl::default();
         let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh());
         log.superblock_durable(&sb);
-        log.append(1, KIND_DATA, b"a", Some(10), 0, &mut io).unwrap();
+        log.append(1, KIND_DATA, b"a", Some(10), 0, &mut io)
+            .unwrap();
         log.poll(0, true, &mut io);
-        log.append(1, KIND_DATA, b"b", Some(11), 0, &mut io).unwrap();
+        log.append(1, KIND_DATA, b"b", Some(11), 0, &mut io)
+            .unwrap();
         let (mut acks, mut failed) = (Vec::new(), Vec::new());
         let mut fenced = None;
         for _ in 0..=cfg.max_retries {
@@ -996,12 +1191,18 @@ mod tests {
         assert!(acks.is_empty());
         failed.sort();
         assert_eq!(failed, vec![10, 11]);
-        assert_eq!(log.append(1, KIND_DATA, b"c", None, 0, &mut io), Err(LogError::Fenced(-libc::EIO)));
+        assert_eq!(
+            log.append(1, KIND_DATA, b"c", None, 0, &mut io),
+            Err(LogError::Fenced(-libc::EIO))
+        );
     }
 
     #[test]
     fn group_commit_write_amplification_under_load() {
-        let cfg = LogConfig { capacity: 1 << 26, ..LogConfig::default() };
+        let cfg = LogConfig {
+            capacity: 1 << 26,
+            ..LogConfig::default()
+        };
         let mut io = SimIo::new(1, (cfg.data_offset() + cfg.capacity) as usize);
         let core = CoreControl::default();
         let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh());
@@ -1013,20 +1214,36 @@ mod tests {
         while n < 10_000 {
             now += 1_000;
             for _ in 0..16 {
-                if log.append(n as u32 % 4096, crate::envelope::KIND_DATA, &[0xAB; 28], Some(n), now, &mut io).is_ok() {
+                if log
+                    .append(
+                        n as u32 % 4096,
+                        crate::envelope::KIND_DATA,
+                        &[0xAB; 28],
+                        Some(n),
+                        now,
+                        &mut io,
+                    )
+                    .is_ok()
+                {
                     n += 1;
                 }
             }
             log.poll(now, false, &mut io);
             if !io.inflight.is_empty() {
                 let (ud, res) = io.complete(0, Outcome::Ok);
-                log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed).unwrap();
+                log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed)
+                    .unwrap();
             }
         }
         let wa = log.stats.write_amplification();
         let per_tenant = 4096.0 / 28.0;
         assert!(wa < 3.0, "WA {wa}");
         assert!(per_tenant / wa > 50.0);
-        assert!(log.stats.batches * 20 < log.stats.records, "batches {} records {}", log.stats.batches, log.stats.records);
+        assert!(
+            log.stats.batches * 20 < log.stats.records,
+            "batches {} records {}",
+            log.stats.batches,
+            log.stats.records
+        );
     }
 }

@@ -11,7 +11,11 @@ const fn table() -> [u32; 256] {
         let mut c = i as u32;
         let mut k = 0;
         while k < 8 {
-            c = if c & 1 != 0 { 0x82F6_3B78 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0x82F6_3B78 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
             k += 1;
         }
         t[i] = c;
@@ -31,7 +35,7 @@ fn crc_sw(mut c: u32, b: &[u8]) -> u32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.2")]
 unsafe fn crc_hw(mut c: u32, b: &[u8]) -> u32 {
-    use core::arch::x86_64::{_mm_crc32_u64, _mm_crc32_u8};
+    use core::arch::x86_64::{_mm_crc32_u8, _mm_crc32_u64};
     let mut chunks = b.chunks_exact(8);
     let mut c64 = c as u64;
     for ch in &mut chunks {
@@ -246,14 +250,25 @@ impl ExtentImage {
         if bytes.len() < 64 {
             return None;
         }
-        let w: [u64; 8] = core::array::from_fn(|i| u64::from_le_bytes(bytes[i * 8..i * 8 + 8].try_into().unwrap()));
-        if w[0] as u32 != IMG_MAGIC || (w[0] >> 32) as u16 != IMG_VERSION || w[1] as u32 != expect_tenant {
+        let w: [u64; 8] = core::array::from_fn(|i| {
+            u64::from_le_bytes(bytes[i * 8..i * 8 + 8].try_into().unwrap())
+        });
+        if w[0] as u32 != IMG_MAGIC
+            || (w[0] >> 32) as u16 != IMG_VERSION
+            || w[1] as u32 != expect_tenant
+        {
             return None;
         }
         if crc32c(&[&bytes[..48]]) as u64 != w[6] || crc32c(&[&bytes[64..]]) as u64 != w[5] {
             return None;
         }
-        Some(ExtentImage { tenant: w[1] as u32, layout_version: (w[1] >> 32) as u32, checkpoint_lsn: w[2], epoch: w[3], image_seq: w[4] })
+        Some(ExtentImage {
+            tenant: w[1] as u32,
+            layout_version: (w[1] >> 32) as u32,
+            checkpoint_lsn: w[2],
+            epoch: w[3],
+            image_seq: w[4],
+        })
     }
 }
 
@@ -273,7 +288,15 @@ mod tests {
 
     #[test]
     fn record_round_trip_and_corruption() {
-        let h = RecHeader { kind: KIND_DATA, flags: 0, len: 5, lsn: 9, tenant: 4, lap: 0, epoch: 1 };
+        let h = RecHeader {
+            kind: KIND_DATA,
+            flags: 0,
+            len: 5,
+            lsn: 9,
+            tenant: 4,
+            lap: 0,
+            epoch: 1,
+        };
         let mut buf = [0u8; 64];
         let n = encode_record(&mut buf, &h, b"hello");
         assert_eq!(n, 40);
@@ -287,7 +310,13 @@ mod tests {
     fn extent_image_validation() {
         let mut ext = vec![0u8; 4096];
         ext[100] = 42;
-        let img = ExtentImage { tenant: 7, layout_version: 1, checkpoint_lsn: 99, epoch: 2, image_seq: 5 };
+        let img = ExtentImage {
+            tenant: 7,
+            layout_version: 1,
+            checkpoint_lsn: 99,
+            epoch: 2,
+            image_seq: 5,
+        };
         let hw = img.header_words(&ext[64..]);
         for (i, w) in hw.iter().enumerate() {
             ext[i * 8..i * 8 + 8].copy_from_slice(&w.to_le_bytes());

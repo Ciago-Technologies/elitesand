@@ -49,7 +49,11 @@ impl UserData {
     }
     #[inline(always)]
     pub fn decode(raw: u64) -> Option<UserData> {
-        Some(UserData { op: Op::from_u8((raw >> 56) as u8)?, object: ((raw >> 32) & 0xFF_FFFF) as u32, ticket: raw as u32 })
+        Some(UserData {
+            op: Op::from_u8((raw >> 56) as u8)?,
+            object: ((raw >> 32) & 0xFF_FFFF) as u32,
+            ticket: raw as u32,
+        })
     }
 }
 
@@ -61,12 +65,27 @@ pub trait IoBackend {
     /// `buf..buf+len` must stay allocated and must not be written by the CPU until the
     /// CQE for `user_data` has been delivered. `buf`, `len`, `offset` must satisfy the
     /// file's O_DIRECT alignment (logical block size).
-    unsafe fn write_at(&mut self, user_data: u64, file: u16, buf: *const u8, len: u32, offset: u64, dsync: bool) -> Result<(), SqFull>;
+    unsafe fn write_at(
+        &mut self,
+        user_data: u64,
+        file: u16,
+        buf: *const u8,
+        len: u32,
+        offset: u64,
+        dsync: bool,
+    ) -> Result<(), SqFull>;
 
     /// # Safety
     /// `buf..buf+len` must stay allocated and must not be read as initialized data or
     /// written by the CPU until the CQE for `user_data` has been delivered.
-    unsafe fn read_at(&mut self, user_data: u64, file: u16, buf: *mut u8, len: u32, offset: u64) -> Result<(), SqFull>;
+    unsafe fn read_at(
+        &mut self,
+        user_data: u64,
+        file: u16,
+        buf: *mut u8,
+        len: u32,
+        offset: u64,
+    ) -> Result<(), SqFull>;
 }
 
 // ---------------------------------------------------------------------------------
@@ -114,7 +133,13 @@ pub struct SimIo {
 
 impl SimIo {
     pub fn new(files: usize, bytes: usize) -> Self {
-        SimIo { files: (0..files).map(|_| vec![0u8; bytes]).collect(), inflight: Vec::new(), sq_capacity: usize::MAX, submitted: 0, dsync_writes: 0 }
+        SimIo {
+            files: (0..files).map(|_| vec![0u8; bytes]).collect(),
+            inflight: Vec::new(),
+            sq_capacity: usize::MAX,
+            submitted: 0,
+            dsync_writes: 0,
+        }
     }
 
     /// Complete in-flight op `i` (in any order) and return the CQE `(user_data, res)`.
@@ -130,8 +155,12 @@ impl SimIo {
         // SAFETY: the engine promised the buffer is live until this CQE.
         unsafe {
             match op.kind {
-                SimKind::Write { .. } => file[off..off + n].copy_from_slice(core::slice::from_raw_parts(op.buf, n)),
-                SimKind::Read => core::ptr::copy_nonoverlapping(file[off..off + n].as_ptr(), op.buf, n),
+                SimKind::Write { .. } => {
+                    file[off..off + n].copy_from_slice(core::slice::from_raw_parts(op.buf, n))
+                }
+                SimKind::Read => {
+                    core::ptr::copy_nonoverlapping(file[off..off + n].as_ptr(), op.buf, n)
+                }
             }
         }
         (op.user_data, n as i32)
@@ -146,7 +175,10 @@ impl SimIo {
                 let n = (torn_at(i, op).min(op.len) / 4096 * 4096) as usize;
                 let off = op.offset as usize;
                 // SAFETY: as in `complete`.
-                unsafe { self.files[op.file as usize][off..off + n].copy_from_slice(core::slice::from_raw_parts(op.buf, n)) };
+                unsafe {
+                    self.files[op.file as usize][off..off + n]
+                        .copy_from_slice(core::slice::from_raw_parts(op.buf, n))
+                };
             }
         }
     }
@@ -157,23 +189,58 @@ impl SimIo {
 }
 
 impl IoBackend for SimIo {
-    unsafe fn write_at(&mut self, user_data: u64, file: u16, buf: *const u8, len: u32, offset: u64, dsync: bool) -> Result<(), SqFull> {
+    unsafe fn write_at(
+        &mut self,
+        user_data: u64,
+        file: u16,
+        buf: *const u8,
+        len: u32,
+        offset: u64,
+        dsync: bool,
+    ) -> Result<(), SqFull> {
         if self.inflight.len() >= self.sq_capacity {
             return Err(SqFull);
         }
-        assert!(offset % 4096 == 0 && len % 4096 == 0 && (buf as usize) % 4096 == 0, "O_DIRECT alignment violated");
+        assert!(
+            offset % 4096 == 0 && len % 4096 == 0 && (buf as usize) % 4096 == 0,
+            "O_DIRECT alignment violated"
+        );
         self.submitted += 1;
         self.dsync_writes += dsync as u64;
-        self.inflight.push(SimOp { user_data, file, kind: SimKind::Write { dsync }, buf: buf as *mut u8, len, offset });
+        self.inflight.push(SimOp {
+            user_data,
+            file,
+            kind: SimKind::Write { dsync },
+            buf: buf as *mut u8,
+            len,
+            offset,
+        });
         Ok(())
     }
-    unsafe fn read_at(&mut self, user_data: u64, file: u16, buf: *mut u8, len: u32, offset: u64) -> Result<(), SqFull> {
+    unsafe fn read_at(
+        &mut self,
+        user_data: u64,
+        file: u16,
+        buf: *mut u8,
+        len: u32,
+        offset: u64,
+    ) -> Result<(), SqFull> {
         if self.inflight.len() >= self.sq_capacity {
             return Err(SqFull);
         }
-        assert!(offset % 4096 == 0 && len % 4096 == 0 && (buf as usize) % 4096 == 0, "O_DIRECT alignment violated");
+        assert!(
+            offset % 4096 == 0 && len % 4096 == 0 && (buf as usize) % 4096 == 0,
+            "O_DIRECT alignment violated"
+        );
         self.submitted += 1;
-        self.inflight.push(SimOp { user_data, file, kind: SimKind::Read, buf, len, offset });
+        self.inflight.push(SimOp {
+            user_data,
+            file,
+            kind: SimKind::Read,
+            buf,
+            len,
+            offset,
+        });
         Ok(())
     }
 }

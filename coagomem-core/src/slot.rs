@@ -27,9 +27,13 @@
 //! cache misses, header still exactly one line.
 
 use crate::CachePadded;
-use crate::seqlock::{READ_RETRY_LIMIT, ReadError, SeqWord, WordView, WordsMut, WriterBusy, read_with};
+use crate::seqlock::{ReadError, SeqWord, WordView, WordsMut, WriterBusy, read_deadline};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU64, Ordering::{Acquire, Relaxed, Release}, fence};
+use core::sync::atomic::{
+    AtomicU64,
+    Ordering::{Acquire, Relaxed, Release},
+    fence,
+};
 
 // ---------------------------------------------------------------------------------
 // SlotHandle
@@ -56,7 +60,13 @@ impl core::fmt::Debug for SlotHandle {
         if self.is_null() {
             return f.write_str("SlotHandle(NULL)");
         }
-        write!(f, "SlotHandle(gen={}, class={}, idx={})", self.generation(), self.class(), self.index())
+        write!(
+            f,
+            "SlotHandle(gen={}, class={}, idx={})",
+            self.generation(),
+            self.class(),
+            self.index()
+        )
     }
 }
 
@@ -66,10 +76,13 @@ impl SlotHandle {
     /// `None` if any field is out of range or `generation == 0`.
     #[inline(always)]
     pub const fn pack(index: u32, class: u8, generation: u64) -> Option<SlotHandle> {
-        if index > MAX_INDEX || class > MAX_CLASS || generation == 0 || generation > MAX_GENERATION {
+        if index > MAX_INDEX || class > MAX_CLASS || generation == 0 || generation > MAX_GENERATION
+        {
             return None;
         }
-        Some(SlotHandle((generation << GEN_SHIFT) | ((class as u64) << CLASS_SHIFT) | index as u64))
+        Some(SlotHandle(
+            (generation << GEN_SHIFT) | ((class as u64) << CLASS_SHIFT) | index as u64,
+        ))
     }
     #[inline(always)]
     pub const fn index(self) -> u32 {
@@ -120,11 +133,19 @@ pub struct TenantWord {
 impl TenantWord {
     #[inline(always)]
     pub const fn pack(self) -> u64 {
-        (self.tenant as u64) | (self.core as u64) << 32 | (self.layout_version as u64) << 40 | (self.flags as u64) << 48
+        (self.tenant as u64)
+            | (self.core as u64) << 32
+            | (self.layout_version as u64) << 40
+            | (self.flags as u64) << 48
     }
     #[inline(always)]
     pub const fn unpack(w: u64) -> TenantWord {
-        TenantWord { tenant: w as u32, core: (w >> 32) as u8, layout_version: (w >> 40) as u8, flags: (w >> 48) as u16 }
+        TenantWord {
+            tenant: w as u32,
+            core: (w >> 32) as u8,
+            layout_version: (w >> 40) as u8,
+            flags: (w >> 48) as u16,
+        }
     }
 }
 
@@ -209,8 +230,7 @@ impl CoreControl {
     /// Log side: monotonic publish.
     #[inline(always)]
     pub fn publish_durable(&self, lsn: u64) {
-        debug_assert!(lsn >= self.durable_lsn.load(Relaxed));
-        self.durable_lsn.store(lsn, Release);
+        self.durable_lsn.fetch_max(lsn, Release);
     }
 }
 
@@ -242,8 +262,13 @@ pub enum SlotReadError {
     Reassigned,
     /// Snapshot is newer than the durability watermark. `applied - durable` is bounded
     /// by one group-commit batch; retry or go through the owner core's mailbox.
-    NotYetDurable { applied: u64, durable: u64 },
+    NotYetDurable {
+        applied: u64,
+        durable: u64,
+    },
     WriterActive,
+    WriterStalled,
+    DeadlineExhausted,
     Corrupt,
     /// Handle is NULL or out of range for this arena.
     InvalidHandle,
@@ -265,9 +290,14 @@ pub struct Snapshot<R> {
 }
 
 enum Backing {
-    Heap { layout: std::alloc::Layout },
+    Heap {
+        layout: std::alloc::Layout,
+    },
     #[cfg(target_os = "linux")]
-    Mmap { len: usize, _fd: std::os::fd::OwnedFd },
+    Mmap {
+        len: usize,
+        _fd: std::os::fd::OwnedFd,
+    },
 }
 
 /// One size class of the slab: a dense header array plus 4 KiB-aligned payloads.
@@ -285,7 +315,11 @@ pub struct SlotArena<const W: usize> {
 
 impl<const W: usize> core::fmt::Debug for SlotArena<W> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("SlotArena").field("class", &self.class).field("slots", &self.n).field("payload_bytes", &(W * 8)).finish()
+        f.debug_struct("SlotArena")
+            .field("class", &self.class)
+            .field("slots", &self.n)
+            .field("payload_bytes", &(W * 8))
+            .finish()
     }
 }
 
@@ -313,9 +347,12 @@ impl<const W: usize> SlotArena<W> {
     /// Zeroed heap backing (tests, non-Linux, or no hugepages reserved).
     pub fn new_heap(class: u8, n: u32, cores: usize) -> Self {
         Self::check(class, n, cores);
-        let layout = std::alloc::Layout::from_size_align(Self::region_bytes(n as usize), 2 * 1024 * 1024).unwrap();
+        let layout =
+            std::alloc::Layout::from_size_align(Self::region_bytes(n as usize), 2 * 1024 * 1024)
+                .unwrap();
         // SAFETY: non-zero size; zero bytes are a valid bit pattern for every atomic here.
-        let base = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).unwrap_or_else(|| std::alloc::handle_alloc_error(layout));
+        let base = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
+            .unwrap_or_else(|| std::alloc::handle_alloc_error(layout));
         Self::from_base(class, n, cores, base, Backing::Heap { layout })
     }
 
@@ -323,7 +360,11 @@ impl<const W: usize> SlotArena<W> {
     /// `MAP_SHARED | MAP_POPULATE`. Returns the fd too so it can be passed to agent
     /// processes over SCM_RIGHTS for a read-only mapping.
     #[cfg(target_os = "linux")]
-    pub fn new_hugetlb(class: u8, n: u32, cores: usize) -> std::io::Result<(Self, std::os::fd::RawFd)> {
+    pub fn new_hugetlb(
+        class: u8,
+        n: u32,
+        cores: usize,
+    ) -> std::io::Result<(Self, std::os::fd::RawFd)> {
         use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
         Self::check(class, n, cores);
         let len = Self::region_bytes(n as usize).next_multiple_of(2 * 1024 * 1024);
@@ -341,7 +382,11 @@ impl<const W: usize> SlotArena<W> {
                 return Err(std::io::Error::last_os_error());
             }
             // Size is now fixed for the agents' mappings.
-            libc::fcntl(fd.as_raw_fd(), libc::F_ADD_SEALS, libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_SEAL);
+            libc::fcntl(
+                fd.as_raw_fd(),
+                libc::F_ADD_SEALS,
+                libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_SEAL,
+            );
             let p = libc::mmap(
                 core::ptr::null_mut(),
                 len,
@@ -355,16 +400,29 @@ impl<const W: usize> SlotArena<W> {
             }
             let raw = fd.as_raw_fd();
             let base = NonNull::new_unchecked(p as *mut u8);
-            Ok((Self::from_base(class, n, cores, base, Backing::Mmap { len, _fd: fd }), raw))
+            Ok((
+                Self::from_base(class, n, cores, base, Backing::Mmap { len, _fd: fd }),
+                raw,
+            ))
         }
     }
 
     fn from_base(class: u8, n: u32, cores: usize, base: NonNull<u8>, backing: Backing) -> Self {
         let headers = base.cast::<SlotHeader>();
         // SAFETY: header_region is within the allocation and 4 KiB aligned (2 MiB multiple).
-        let payloads = unsafe { NonNull::new_unchecked(base.as_ptr().add(Self::header_region(n as usize))) }.cast::<Payload<W>>();
+        let payloads =
+            unsafe { NonNull::new_unchecked(base.as_ptr().add(Self::header_region(n as usize))) }
+                .cast::<Payload<W>>();
         let cores = (0..cores).map(|_| CoreControl::default()).collect();
-        SlotArena { class, n, headers, payloads, cores, backing, base }
+        SlotArena {
+            class,
+            n,
+            headers,
+            payloads,
+            cores,
+            backing,
+            base,
+        }
     }
 
     #[inline(always)]
@@ -424,35 +482,72 @@ impl<const W: usize> SlotArena<W> {
         let hdr = self.header(idx);
         let words = self.payload(idx);
         // `Err(())` inside the closure = validated owner mismatch.
-        let r = read_with(&hdr.seq, words, READ_RETRY_LIMIT, |view| {
-            let owner = hdr.owner.load(Relaxed);
-            let tw = TenantWord::unpack(hdr.tenant.load(Relaxed));
-            if owner != h.raw() || tw.tenant != tenant {
-                return Some(Err(()));
-            }
-            let applied = hdr.applied_lsn.load(Relaxed);
-            Some(Ok((f(view)?, applied, tw.core)))
+        let r = read_deadline(
+            &hdr.seq,
+            words,
+            &crate::MonotonicClock,
+            std::time::Duration::from_micros(2),
+            std::time::Duration::from_micros(1),
+            |view| {
+                let owner = hdr.owner.load(Relaxed);
+                let tw = TenantWord::unpack(hdr.tenant.load(Relaxed));
+                if owner != h.raw() || tw.tenant != tenant {
+                    return Some(Err(()));
+                }
+                let applied = hdr.applied_lsn.load(Relaxed);
+                Some(Ok((f(view)?, applied, tw.core)))
+            },
+        )
+        .map_err(|e| match e {
+            crate::DeadlineReadError::WriterStalled { .. } => SlotReadError::WriterStalled,
+            crate::DeadlineReadError::DeadlineExhausted { .. } => SlotReadError::DeadlineExhausted,
+            crate::DeadlineReadError::Corrupt => SlotReadError::Corrupt,
         })?;
         let (value, applied, core) = r.map_err(|()| SlotReadError::Reassigned)?;
         if vis == Visibility::Durable {
-            let durable = self.cores.get(core as usize).ok_or(SlotReadError::Corrupt)?.durable();
+            let durable = self
+                .cores
+                .get(core as usize)
+                .ok_or(SlotReadError::Corrupt)?
+                .durable();
             if applied > durable {
                 return Err(SlotReadError::NotYetDurable { applied, durable });
             }
         }
-        Ok(Snapshot { value, applied_lsn: applied })
+        Ok(Snapshot {
+            value,
+            applied_lsn: applied,
+        })
     }
 
     /// Owner core only: mutate in place under the seqlock and stamp the record LSN.
     /// `debug_assert` catches a stale handle on the writer side.
     #[inline]
-    pub fn write<R>(&self, h: SlotHandle, lsn: u64, f: impl FnOnce(WordsMut<'_>) -> R) -> Result<R, WriterBusy> {
-        let idx = self.resolve(h).expect("invalid handle on owner core");
+    pub fn write<R>(
+        &self,
+        h: SlotHandle,
+        lsn: u64,
+        f: impl FnOnce(WordsMut<'_>) -> R,
+    ) -> Result<R, crate::WriteError> {
+        let idx = self.resolve(h).ok_or(crate::WriteError::Reassigned)?;
         let hdr = self.header(idx);
-        let g = hdr.seq.write_begin()?;
-        debug_assert_eq!(hdr.owner.load(Relaxed), h.raw(), "owner core wrote through a stale handle");
+        let g = hdr
+            .seq
+            .write_begin()
+            .map_err(|_| crate::WriteError::WriterBusy)?;
+        if hdr.owner.load(Relaxed) != h.raw() {
+            g.commit();
+            return Err(crate::WriteError::Reassigned);
+        }
+        let current = hdr.applied_lsn.load(Relaxed);
+        if lsn < current {
+            g.commit();
+            return Err(crate::WriteError::LsnRegression {
+                current,
+                attempted: lsn,
+            });
+        }
         let r = f(WordsMut::new(self.payload(idx)));
-        debug_assert!(lsn >= hdr.applied_lsn.load(Relaxed));
         hdr.applied_lsn.store(lsn, Relaxed);
         g.commit();
         Ok(r)
@@ -461,14 +556,24 @@ impl<const W: usize> SlotArena<W> {
     /// Owner core only, slot currently unowned: issue the next generation, install the
     /// owner, and expose it. The *caller* publishes the handle in the route table after
     /// this returns (publication order: slot first, route second).
-    pub fn install(&self, idx: u32, tw: TenantWord, applied_lsn: u64, checkpoint_lsn: u64) -> Result<Option<SlotHandle>, WriterBusy> {
+    pub fn install(
+        &self,
+        idx: u32,
+        tw: TenantWord,
+        applied_lsn: u64,
+        checkpoint_lsn: u64,
+    ) -> Result<Option<SlotHandle>, WriterBusy> {
         let hdr = self.header(idx);
+        let g = hdr.seq.write_begin()?;
         let last = hdr.last_generation.load(Relaxed);
         let Some(h) = SlotHandle::pack(idx, self.class, last + 1) else {
+            g.commit();
             return Ok(None); // generation space exhausted: retire this slot
         };
-        let g = hdr.seq.write_begin()?;
-        debug_assert_eq!(hdr.owner.load(Relaxed), 0, "install over an owned slot");
+        if hdr.owner.load(Relaxed) != 0 {
+            g.commit();
+            return Err(WriterBusy);
+        }
         hdr.last_generation.store(h.generation(), Relaxed);
         hdr.tenant.store(tw.pack(), Relaxed);
         hdr.applied_lsn.store(applied_lsn, Relaxed);
@@ -503,7 +608,11 @@ impl<const W: usize> SlotArena<W> {
     }
 
     /// Owner core only: writer view of a slot *that is not owned* (loading / zero-fill).
-    pub fn with_unowned_payload<R>(&self, idx: u32, f: impl FnOnce(WordsMut<'_>) -> R) -> Result<R, WriterBusy> {
+    pub fn with_unowned_payload<R>(
+        &self,
+        idx: u32,
+        f: impl FnOnce(WordsMut<'_>) -> R,
+    ) -> Result<R, WriterBusy> {
         let hdr = self.header(idx);
         let g = hdr.seq.write_begin()?;
         debug_assert_eq!(hdr.owner.load(Relaxed), 0);
@@ -551,7 +660,9 @@ pub struct RouteTable {
 
 impl RouteTable {
     pub fn new(tenants: u32) -> Self {
-        RouteTable { entries: (0..tenants).map(|_| RouteEntry::default()).collect() }
+        RouteTable {
+            entries: (0..tenants).map(|_| RouteEntry::default()).collect(),
+        }
     }
     /// Reader side (read-only mapping safe).
     #[inline(always)]
@@ -571,7 +682,10 @@ impl RouteTable {
     /// never unpublish a newer residency.
     #[inline]
     pub fn unpublish(&self, tenant: u32, h: SlotHandle) -> bool {
-        self.entries[tenant as usize].handle.compare_exchange(h.raw(), 0, Release, Relaxed).is_ok()
+        self.entries[tenant as usize]
+            .handle
+            .compare_exchange(h.raw(), 0, Release, Relaxed)
+            .is_ok()
     }
     #[inline]
     pub fn set_extent(&self, tenant: u32, loc: ExtentLoc) {
@@ -588,9 +702,18 @@ mod tests {
     #[test]
     fn handle_packing_round_trips_and_rejects_out_of_range() {
         let h = SlotHandle::pack(MAX_INDEX, MAX_CLASS, MAX_GENERATION).unwrap();
-        assert_eq!((h.index(), h.class(), h.generation()), (MAX_INDEX, MAX_CLASS, MAX_GENERATION));
-        assert!(h.successor().is_none(), "generation exhaustion retires the slot");
-        assert!(SlotHandle::pack(0, 0, 0).is_none(), "generation 0 is reserved for NULL");
+        assert_eq!(
+            (h.index(), h.class(), h.generation()),
+            (MAX_INDEX, MAX_CLASS, MAX_GENERATION)
+        );
+        assert!(
+            h.successor().is_none(),
+            "generation exhaustion retires the slot"
+        );
+        assert!(
+            SlotHandle::pack(0, 0, 0).is_none(),
+            "generation 0 is reserved for NULL"
+        );
         assert!(SlotHandle::pack(MAX_INDEX + 1, 0, 1).is_none());
         assert!(SlotHandle::pack(0, MAX_CLASS + 1, 1).is_none());
         let a = SlotHandle::pack(7, 3, 41).unwrap();
@@ -602,12 +725,23 @@ mod tests {
     fn stale_handle_cannot_read_new_tenant() {
         let arena = SlotArena::<W>::new_heap(0, 4, 2);
         let route = RouteTable::new(16);
-        let tw = |t| TenantWord { tenant: t, core: 1, layout_version: 1, flags: 0 };
+        let tw = |t| TenantWord {
+            tenant: t,
+            core: 1,
+            layout_version: 1,
+            flags: 0,
+        };
 
         let h1 = arena.install(2, tw(5), 10, 10).unwrap().unwrap();
         route.publish(5, h1);
         arena.write(h1, 11, |w| w.set(8, 0xAAAA)).unwrap();
-        assert_eq!(arena.read(h1, 5, Visibility::Applied, |v| v.word(8)).unwrap().value, 0xAAAA);
+        assert_eq!(
+            arena
+                .read(h1, 5, Visibility::Applied, |v| v.word(8))
+                .unwrap()
+                .value,
+            0xAAAA
+        );
 
         // Evict tenant 5, reuse slot 2 for tenant 9.
         assert!(route.unpublish(5, h1));
@@ -618,26 +752,52 @@ mod tests {
 
         assert_eq!(h1.index(), h2.index());
         assert_eq!(h2.generation(), h1.generation() + 1);
-        assert_eq!(arena.read(h1, 5, Visibility::Applied, |v| v.word(8)), Err(SlotReadError::Reassigned));
+        assert_eq!(
+            arena.read(h1, 5, Visibility::Applied, |v| v.word(8)),
+            Err(SlotReadError::Reassigned)
+        );
         // Even a forged (old handle, new tenant) pair fails on the generation.
-        assert_eq!(arena.read(h1, 9, Visibility::Applied, |v| v.word(8)), Err(SlotReadError::Reassigned));
-        assert_eq!(arena.read(h2, 9, Visibility::Applied, |v| v.word(8)).unwrap().value, 0xBBBB);
+        assert_eq!(
+            arena.read(h1, 9, Visibility::Applied, |v| v.word(8)),
+            Err(SlotReadError::Reassigned)
+        );
+        assert_eq!(
+            arena
+                .read(h2, 9, Visibility::Applied, |v| v.word(8))
+                .unwrap()
+                .value,
+            0xBBBB
+        );
         assert!(!route.unpublish(5, h1), "stale unpublish is a no-op");
     }
 
     #[test]
     fn durable_visibility_follows_core_watermark() {
         let arena = SlotArena::<W>::new_heap(0, 1, 1);
-        let tw = TenantWord { tenant: 1, core: 0, layout_version: 1, flags: 0 };
+        let tw = TenantWord {
+            tenant: 1,
+            core: 0,
+            layout_version: 1,
+            flags: 0,
+        };
         let h = arena.install(0, tw, 0, 0).unwrap().unwrap();
         arena.write(h, 7, |w| w.set(9, 1)).unwrap();
         assert_eq!(
             arena.read(h, 1, Visibility::Durable, |v| v.word(9)),
-            Err(SlotReadError::NotYetDurable { applied: 7, durable: 0 })
+            Err(SlotReadError::NotYetDurable {
+                applied: 7,
+                durable: 0
+            })
         );
         assert!(arena.read(h, 1, Visibility::Applied, |v| v.word(9)).is_ok());
         arena.core(0).publish_durable(7);
-        assert_eq!(arena.read(h, 1, Visibility::Durable, |v| v.word(9)).unwrap().value, 1);
+        assert_eq!(
+            arena
+                .read(h, 1, Visibility::Durable, |v| v.word(9))
+                .unwrap()
+                .value,
+            1
+        );
     }
 
     #[test]

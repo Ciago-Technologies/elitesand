@@ -78,6 +78,7 @@ pub enum Tok<'a> {
     Str(&'a str),
     /// `$ref:0x...` hex digits.
     Ref(&'a str),
+    At,
     Pipe,
     LParen,
     RParen,
@@ -110,7 +111,11 @@ pub struct Token<'a> {
 }
 
 fn err(at: usize, end: usize, msg: &'static str) -> ParseError {
-    ParseError { at: at as u32, end: end as u32, msg }
+    ParseError {
+        at: at as u32,
+        end: end as u32,
+        msg,
+    }
 }
 
 pub fn lex(src: &str) -> PResult<Vec<Token<'_>>> {
@@ -163,19 +168,28 @@ pub fn lex(src: &str) -> PResult<Vec<Token<'_>>> {
                 }
             }
             i += 1;
-            Tok::Str(&src[start + 1..i - 1])
+            let raw = &src[start + 1..i - 1];
+            unescape(raw).map_err(|_| err(start, i, "invalid string escape"))?;
+            Tok::Str(raw)
         } else if c == b'$' {
             let rest = &src[i..];
-            let Some(hex) = rest.strip_prefix("$ref:0x").or_else(|| rest.strip_prefix("$ref:0X")) else {
+            let Some(hex) = rest
+                .strip_prefix("$ref:0x")
+                .or_else(|| rest.strip_prefix("$ref:0X"))
+            else {
                 return Err(err(start, start + 1, "expected `$ref:0x<hex>`"));
             };
-            let n = hex.bytes().take_while(|c| c.is_ascii_hexdigit() || *c == b'_').count();
+            let n = hex
+                .bytes()
+                .take_while(|c| c.is_ascii_hexdigit() || *c == b'_')
+                .count();
             if n == 0 {
                 return Err(err(start, start + 7, "empty `$ref` handle"));
             }
             i += 7 + n;
             Tok::Ref(&src[start + 7..i])
-        } else if c.is_ascii_digit() || (c == b'-' && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
+        } else if c.is_ascii_digit() || (c == b'-' && b.get(i + 1).is_some_and(u8::is_ascii_digit))
+        {
             if c == b'-' {
                 i += 1;
             }
@@ -211,10 +225,16 @@ pub fn lex(src: &str) -> PResult<Vec<Token<'_>>> {
                     }
                 }
             }
-            if b.get(i).is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_') {
+            if b.get(i)
+                .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_')
+            {
                 return Err(err(start, i + 1, "malformed number"));
             }
-            if float { Tok::Float(&src[start..i]) } else { Tok::Int(&src[start..i]) }
+            if float {
+                Tok::Float(&src[start..i])
+            } else {
+                Tok::Int(&src[start..i])
+            }
         } else if c.is_ascii_alphabetic() || c == b'_' {
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                 i += 1;
@@ -223,6 +243,7 @@ pub fn lex(src: &str) -> PResult<Vec<Token<'_>>> {
         } else {
             i += 1;
             match c {
+                b'@' => Tok::At,
                 b'(' => Tok::LParen,
                 b')' => Tok::RParen,
                 b'{' => Tok::LBrace,
@@ -242,9 +263,17 @@ pub fn lex(src: &str) -> PResult<Vec<Token<'_>>> {
         if out.len() >= MAX_TOKENS {
             return Err(err(start, i, "too many tokens"));
         }
-        out.push(Token { tok, at: start as u32, end: i as u32 });
+        out.push(Token {
+            tok,
+            at: start as u32,
+            end: i as u32,
+        });
     }
-    out.push(Token { tok: Tok::Eof, at: b.len() as u32, end: b.len() as u32 });
+    out.push(Token {
+        tok: Tok::Eof,
+        at: b.len() as u32,
+        end: b.len() as u32,
+    });
     Ok(out)
 }
 
@@ -263,8 +292,14 @@ pub enum Source {
     Actor(u64),
     /// Deduplicated, in query order.
     TxActors(Vec<u64>),
-    ScanRange { start: u64, end: u64 },
+    ScanRange {
+        start: u64,
+        end: u64,
+    },
     ScanAll,
+    BackupStore {
+        destination: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,8 +398,15 @@ pub enum AssignOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mutation<'a> {
-    Assign { target: FieldPath<'a>, op: AssignOp, value: Value<'a> },
-    Append { target: FieldPath<'a>, value: Value<'a> },
+    Assign {
+        target: FieldPath<'a>,
+        op: AssignOp,
+        value: Value<'a>,
+    },
+    Append {
+        target: FieldPath<'a>,
+        value: Value<'a>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -396,14 +438,32 @@ pub struct AggItem<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stage<'a> {
     Filter(BoolExpr<'a>),
-    Similarity { vector: Vec<f32>, metric: Metric, threshold: f32 },
+    Similarity {
+        vector: Vec<f32>,
+        metric: Metric,
+        threshold: f32,
+    },
     Mutate(Vec<Mutation<'a>>),
     Project(Vec<ProjectItem<'a>>),
     GroupBy(Vec<FieldPath<'a>>),
     Reduce(Vec<AggItem<'a>>),
-    CheckpointFrame { intent: &'a str, constraints: Vec<&'a str> },
-    HydrateFrame { frame_hash: u64 },
+    CheckpointFrame {
+        intent: &'a str,
+        constraints: Vec<&'a str>,
+    },
+    HydrateFrame {
+        frame_hash: u64,
+    },
     Take(u64),
+    SearchBm25 {
+        field: Vec<&'a str>,
+        query: &'a str,
+        top_k: u64,
+    },
+    ExportTo {
+        format: &'a str,
+        destination: &'a str,
+    },
 }
 
 impl Stage<'_> {
@@ -418,6 +478,8 @@ impl Stage<'_> {
             Stage::CheckpointFrame { .. } => "CHECKPOINT_FRAME",
             Stage::HydrateFrame { .. } => "HYDRATE_FRAME",
             Stage::Take(_) => "TAKE",
+            Stage::SearchBm25 { .. } => "SEARCH",
+            Stage::ExportTo { .. } => "EXPORT",
         }
     }
 }
@@ -465,7 +527,10 @@ fn parse_uint(raw: &str, at: u32, end: u32) -> PResult<u64> {
     if raw.starts_with('_') || raw.ends_with('_') || raw.contains("__") {
         return Err(mk("misplaced `_` in number"));
     }
-    let r = match digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
+    let r = match digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
         Some(h) if !h.is_empty() => u64::from_str_radix(h, 16),
         Some(_) => return Err(mk("empty hex literal")),
         None => digits.parse::<u64>(),
@@ -492,13 +557,21 @@ impl<'a> Parser<'a> {
     }
     fn fail<T>(&self, msg: &'static str) -> PResult<T> {
         let t = self.tok();
-        Err(ParseError { at: t.at, end: t.end, msg })
+        Err(ParseError {
+            at: t.at,
+            end: t.end,
+            msg,
+        })
     }
     fn expect(&mut self, want: Tok<'static>, msg: &'static str) -> PResult<Token<'a>> {
-        if self.peek() == want { Ok(self.bump()) } else { self.fail(msg) }
+        if self.peek() == want {
+            Ok(self.bump())
+        } else {
+            self.fail(msg)
+        }
     }
     fn is_kw(&self, kw: &str) -> bool {
-        self.peek() == Tok::Ident(kw)
+        matches!(self.peek(), Tok::Ident(s) if s.eq_ignore_ascii_case(kw))
     }
     fn expect_kw(&mut self, kw: &'static str, msg: &'static str) -> PResult<()> {
         if self.is_kw(kw) {
@@ -529,14 +602,22 @@ impl<'a> Parser<'a> {
     }
     fn enter(&mut self) -> PResult<()> {
         self.depth += 1;
-        if self.depth > MAX_DEPTH { self.fail("nesting too deep") } else { Ok(()) }
+        if self.depth > MAX_DEPTH {
+            self.fail("nesting too deep")
+        } else {
+            Ok(())
+        }
     }
     fn leave(&mut self) {
         self.depth -= 1;
     }
 
     /// Comma-separated list until `close`, at least one element, bounded length.
-    fn list<T>(&mut self, close: Tok<'static>, mut item: impl FnMut(&mut Self) -> PResult<T>) -> PResult<Vec<T>> {
+    fn list<T>(
+        &mut self,
+        close: Tok<'static>,
+        mut item: impl FnMut(&mut Self) -> PResult<T>,
+    ) -> PResult<Vec<T>> {
         let mut v = Vec::new();
         loop {
             if v.len() == MAX_LIST {
@@ -559,31 +640,61 @@ impl<'a> Parser<'a> {
     // ---------------------------------------------------------------- source
 
     fn source(&mut self) -> PResult<Source> {
-        match self.peek() {
-            Tok::Ident("ACTOR") => {
+        if self.peek() == Tok::At {
+            self.bump();
+            return Ok(Source::Actor(self.uint()?));
+        }
+        let keyword = match self.peek() {
+            Tok::Ident(k) => k.to_ascii_uppercase(),
+            _ => String::new(),
+        };
+        match keyword.as_str() {
+            "ACTOR" => {
                 self.bump();
                 self.expect(Tok::LParen, "expected `(` after ACTOR")?;
                 let id = self.uint()?;
                 self.expect(Tok::RParen, "expected `)`")?;
                 Ok(Source::Actor(id))
             }
-            Tok::Ident("TX_ACTORS") => {
+            "TX_ACTORS" | "TX" => {
                 self.bump();
                 let open = self.expect(Tok::LBrack, "expected `[` after TX_ACTORS")?;
-                let ids = self.list(Tok::RBrack, |p| p.uint())?;
+                let ids = self.list(Tok::RBrack, |p| {
+                    if p.peek() == Tok::At {
+                        p.bump();
+                    }
+                    p.uint()
+                })?;
                 let mut dedup: Vec<u64> = Vec::with_capacity(ids.len());
                 for id in ids {
                     if dedup.contains(&id) {
-                        return Err(ParseError { at: open.at, end: self.toks[self.pos - 1].end, msg: "duplicate actor in TX_ACTORS" });
+                        return Err(ParseError {
+                            at: open.at,
+                            end: self.toks[self.pos - 1].end,
+                            msg: "duplicate actor in TX_ACTORS",
+                        });
                     }
                     dedup.push(id);
                 }
                 if dedup.len() < 2 || dedup.len() > MAX_TX_ACTORS {
-                    return Err(ParseError { at: open.at, end: self.toks[self.pos - 1].end, msg: "TX_ACTORS needs 2..=64 distinct actors" });
+                    return Err(ParseError {
+                        at: open.at,
+                        end: self.toks[self.pos - 1].end,
+                        msg: "TX_ACTORS needs 2..=64 distinct actors",
+                    });
                 }
                 Ok(Source::TxActors(dedup))
             }
-            Tok::Ident("SCAN") => {
+            "BACKUP" => {
+                self.bump();
+                self.expect_kw("STORE", "expected STORE")?;
+                self.expect_kw("TO", "expected TO")?;
+                let destination = unescape(self.string()?)
+                    .map_err(|_| err(0, 0, "invalid destination escape"))?
+                    .into_owned();
+                Ok(Source::BackupStore { destination })
+            }
+            "SCAN" => {
                 self.bump();
                 self.expect_kw("ACTORS", "expected `ACTORS` after SCAN")?;
                 self.expect(Tok::LBrack, "expected `[`")?;
@@ -598,7 +709,11 @@ impl<'a> Parser<'a> {
                 let end = self.uint()?;
                 let close = self.expect(Tok::RBrack, "expected `]`")?;
                 if start > end {
-                    return Err(ParseError { at, end: close.end, msg: "scan range start > end" });
+                    return Err(ParseError {
+                        at,
+                        end: close.end,
+                        msg: "scan range start > end",
+                    });
                 }
                 Ok(Source::ScanRange { start, end })
             }
@@ -618,14 +733,18 @@ impl<'a> Parser<'a> {
             self.expect(Tok::RParen, "expected `)` after actor id")?;
             self.expect(Tok::Dot, "expected `.` after actor(..)")?;
         }
-        let root_tok = self.tok();
         let root_name = self.ident("expected field path")?;
-        let root = Root::from_ident(root_name).ok_or(ParseError {
-            at: root_tok.at,
-            end: root_tok.end,
-            msg: "field path must start with state, meta, frame, episodes or semantic",
-        })?;
-        let mut path = Vec::new();
+        let known_root = Root::from_ident(root_name);
+        if known_root.is_none() && self.peek() == Tok::Dot {
+            return self
+                .fail("field path must start with state, meta, frame, episodes or semantic");
+        }
+        let root = known_root.unwrap_or(Root::State);
+        let mut path = if known_root.is_some() {
+            Vec::new()
+        } else {
+            vec![root_name]
+        };
         while self.peek() == Tok::Dot {
             self.bump();
             if path.len() == MAX_DEPTH {
@@ -633,7 +752,12 @@ impl<'a> Parser<'a> {
             }
             path.push(self.ident("expected identifier after `.`")?);
         }
-        Ok(FieldPath { actor, root, path, at })
+        Ok(FieldPath {
+            actor,
+            root,
+            path,
+            at,
+        })
     }
 
     fn literal(&mut self) -> PResult<Literal<'a>> {
@@ -649,12 +773,18 @@ impl<'a> Parser<'a> {
                     Literal::Int((v as i64).wrapping_neg())
                 } else {
                     let v = parse_uint(raw, t.at, t.end)?;
-                    if v <= i64::MAX as u64 { Literal::Int(v as i64) } else { Literal::UInt(v) }
+                    if v <= i64::MAX as u64 {
+                        Literal::Int(v as i64)
+                    } else {
+                        Literal::UInt(v)
+                    }
                 }
             }
             Tok::Float(raw) => {
                 let s: String = raw.chars().filter(|&c| c != '_').collect();
-                let v: f64 = s.parse().map_err(|_| err(t.at as usize, t.end as usize, "malformed float"))?;
+                let v: f64 = s
+                    .parse()
+                    .map_err(|_| err(t.at as usize, t.end as usize, "malformed float"))?;
                 if !v.is_finite() {
                     return Err(err(t.at as usize, t.end as usize, "float out of range"));
                 }
@@ -677,7 +807,11 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let v = parse_uint(&format!("0x{hex}"), t.at, t.end)?;
                 if v == 0 {
-                    return Err(err(t.at as usize, t.end as usize, "`$ref:0x0` is not a valid handle"));
+                    return Err(err(
+                        t.at as usize,
+                        t.end as usize,
+                        "`$ref:0x0` is not a valid handle",
+                    ));
                 }
                 Value::Ref(v)
             }
@@ -699,12 +833,18 @@ impl<'a> Parser<'a> {
                 })?;
                 for (i, (k, _)) in items.iter().enumerate() {
                     if items[..i].iter().any(|(k2, _)| k2 == k) {
-                        return Err(err(t.at as usize, self.toks[self.pos - 1].end as usize, "duplicate object key"));
+                        return Err(err(
+                            t.at as usize,
+                            self.toks[self.pos - 1].end as usize,
+                            "duplicate object key",
+                        ));
                     }
                 }
                 Value::Object(items)
             }
-            Tok::Ident(name) if self.peek2() == Tok::LParen && !matches!(name, "true" | "false" | "null") => {
+            Tok::Ident(name)
+                if self.peek2() == Tok::LParen && !matches!(name, "true" | "false" | "null") =>
+            {
                 self.bump();
                 self.bump();
                 let args = if self.peek() == Tok::RParen {
@@ -769,7 +909,11 @@ impl<'a> Parser<'a> {
             }
             v.push(self.bool_atom()?);
         }
-        Ok(if v.len() == 1 { v.pop().unwrap() } else { BoolExpr::And(v) })
+        Ok(if v.len() == 1 {
+            v.pop().unwrap()
+        } else {
+            BoolExpr::And(v)
+        })
     }
 
     /// `AND` binds tighter than `OR`.
@@ -782,7 +926,11 @@ impl<'a> Parser<'a> {
             }
             v.push(self.bool_and()?);
         }
-        Ok(if v.len() == 1 { v.pop().unwrap() } else { BoolExpr::Or(v) })
+        Ok(if v.len() == 1 {
+            v.pop().unwrap()
+        } else {
+            BoolExpr::Or(v)
+        })
     }
 
     // ---------------------------------------------------------------- MUTATE
@@ -817,15 +965,29 @@ impl<'a> Parser<'a> {
 
     // ---------------------------------------------------------------- stages
 
+    fn string(&mut self) -> PResult<&'a str> {
+        match self.peek() {
+            Tok::Str(s) => {
+                self.bump();
+                unescape(s).map_err(|_| err(0, 0, "invalid escape"))?;
+                Ok(s)
+            }
+            _ => self.fail("expected string literal"),
+        }
+    }
     fn stage(&mut self) -> PResult<Stage<'a>> {
+        if self.peek() == Tok::LBrace {
+            self.bump();
+            return Ok(Stage::Mutate(self.list(Tok::RBrace, |p| p.mutation())?));
+        }
         let kw_tok = self.tok();
-        let Tok::Ident(kw) = kw_tok.tok else { return self.fail("expected stage keyword") };
+        let Tok::Ident(kw) = kw_tok.tok else {
+            return self.fail("expected stage keyword");
+        };
         self.bump();
-        match kw {
-            "FILTER" => {
-                self.expect(Tok::LParen, "expected `(` after FILTER")?;
+        match kw.to_ascii_uppercase().as_str() {
+            "FILTER" | "WHERE" => {
                 let e = self.bool_or()?;
-                self.expect(Tok::RParen, "expected `)` closing FILTER")?;
                 Ok(Stage::Filter(e))
             }
             "SIMILARITY" => {
@@ -839,16 +1001,30 @@ impl<'a> Parser<'a> {
                     _ => p.fail("vector elements must be numbers"),
                 })?;
                 if vector.len() > MAX_VECTOR_DIMS || vector.iter().any(|x| !x.is_finite()) {
-                    return Err(err(vt.at as usize, self.toks[self.pos - 1].end as usize, "vector too long or not finite"));
+                    return Err(err(
+                        vt.at as usize,
+                        self.toks[self.pos - 1].end as usize,
+                        "vector too long or not finite",
+                    ));
                 }
                 self.expect(Tok::Comma, "expected `,`")?;
                 self.expect_kw("metric", "expected `metric:`")?;
                 self.expect(Tok::Colon, "expected `:`")?;
-                let metric = match self.ident("expected COSINE, L2 or DOT")? {
+                let metric = match self
+                    .ident("expected COSINE, L2 or DOT")?
+                    .to_ascii_uppercase()
+                    .as_str()
+                {
                     "COSINE" => Metric::Cosine,
                     "L2" => Metric::L2,
                     "DOT" => Metric::Dot,
-                    _ => return Err(err(self.toks[self.pos - 1].at as usize, self.toks[self.pos - 1].end as usize, "expected COSINE, L2 or DOT")),
+                    _ => {
+                        return Err(err(
+                            self.toks[self.pos - 1].at as usize,
+                            self.toks[self.pos - 1].end as usize,
+                            "expected COSINE, L2 or DOT",
+                        ));
+                    }
                 };
                 self.expect(Tok::Comma, "expected `,`")?;
                 self.expect_kw("threshold", "expected `threshold:`")?;
@@ -857,33 +1033,64 @@ impl<'a> Parser<'a> {
                 let threshold = match self.literal()? {
                     Literal::Float(f) => f as f32,
                     Literal::Int(i) => i as f32,
-                    _ => return Err(err(tt.at as usize, tt.end as usize, "threshold must be a number")),
+                    _ => {
+                        return Err(err(
+                            tt.at as usize,
+                            tt.end as usize,
+                            "threshold must be a number",
+                        ));
+                    }
                 };
+                if !threshold.is_finite() {
+                    return Err(err(
+                        tt.at as usize,
+                        tt.end as usize,
+                        "threshold is not finite",
+                    ));
+                }
                 if metric == Metric::Cosine && !(-1.0..=1.0).contains(&threshold) {
-                    return Err(err(tt.at as usize, tt.end as usize, "COSINE threshold must be in [-1, 1]"));
+                    return Err(err(
+                        tt.at as usize,
+                        tt.end as usize,
+                        "COSINE threshold must be in [-1, 1]",
+                    ));
                 }
                 self.expect(Tok::RParen, "expected `)` closing SIMILARITY")?;
-                Ok(Stage::Similarity { vector, metric, threshold })
+                Ok(Stage::Similarity {
+                    vector,
+                    metric,
+                    threshold,
+                })
             }
             "MUTATE" => {
                 self.expect(Tok::LBrace, "expected `{` after MUTATE")?;
                 Ok(Stage::Mutate(self.list(Tok::RBrace, |p| p.mutation())?))
             }
-            "PROJECT" => {
+            "PROJECT" | "SELECT" => {
                 self.expect(Tok::LBrace, "expected `{` after PROJECT")?;
                 let items = self.list(Tok::RBrace, |p| {
                     let alias = p.ident("expected projection alias")?;
                     p.expect(Tok::Colon, "expected `:` after alias")?;
-                    Ok(ProjectItem { alias, field: p.field_path()? })
+                    Ok(ProjectItem {
+                        alias,
+                        field: p.field_path()?,
+                    })
                 })?;
                 for (i, it) in items.iter().enumerate() {
                     if items[..i].iter().any(|o| o.alias == it.alias) {
-                        return Err(err(kw_tok.at as usize, self.toks[self.pos - 1].end as usize, "duplicate PROJECT alias"));
+                        return Err(err(
+                            kw_tok.at as usize,
+                            self.toks[self.pos - 1].end as usize,
+                            "duplicate PROJECT alias",
+                        ));
                     }
                 }
                 Ok(Stage::Project(items))
             }
-            "GROUP_BY" => {
+            "GROUP_BY" | "GROUP" => {
+                if kw.eq_ignore_ascii_case("GROUP") {
+                    self.expect_kw("BY", "expected BY")?;
+                }
                 self.expect(Tok::LParen, "expected `(` after GROUP_BY")?;
                 Ok(Stage::GroupBy(self.list(Tok::RParen, |p| p.field_path())?))
             }
@@ -893,7 +1100,11 @@ impl<'a> Parser<'a> {
                     let alias = p.ident("expected aggregate alias")?;
                     p.expect(Tok::Colon, "expected `:` after alias")?;
                     let ft = p.tok();
-                    let func = match p.ident("expected aggregate function")? {
+                    let func = match p
+                        .ident("expected aggregate function")?
+                        .to_ascii_uppercase()
+                        .as_str()
+                    {
                         "COUNT" => AggFunc::Count,
                         "SUM" => AggFunc::Sum,
                         "AVG" => AggFunc::Avg,
@@ -903,19 +1114,33 @@ impl<'a> Parser<'a> {
                         "P50" => AggFunc::P50,
                         "P95" => AggFunc::P95,
                         "P99" => AggFunc::P99,
-                        _ => return Err(err(ft.at as usize, ft.end as usize, "unknown aggregate function")),
+                        _ => {
+                            return Err(err(
+                                ft.at as usize,
+                                ft.end as usize,
+                                "unknown aggregate function",
+                            ));
+                        }
                     };
                     p.expect(Tok::LParen, "expected `(`")?;
-                    let arg = if p.peek() == Tok::RParen { None } else { Some(p.field_path()?) };
+                    let arg = if p.peek() == Tok::RParen {
+                        None
+                    } else {
+                        Some(p.field_path()?)
+                    };
                     p.expect(Tok::RParen, "expected `)`")?;
                     if arg.is_none() && func != AggFunc::Count {
-                        return Err(err(ft.at as usize, ft.end as usize, "only COUNT() may omit its argument"));
+                        return Err(err(
+                            ft.at as usize,
+                            ft.end as usize,
+                            "only COUNT() may omit its argument",
+                        ));
                     }
                     Ok(AggItem { alias, func, arg })
                 })?;
                 Ok(Stage::Reduce(items))
             }
-            "CHECKPOINT_FRAME" => {
+            "CHECKPOINT_FRAME" | "CHECKPOINT" => {
                 self.expect(Tok::LParen, "expected `(`")?;
                 self.expect_kw("intent", "expected `intent:`")?;
                 self.expect(Tok::Colon, "expected `:`")?;
@@ -941,7 +1166,10 @@ impl<'a> Parser<'a> {
                     })?;
                 }
                 self.expect(Tok::RParen, "expected `)`")?;
-                Ok(Stage::CheckpointFrame { intent, constraints })
+                Ok(Stage::CheckpointFrame {
+                    intent,
+                    constraints,
+                })
             }
             "HYDRATE_FRAME" => {
                 self.expect(Tok::LParen, "expected `(`")?;
@@ -949,7 +1177,7 @@ impl<'a> Parser<'a> {
                 self.expect(Tok::RParen, "expected `)`")?;
                 Ok(Stage::HydrateFrame { frame_hash })
             }
-            "TAKE" => {
+            "TAKE" | "LIMIT" => {
                 let t = self.tok();
                 let n = self.uint()?;
                 if n == 0 {
@@ -957,8 +1185,84 @@ impl<'a> Parser<'a> {
                 }
                 Ok(Stage::Take(n))
             }
+            "SEARCH" => {
+                self.expect(Tok::LParen, "expected (`")?;
+                let (mut field, mut query, mut top_k) = (None, None, None);
+                loop {
+                    let key = self.ident("expected search argument")?;
+                    self.expect(Tok::Colon, "expected :")?;
+                    match key {
+                        "field" if field.is_none() => {
+                            let mut parts = vec![self.ident("expected field")?];
+                            while self.peek() == Tok::Dot {
+                                self.bump();
+                                parts.push(self.ident("expected field segment")?);
+                            }
+                            field = Some(parts);
+                        }
+                        "query" if query.is_none() => query = Some(self.string()?),
+                        "top_k" if top_k.is_none() => {
+                            let n = self.uint()?;
+                            if !(1..=1000).contains(&n) {
+                                return self.fail("top_k must be in 1..=1000");
+                            }
+                            top_k = Some(n)
+                        }
+                        _ => return self.fail("unknown or duplicate search argument"),
+                    }
+                    if self.peek() != Tok::Comma {
+                        break;
+                    }
+                    self.bump();
+                }
+                self.expect(Tok::RParen, "expected )")?;
+                Ok(Stage::SearchBm25 {
+                    field: field.ok_or(err(
+                        kw_tok.at as usize,
+                        kw_tok.end as usize,
+                        "missing field",
+                    ))?,
+                    query: query.ok_or(err(
+                        kw_tok.at as usize,
+                        kw_tok.end as usize,
+                        "missing query",
+                    ))?,
+                    top_k: top_k.unwrap_or(10),
+                })
+            }
+            "EXPORT" | "EXPORT_TO" => {
+                if self.is_kw("TO") {
+                    self.bump();
+                }
+                self.expect(Tok::LParen, "expected (")?;
+                let (mut format, mut destination) = (None, None);
+                loop {
+                    let key = self.ident("expected export argument")?;
+                    self.expect(Tok::Colon, "expected :")?;
+                    match key {
+                        "format" if format.is_none() => format = Some(self.string()?),
+                        "destination" if destination.is_none() => {
+                            destination = Some(self.string()?)
+                        }
+                        _ => return self.fail("unknown or duplicate export argument"),
+                    }
+                    if self.peek() != Tok::Comma {
+                        break;
+                    }
+                    self.bump();
+                }
+                self.expect(Tok::RParen, "expected )")?;
+                Ok(Stage::ExportTo {
+                    format: format.ok_or(err(0, 0, "missing format"))?,
+                    destination: destination.ok_or(err(0, 0, "missing destination"))?,
+                })
+            }
             // The fix for the spec's silent drop: anything else is an error.
-            _ => Err(err(kw_tok.at as usize, kw_tok.end as usize, "unknown stage keyword")),
+            _ => Err(err(
+                kw_tok.at as usize,
+                kw_tok.end as usize,
+                "unknown stage keyword",
+            )),
         }
     }
 }
@@ -966,12 +1270,18 @@ impl<'a> Parser<'a> {
 /// Parse and validate. This is the only entry point; there is no "lenient" mode.
 pub fn parse(src: &str) -> PResult<Query<'_>> {
     let toks = lex(src)?;
-    let mut p = Parser { toks, pos: 0, depth: 0 };
+    let mut p = Parser {
+        toks,
+        pos: 0,
+        depth: 0,
+    };
     let source = p.source()?;
     let mut stages = Vec::new();
     let mut stage_at = Vec::new();
-    while p.peek() == Tok::Pipe {
-        p.bump();
+    while p.peek() != Tok::Eof {
+        if p.peek() == Tok::Pipe {
+            p.bump();
+        }
         if stages.len() == MAX_STAGES {
             return p.fail("too many stages");
         }
@@ -990,8 +1300,14 @@ pub fn parse(src: &str) -> PResult<Query<'_>> {
 // Semantic validation
 // =================================================================================
 
-fn visit_paths<'q, 'a>(s: &'q Stage<'a>, f: &mut dyn FnMut(&'q FieldPath<'a>) -> PResult<()>) -> PResult<()> {
-    fn bool_paths<'q, 'a>(e: &'q BoolExpr<'a>, f: &mut dyn FnMut(&'q FieldPath<'a>) -> PResult<()>) -> PResult<()> {
+fn visit_paths<'q, 'a>(
+    s: &'q Stage<'a>,
+    f: &mut dyn FnMut(&'q FieldPath<'a>) -> PResult<()>,
+) -> PResult<()> {
+    fn bool_paths<'q, 'a>(
+        e: &'q BoolExpr<'a>,
+        f: &mut dyn FnMut(&'q FieldPath<'a>) -> PResult<()>,
+    ) -> PResult<()> {
         match e {
             BoolExpr::Pred(p) => f(&p.field),
             BoolExpr::And(v) | BoolExpr::Or(v) => v.iter().try_for_each(|e| bool_paths(e, f)),
@@ -1003,14 +1319,20 @@ fn visit_paths<'q, 'a>(s: &'q Stage<'a>, f: &mut dyn FnMut(&'q FieldPath<'a>) ->
             Mutation::Assign { target, .. } | Mutation::Append { target, .. } => f(target),
         }),
         Stage::Project(items) => items.iter().try_for_each(|i| f(&i.field)),
-        Stage::GroupBy(ps) => ps.iter().try_for_each(|p| f(p)),
-        Stage::Reduce(items) => items.iter().filter_map(|i| i.arg.as_ref()).try_for_each(|p| f(p)),
+        Stage::GroupBy(ps) => ps.iter().try_for_each(&mut *f),
+        Stage::Reduce(items) => items.iter().filter_map(|i| i.arg.as_ref()).try_for_each(f),
         _ => Ok(()),
     }
 }
 
 fn validate(q: &Query<'_>, at: &[(u32, u32)]) -> PResult<()> {
-    let e = |i: usize, msg| Err(ParseError { at: at[i].0, end: at[i].1, msg });
+    let e = |i: usize, msg| {
+        Err(ParseError {
+            at: at[i].0,
+            end: at[i].1,
+            msg,
+        })
+    };
     let tx = match &q.source {
         Source::TxActors(ids) => Some(ids.as_slice()),
         _ => None,
@@ -1019,7 +1341,13 @@ fn validate(q: &Query<'_>, at: &[(u32, u32)]) -> PResult<()> {
     let mut mutates = 0;
     for (i, s) in q.stages.iter().enumerate() {
         match s {
-            Stage::Take(_) if i + 1 != q.stages.len() => return e(i, "TAKE must be the last stage"),
+            Stage::Take(_)
+                if i + 1 != q.stages.len()
+                    && !(i + 2 == q.stages.len()
+                        && matches!(q.stages.last(), Some(Stage::ExportTo { .. }))) =>
+            {
+                return e(i, "TAKE must be the last stage");
+            }
             Stage::Mutate(ms) => {
                 mutates += 1;
                 if mutates > 1 {
@@ -1032,18 +1360,43 @@ fn validate(q: &Query<'_>, at: &[(u32, u32)]) -> PResult<()> {
                     match m {
                         Mutation::Assign { target, op, value } => {
                             if target.root != Root::State || target.path.is_empty() {
-                                return Err(ParseError { at: target.at, end: target.at + 1, msg: "only state.<field> can be assigned" });
+                                return Err(ParseError {
+                                    at: target.at,
+                                    end: target.at + 1,
+                                    msg: "only state.<field> can be assigned",
+                                });
                             }
-                            if *op != AssignOp::Set && !matches!(value, Value::Lit(Literal::Int(_) | Literal::UInt(_) | Literal::Float(_))) {
-                                return Err(ParseError { at: target.at, end: target.at + 1, msg: "`+=` / `-=` need a numeric literal" });
+                            if *op != AssignOp::Set
+                                && !matches!(
+                                    value,
+                                    Value::Lit(
+                                        Literal::Int(_) | Literal::UInt(_) | Literal::Float(_)
+                                    )
+                                )
+                            {
+                                return Err(ParseError {
+                                    at: target.at,
+                                    end: target.at + 1,
+                                    msg: "`+=` / `-=` need a numeric literal",
+                                });
                             }
                         }
                         Mutation::Append { target, value } => {
-                            if !matches!(target.root, Root::Episodes | Root::Semantic) || !target.path.is_empty() {
-                                return Err(ParseError { at: target.at, end: target.at + 1, msg: "append is only valid on `episodes` or `semantic`" });
+                            if !matches!(target.root, Root::Episodes | Root::Semantic)
+                                || !target.path.is_empty()
+                            {
+                                return Err(ParseError {
+                                    at: target.at,
+                                    end: target.at + 1,
+                                    msg: "append is only valid on `episodes` or `semantic`",
+                                });
                             }
                             if !matches!(value, Value::Object(_)) {
-                                return Err(ParseError { at: target.at, end: target.at + 1, msg: "append expects an object literal" });
+                                return Err(ParseError {
+                                    at: target.at,
+                                    end: target.at + 1,
+                                    msg: "append expects an object literal",
+                                });
                             }
                         }
                     }
@@ -1052,19 +1405,36 @@ fn validate(q: &Query<'_>, at: &[(u32, u32)]) -> PResult<()> {
             Stage::GroupBy(_) if !matches!(q.stages.get(i + 1), Some(Stage::Reduce(_))) => {
                 return e(i, "GROUP_BY must be followed by AGGREGATE/REDUCE");
             }
-            Stage::CheckpointFrame { .. } | Stage::HydrateFrame { .. } if !matches!(q.source, Source::Actor(_)) => {
+            Stage::CheckpointFrame { .. } | Stage::HydrateFrame { .. }
+                if !matches!(q.source, Source::Actor(_)) =>
+            {
                 return e(i, "frame stages require a single ACTOR source");
             }
-            Stage::Similarity { .. } if tx.is_some() => return e(i, "SIMILARITY is not supported on TX_ACTORS"),
+            Stage::Similarity { .. } if tx.is_some() => {
+                return e(i, "SIMILARITY is not supported on TX_ACTORS");
+            }
+            Stage::ExportTo { .. } if i + 1 != q.stages.len() => {
+                return e(i, "EXPORT must be the last stage");
+            }
             _ => {}
         }
         visit_paths(s, &mut |p| match (tx, p.actor) {
             (Some(ids), Some(a)) if ids.contains(&a) => Ok(()),
-            (Some(_), Some(_)) => Err(ParseError { at: p.at, end: p.at + 1, msg: "actor(..) is not a participant of TX_ACTORS" }),
-            (Some(_), None) if p.root != Root::Meta => {
-                Err(ParseError { at: p.at, end: p.at + 1, msg: "field paths in TX_ACTORS queries must be qualified with actor(..)" })
-            }
-            (None, Some(_)) => Err(ParseError { at: p.at, end: p.at + 1, msg: "actor(..) qualifier is only valid with TX_ACTORS" }),
+            (Some(_), Some(_)) => Err(ParseError {
+                at: p.at,
+                end: p.at + 1,
+                msg: "actor(..) is not a participant of TX_ACTORS",
+            }),
+            (Some(_), None) if p.root != Root::Meta => Err(ParseError {
+                at: p.at,
+                end: p.at + 1,
+                msg: "field paths in TX_ACTORS queries must be qualified with actor(..)",
+            }),
+            (None, Some(_)) => Err(ParseError {
+                at: p.at,
+                end: p.at + 1,
+                msg: "actor(..) qualifier is only valid with TX_ACTORS",
+            }),
             _ => Ok(()),
         })?;
     }
@@ -1125,6 +1495,56 @@ pub mod spec_examples {
 |> TAKE 5"#;
 }
 
+/// Recheck typed ASTs supplied by callers, including participant and stage bounds.
+pub fn validate_query_ast(q: &Query<'_>) -> PResult<()> {
+    if q.stages.len() > MAX_STAGES {
+        return Err(err(0, 0, "too many stages"));
+    }
+    if let Source::TxActors(ids) = &q.source {
+        if ids.len() < 2
+            || ids.len() > MAX_TX_ACTORS
+            || ids.iter().enumerate().any(|(i, id)| ids[..i].contains(id))
+        {
+            return Err(err(0, 0, "invalid transaction participants"));
+        }
+    }
+    for stage in &q.stages {
+        match stage {
+            Stage::SearchBm25 { top_k, .. } if !(1..=1000).contains(top_k) => {
+                return Err(err(0, 0, "top_k must be in 1..=1000"));
+            }
+            Stage::Take(0) => return Err(err(0, 0, "TAKE must be >= 1")),
+            Stage::Similarity {
+                vector, threshold, ..
+            } if vector.is_empty()
+                || vector.len() > MAX_VECTOR_DIMS
+                || !threshold.is_finite()
+                || vector.iter().any(|x| !x.is_finite()) =>
+            {
+                return Err(err(0, 0, "invalid similarity vector or threshold"));
+            }
+            _ => {}
+        }
+    }
+    validate(q, &vec![(0, 0); q.stages.len()])
+}
+
+/// Actor references are typed nodes, never searched for inside raw query text.
+pub fn referenced_actors(q: &Query<'_>) -> Vec<u64> {
+    let mut ids = Vec::new();
+    for s in &q.stages {
+        let _ = visit_paths(s, &mut |path| {
+            if let Some(id) = path.actor {
+                ids.push(id)
+            }
+            Ok(())
+        });
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::spec_examples::*;
@@ -1140,50 +1560,99 @@ mod tests {
         assert_eq!(q.source, Source::Actor(0x0008_F421));
         let names: Vec<_> = q.stages.iter().map(Stage::name).collect();
         assert_eq!(names, ["FILTER", "MUTATE", "CHECKPOINT_FRAME", "PROJECT"]);
-        let Stage::Mutate(ms) = &q.stages[1] else { panic!() };
+        let Stage::Mutate(ms) = &q.stages[1] else {
+            panic!()
+        };
         assert_eq!(ms.len(), 3);
         match &ms[0] {
             Mutation::Assign { target, op, value } => {
-                assert_eq!((target.root, target.path.clone()), fp(Root::State, &["wallet", "credits"]));
+                assert_eq!(
+                    (target.root, target.path.clone()),
+                    fp(Root::State, &["wallet", "credits"])
+                );
                 assert_eq!(*op, AssignOp::Sub);
                 assert_eq!(*value, Value::Lit(Literal::Int(50)));
             }
             m => panic!("{m:?}"),
         }
         match &ms[2] {
-            Mutation::Append { target, value: Value::Object(kv) } => {
+            Mutation::Append {
+                target,
+                value: Value::Object(kv),
+            } => {
                 assert_eq!(target.root, Root::Episodes);
                 assert_eq!(kv[1], ("output_ref", Value::Ref(0x99A4_F012)));
                 assert_eq!(kv[2], ("status", Value::Lit(Literal::Int(200))));
             }
             m => panic!("{m:?}"),
         }
-        let Stage::Project(items) = &q.stages[3] else { panic!() };
-        assert_eq!(items.iter().map(|i| i.alias).collect::<Vec<_>>(), ["remaining_credits", "tx_epoch", "handoff_frame"]);
-        assert_eq!((items[2].field.root, items[2].field.path.clone()), fp(Root::Frame, &["hash"]));
+        let Stage::Project(items) = &q.stages[3] else {
+            panic!()
+        };
+        assert_eq!(
+            items.iter().map(|i| i.alias).collect::<Vec<_>>(),
+            ["remaining_credits", "tx_epoch", "handoff_frame"]
+        );
+        assert_eq!(
+            (items[2].field.root, items[2].field.path.clone()),
+            fp(Root::Frame, &["hash"])
+        );
     }
 
     #[test]
     fn example_2_tx_actors_with_qualified_paths() {
         let q = parse(EXAMPLE_2).unwrap();
         assert_eq!(q.source, Source::TxActors(vec![0x0008_F421, 0x0009_B104]));
-        let Stage::Mutate(ms) = &q.stages[1] else { panic!() };
-        let Mutation::Assign { target, op: AssignOp::Add, value: Value::Lit(Literal::Float(v)) } = &ms[1] else { panic!() };
+        let Stage::Mutate(ms) = &q.stages[1] else {
+            panic!()
+        };
+        let Mutation::Assign {
+            target,
+            op: AssignOp::Add,
+            value: Value::Lit(Literal::Float(v)),
+        } = &ms[1]
+        else {
+            panic!()
+        };
         assert_eq!(target.actor, Some(0x0009_B104));
         assert_eq!(*v, 1200.0);
-        let Stage::Filter(BoolExpr::And(terms)) = &q.stages[0] else { panic!() };
+        let Stage::Filter(BoolExpr::And(terms)) = &q.stages[0] else {
+            panic!()
+        };
         assert_eq!(terms.len(), 2);
     }
 
     #[test]
     fn example_3_group_by_and_aggregate() {
         let q = parse(EXAMPLE_3).unwrap();
-        assert_eq!(q.source, Source::ScanRange { start: 1, end: 1_000_000 });
-        let Stage::GroupBy(g) = &q.stages[1] else { panic!() };
+        assert_eq!(
+            q.source,
+            Source::ScanRange {
+                start: 1,
+                end: 1_000_000
+            }
+        );
+        let Stage::GroupBy(g) = &q.stages[1] else {
+            panic!()
+        };
         assert_eq!(g.len(), 2);
-        assert_eq!((g[1].root, g[1].path.clone()), fp(Root::State, &["subscription", "billing_cycle"]));
-        let Stage::Reduce(a) = &q.stages[2] else { panic!() };
-        assert_eq!(a.iter().map(|x| x.func).collect::<Vec<_>>(), [AggFunc::Count, AggFunc::CountDistinct, AggFunc::Sum, AggFunc::Avg, AggFunc::P99]);
+        assert_eq!(
+            (g[1].root, g[1].path.clone()),
+            fp(Root::State, &["subscription", "billing_cycle"])
+        );
+        let Stage::Reduce(a) = &q.stages[2] else {
+            panic!()
+        };
+        assert_eq!(
+            a.iter().map(|x| x.func).collect::<Vec<_>>(),
+            [
+                AggFunc::Count,
+                AggFunc::CountDistinct,
+                AggFunc::Sum,
+                AggFunc::Avg,
+                AggFunc::P99
+            ]
+        );
         assert!(a[0].arg.is_none());
         assert_eq!(q.stages[3], Stage::Take(25));
     }
@@ -1191,7 +1660,14 @@ mod tests {
     #[test]
     fn example_4_similarity() {
         let q = parse(EXAMPLE_4).unwrap();
-        let Stage::Similarity { vector, metric, threshold } = &q.stages[0] else { panic!() };
+        let Stage::Similarity {
+            vector,
+            metric,
+            threshold,
+        } = &q.stages[0]
+        else {
+            panic!()
+        };
         assert_eq!(vector, &[0.118f32, -0.742, 0.509, 0.214]);
         assert_eq!((*metric, *threshold), (Metric::Cosine, 0.85));
     }
@@ -1200,7 +1676,9 @@ mod tests {
     fn literal_and_identifier_safety() {
         // `BRAND` contains "AND"; the string contains `|>` and ` AND `.
         let q = parse(r#"ACTOR(1) |> FILTER (state.BRAND == "a |> b AND c" OR state.x IN [1, 2, 3]) |> TAKE 1"#).unwrap();
-        let Stage::Filter(BoolExpr::Or(v)) = &q.stages[0] else { panic!("{:?}", q.stages[0]) };
+        let Stage::Filter(BoolExpr::Or(v)) = &q.stages[0] else {
+            panic!("{:?}", q.stages[0])
+        };
         let BoolExpr::Pred(p) = &v[0] else { panic!() };
         assert_eq!(p.field.path, ["BRAND"]);
         assert_eq!(p.rhs, Value::Lit(Literal::Str("a |> b AND c")));
@@ -1209,38 +1687,95 @@ mod tests {
 
     #[test]
     fn precedence_and_parentheses() {
-        let q = parse("ACTOR(1) |> FILTER (state.a == 1 OR state.b == 2 AND state.c == 3)").unwrap();
-        let Stage::Filter(BoolExpr::Or(v)) = &q.stages[0] else { panic!() };
+        let q =
+            parse("ACTOR(1) |> FILTER (state.a == 1 OR state.b == 2 AND state.c == 3)").unwrap();
+        let Stage::Filter(BoolExpr::Or(v)) = &q.stages[0] else {
+            panic!()
+        };
         assert!(matches!(&v[1], BoolExpr::And(x) if x.len() == 2));
-        let q = parse("ACTOR(1) |> FILTER ((state.a == 1 OR state.b == 2) AND state.c == 3)").unwrap();
-        assert!(matches!(&q.stages[0], Stage::Filter(BoolExpr::And(x)) if matches!(x[0], BoolExpr::Or(_))));
+        let q =
+            parse("ACTOR(1) |> FILTER ((state.a == 1 OR state.b == 2) AND state.c == 3)").unwrap();
+        assert!(
+            matches!(&q.stages[0], Stage::Filter(BoolExpr::And(x)) if matches!(x[0], BoolExpr::Or(_)))
+        );
     }
 
     #[test]
     fn rejections() {
         let cases: &[(&str, &str)] = &[
             ("ACTOR(1) |> FROBNICATE {}", "unknown stage keyword"),
-            ("ACTOR(1) |> TAKE 5 |> PROJECT { a: state.x }", "TAKE must be the last stage"),
-            ("SCAN ACTORS[*] |> MUTATE { state.x = 1 }", "MUTATE is not allowed on SCAN sources (use TX_ACTORS)"),
-            ("SCAN ACTORS[*] |> GROUP_BY (state.r) |> TAKE 3", "GROUP_BY must be followed by AGGREGATE/REDUCE"),
-            ("ACTOR(1) |> MUTATE { meta.last_tx_seq = 1 }", "only state.<field> can be assigned"),
-            ("ACTOR(1) |> MUTATE { state.x += \"a\" }", "`+=` / `-=` need a numeric literal"),
-            ("ACTOR(1) |> MUTATE { state.x == 1 }", "`==` is comparison; use `=` in MUTATE"),
-            ("ACTOR(1) |> FILTER (state.x = 1)", "`=` is assignment; use `==` in FILTER"),
-            ("TX_ACTORS[1, 2] |> MUTATE { actor(3).state.x = 1 }", "actor(..) is not a participant of TX_ACTORS"),
-            ("TX_ACTORS[1, 2] |> MUTATE { state.x = 1 }", "field paths in TX_ACTORS queries must be qualified with actor(..)"),
+            (
+                "ACTOR(1) |> TAKE 5 |> PROJECT { a: state.x }",
+                "TAKE must be the last stage",
+            ),
+            (
+                "SCAN ACTORS[*] |> MUTATE { state.x = 1 }",
+                "MUTATE is not allowed on SCAN sources (use TX_ACTORS)",
+            ),
+            (
+                "SCAN ACTORS[*] |> GROUP_BY (state.r) |> TAKE 3",
+                "GROUP_BY must be followed by AGGREGATE/REDUCE",
+            ),
+            (
+                "ACTOR(1) |> MUTATE { meta.last_tx_seq = 1 }",
+                "only state.<field> can be assigned",
+            ),
+            (
+                "ACTOR(1) |> MUTATE { state.x += \"a\" }",
+                "`+=` / `-=` need a numeric literal",
+            ),
+            (
+                "ACTOR(1) |> MUTATE { state.x == 1 }",
+                "`==` is comparison; use `=` in MUTATE",
+            ),
+            (
+                "ACTOR(1) |> FILTER (state.x = 1)",
+                "`=` is assignment; use `==` in FILTER",
+            ),
+            (
+                "TX_ACTORS[1, 2] |> MUTATE { actor(3).state.x = 1 }",
+                "actor(..) is not a participant of TX_ACTORS",
+            ),
+            (
+                "TX_ACTORS[1, 2] |> MUTATE { state.x = 1 }",
+                "field paths in TX_ACTORS queries must be qualified with actor(..)",
+            ),
             ("TX_ACTORS[1, 1]", "duplicate actor in TX_ACTORS"),
-            ("ACTOR(1) |> PROJECT { a: actor(1).state.x }", "actor(..) qualifier is only valid with TX_ACTORS"),
+            (
+                "ACTOR(1) |> PROJECT { a: actor(1).state.x }",
+                "actor(..) qualifier is only valid with TX_ACTORS",
+            ),
             ("SCAN ACTORS[9..1]", "scan range start > end"),
-            ("ACTOR(1) |> PROJECT { a: state.x, a: state.y }", "duplicate PROJECT alias"),
-            ("ACTOR(1) |> PROJECT { a: profile.x }", "field path must start with state, meta, frame, episodes or semantic"),
-            ("ACTOR(1) |> AGGREGATE { s: SUM() }", "only COUNT() may omit its argument"),
-            ("ACTOR(1) |> MUTATE { state.x = 1 } |> MUTATE { state.y = 2 }", "at most one MUTATE per query (one transaction)"),
-            ("ACTOR(1) |> PROJECT { a: state.x", "expected `,` or closing delimiter"),
+            (
+                "ACTOR(1) |> PROJECT { a: state.x, a: state.y }",
+                "duplicate PROJECT alias",
+            ),
+            (
+                "ACTOR(1) |> PROJECT { a: profile.x }",
+                "field path must start with state, meta, frame, episodes or semantic",
+            ),
+            (
+                "ACTOR(1) |> AGGREGATE { s: SUM() }",
+                "only COUNT() may omit its argument",
+            ),
+            (
+                "ACTOR(1) |> MUTATE { state.x = 1 } |> MUTATE { state.y = 2 }",
+                "at most one MUTATE per query (one transaction)",
+            ),
+            (
+                "ACTOR(1) |> PROJECT { a: state.x",
+                "expected `,` or closing delimiter",
+            ),
             ("ACTOR(0x1_0000_0000_0000_0000)", "integer out of range"),
-            ("ACTOR(1) |> FILTER (state.s == \"open)", "unterminated string literal"),
-            ("ACTOR(1) |> SIMILARITY(vector: [1.0], metric: COSINE, threshold: 2.0)", "COSINE threshold must be in [-1, 1]"),
-            ("ACTOR(1) extra", "expected `|>` or end of query"),
+            (
+                "ACTOR(1) |> FILTER (state.s == \"open)",
+                "unterminated string literal",
+            ),
+            (
+                "ACTOR(1) |> SIMILARITY(vector: [1.0], metric: COSINE, threshold: 2.0)",
+                "COSINE threshold must be in [-1, 1]",
+            ),
+            ("ACTOR(1) extra", "unknown stage keyword"),
         ];
         for (src, msg) in cases {
             let e = parse(src).expect_err(src);
@@ -1252,7 +1787,11 @@ mod tests {
 
     #[test]
     fn limits_are_enforced() {
-        let deep = format!("ACTOR(1) |> MUTATE {{ episodes.append({}1{}) }}", "[".repeat(40), "]".repeat(40));
+        let deep = format!(
+            "ACTOR(1) |> MUTATE {{ episodes.append({}1{}) }}",
+            "[".repeat(40),
+            "]".repeat(40)
+        );
         assert_eq!(parse(&deep).unwrap_err().msg, "nesting too deep");
         let many = format!("ACTOR(1){}", " |> TAKE 1".repeat(MAX_STAGES + 1));
         assert!(parse(&many).is_err());

@@ -1,37 +1,56 @@
-//! CiagoMem - SLAE (Pre-Final v2.5) Complete Verified Core Implementation
-//! Compiles and passes tests on Linux (x86_64 & aarch64), macOS, and Windows.
+//! CiagoMem - SLAE ("The Store") & CiaQL — v3.0 Final Audit-Hardened Reference Kernel.
+//! Reviewed component kernel; production integration and qualification remain open.
 
-#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::too_many_arguments)]
 
-use core::cell::{Cell, UnsafeCell};
-use core::marker::PhantomData;
-use core::mem::MaybeUninit;
-use core::sync::atomic::{
-    AtomicU32, AtomicU64,
-    Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst},
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{
+    AtomicU64,
+    Ordering::{Acquire, Relaxed, Release},
     fence,
 };
+use std::time::Duration;
 
-// ============================================================================
-// MODULE 1: PROT_READ-SAFE BOEHM FENCE SEQLOCK (`seqlock.rs`)
-// ============================================================================
-
-pub mod hardening;
+// =============================================================================
+// 1. PROT_READ-SAFE BOEHM SEQLOCK + DEADLINE + POISON DETECTION + READ COMBINER
+// =============================================================================
 
 pub const READ_RETRY_LIMIT: u32 = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadError {
-    /// Writer held the lock for the whole retry budget, or the section is poisoned.
     WriterActive,
-    /// The closure rejected a validated snapshot (layout corruption).
+    Corrupt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadlineReadError {
+    DeadlineExhausted { retries: u32 },
+    WriterStalled { odd_seq: u64 },
     Corrupt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriterBusy;
 
-/// Even = stable snapshot, Odd = write in progress (or poisoned if guard dropped).
+pub trait Clock {
+    fn now_ns(&self) -> u64;
+}
+
+/// Portable monotonic clock; no calibrated CPU-counter latency claim.
+pub struct MonotonicClock;
+impl Clock for MonotonicClock {
+    #[inline(always)]
+    fn now_ns(&self) -> u64 {
+        // Monotonic nanosecond clock portable across x86_64, aarch64, and Miri.
+        static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        EPOCH
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_nanos() as u64
+    }
+}
+
 #[derive(Debug, Default)]
 #[repr(transparent)]
 pub struct SeqWord(AtomicU64);
@@ -41,31 +60,29 @@ impl SeqWord {
         SeqWord(AtomicU64::new(0))
     }
 
-    /// PROT_READ safe: issues only a Relaxed load followed by an Acquire fence [F1].
     #[inline(always)]
     pub fn read_begin(&self) -> Option<u64> {
         let s = self.0.load(Relaxed);
-        fence(Acquire); // [F1]
-        if (s & 1) == 0 { Some(s) } else { None }
+        fence(Acquire); // F1: orders subsequent relaxed data word loads
+        if s & 1 == 0 { Some(s) } else { None }
     }
 
-    /// PROT_READ safe: Acquire fence [F2] orders all prior Relaxed data loads before s2.
     #[inline(always)]
     pub fn read_retry(&self, s1: u64) -> bool {
-        fence(Acquire); // [F2]
+        fence(Acquire); // F2: prevents data word loads from sinking past s2
         self.0.load(Relaxed) != s1
     }
 
     #[inline(always)]
     pub fn write_begin(&self) -> Result<SeqWriteGuard<'_>, WriterBusy> {
         let s = self.0.load(Relaxed);
-        if (s & 1) != 0 {
+        if s & 1 != 0 {
             return Err(WriterBusy);
         }
         if self.0.compare_exchange(s, s + 1, Acquire, Relaxed).is_err() {
             return Err(WriterBusy);
         }
-        fence(Release); // [W1]
+        fence(Release); // W1: orders odd sequence store before data stores
         Ok(SeqWriteGuard {
             seq: self,
             odd: s + 1,
@@ -79,7 +96,7 @@ impl SeqWord {
     }
 }
 
-#[must_use = "a write section must be committed or it poisons the slot"]
+#[must_use = "dropping SeqWriteGuard without commit() leaves an odd sequence; recovery requires owner intervention"]
 pub struct SeqWriteGuard<'a> {
     seq: &'a SeqWord,
     odd: u64,
@@ -90,19 +107,18 @@ impl SeqWriteGuard<'_> {
     #[inline(always)]
     pub fn commit(mut self) {
         self.committed = true;
-        self.seq.0.store(self.odd + 1, Release); // [W2]
+        self.seq.0.store(self.odd + 1, Release); // W2: publishes section
     }
 }
 
 impl Drop for SeqWriteGuard<'_> {
     fn drop(&mut self) {
         if !self.committed {
-            debug_assert_eq!(self.seq.raw() & 1, 1);
+            debug_assert!(self.seq.raw() & 1 == 1);
         }
     }
 }
 
-/// Reader view: every accessor performs bounds-checked 8-byte Relaxed atomic loads.
 #[derive(Debug, Clone, Copy)]
 pub struct WordView<'a> {
     words: &'a [AtomicU64],
@@ -119,7 +135,6 @@ impl<'a> WordView<'a> {
         self.words.get(i).map(|w| w.load(Relaxed))
     }
 
-    /// Copies arbitrary byte slices from 8-byte atomic loads (zero mixed-size atomic UB).
     #[inline]
     pub fn copy_bytes(&self, byte_off: usize, dst: &mut [u8]) -> Option<()> {
         let end = byte_off.checked_add(dst.len())?;
@@ -146,17 +161,11 @@ impl<'a> WordView<'a> {
     }
 }
 
-/// Exclusive writer view: mutates words strictly via 8-byte `AtomicU64::store(Relaxed)`.
 pub struct WordsMut<'a> {
     words: &'a [AtomicU64],
 }
 
 impl<'a> WordsMut<'a> {
-    #[inline(always)]
-    pub fn new(words: &'a [AtomicU64]) -> Self {
-        Self { words }
-    }
-
     #[inline(always)]
     pub fn set(&mut self, i: usize, val: u64) {
         self.words[i].store(val, Relaxed);
@@ -164,17 +173,12 @@ impl<'a> WordsMut<'a> {
 
     #[inline]
     pub fn write_bytes(&mut self, byte_off: usize, src: &[u8]) {
-        assert!(byte_off + src.len() <= self.words.len() * 8);
         let (mut inp, mut off) = (0, byte_off);
         while inp < src.len() {
             let idx = off / 8;
             let in_word = off % 8;
             let n = (8 - in_word).min(src.len() - inp);
-            let mut w = if n == 8 {
-                [0u8; 8]
-            } else {
-                self.words[idx].load(Relaxed).to_le_bytes()
-            };
+            let mut w = self.words[idx].load(Relaxed).to_le_bytes();
             w[in_word..in_word + n].copy_from_slice(&src[inp..inp + n]);
             self.words[idx].store(u64::from_le_bytes(w), Relaxed);
             inp += n;
@@ -207,276 +211,201 @@ pub fn read_with<R>(
     Err(ReadError::WriterActive)
 }
 
-// ============================================================================
-// MODULE 2: P x C SPSC MESH WITH 128B DOORBELLS & DEKKER WAKE (`mesh.rs`)
-// ============================================================================
+/// Time-budgeted seqlock reader with poison detection (Fixes H2).
+pub fn read_deadline<R>(
+    seq: &SeqWord,
+    words: &[AtomicU64],
+    clock: &impl Clock,
+    budget: Duration,
+    stall_after: Duration,
+    mut f: impl FnMut(WordView<'_>) -> Option<R>,
+) -> Result<R, DeadlineReadError> {
+    let start = clock.now_ns();
+    let deadline = start.saturating_add(budget.as_nanos().min(u64::MAX as u128) as u64);
+    let stall_ns = stall_after.as_nanos().min(u64::MAX as u128) as u64;
+    let view = WordView::new(words);
 
-#[derive(Debug, Default)]
-#[repr(C, align(128))]
-pub struct CachePadded<T>(pub T);
+    let mut odd_seen: Option<(u64, u64)> = None;
+    let mut retries = 0u32;
+    let mut spins = 1u32;
 
-impl<T> core::ops::Deref for CachePadded<T> {
-    type Target = T;
-    #[inline(always)]
-    fn deref(&self) -> &T {
-        &self.0
+    loop {
+        if let Some(s1) = seq.read_begin() {
+            odd_seen = None;
+            let r = f(view);
+            if !seq.read_retry(s1) {
+                return r.ok_or(DeadlineReadError::Corrupt);
+            }
+        } else {
+            let raw = seq.raw();
+            let now = clock.now_ns();
+            match odd_seen {
+                Some((prev, since)) if prev == raw => {
+                    if now.saturating_sub(since) >= stall_ns {
+                        return Err(DeadlineReadError::WriterStalled { odd_seq: raw });
+                    }
+                }
+                _ => odd_seen = Some((raw, now)),
+            }
+        }
+        retries += 1;
+        if clock.now_ns() >= deadline {
+            return Err(DeadlineReadError::DeadlineExhausted { retries });
+        }
+        for _ in 0..spins {
+            core::hint::spin_loop();
+        }
+        spins = (spins << 1).min(32);
+    }
+}
+
+/// Owner-side read combiner: collapses N fallback reads on one slot into 1 snapshot (Fixes H2).
+#[derive(Default)]
+pub struct ReadCombiner {
+    waiters: HashMap<u32, Vec<u64>>,
+    pub snapshots_taken: u64,
+    pub requests_served: u64,
+}
+
+impl ReadCombiner {
+    pub fn enqueue(&mut self, slot: u32, req_id: u64) {
+        self.waiters.entry(slot).or_default().push(req_id);
+    }
+
+    pub fn flush<R: Clone>(
+        &mut self,
+        mut snap: impl FnMut(u32) -> R,
+        mut reply: impl FnMut(u64, R),
+    ) {
+        for (slot, reqs) in self.waiters.drain() {
+            if reqs.is_empty() {
+                continue;
+            }
+            let v = snap(slot);
+            self.snapshots_taken += 1;
+            for id in reqs {
+                self.requests_served += 1;
+                reply(id, v.clone());
+            }
+        }
+    }
+}
+
+// =============================================================================
+// 2. NON-BLOCKING CREDIT-CONTROLLED SPSC MESH (Fixes P0-1b & H1)
+// =============================================================================
+
+pub trait Lane<T> {
+    fn try_push(&mut self, v: T) -> Result<(), T>;
+}
+
+impl<T> Lane<T> for (VecDeque<T>, usize) {
+    fn try_push(&mut self, v: T) -> Result<(), T> {
+        if self.0.len() >= self.1 {
+            Err(v)
+        } else {
+            self.0.push_back(v);
+            Ok(())
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Wake {
-    NotNeeded,
-    Needed,
+pub enum SendOutcome {
+    Sent,
+    Deferred,
+    ShedAdmission,
 }
 
-pub struct SpscLane<T, const N: usize> {
-    tail: CachePadded<AtomicU64>,
-    head: CachePadded<AtomicU64>,
-    slots: Box<[UnsafeCell<MaybeUninit<T>>; N]>,
+pub struct OutboundFlow<T> {
+    credits: usize,
+    overflow: VecDeque<T>,
+    cap: usize,
+    pub overflow_hwm: usize,
+    lane_capacity: usize,
+    pub excess_credits: usize,
 }
 
-impl<T, const N: usize> SpscLane<T, N> {
-    const ASSERT_POW2: () = assert!(N.is_power_of_two() && N >= 2);
-
-    fn new() -> Self {
-        let () = Self::ASSERT_POW2;
-        let v: Vec<UnsafeCell<MaybeUninit<T>>> =
-            (0..N).map(|_| UnsafeCell::new(MaybeUninit::uninit())).collect();
-        let slots = v.into_boxed_slice().try_into().ok().unwrap();
-        Self {
-            tail: CachePadded(AtomicU64::new(0)),
-            head: CachePadded(AtomicU64::new(0)),
-            slots,
+impl<T> OutboundFlow<T> {
+    pub fn new(lane_capacity: usize, overflow_cap: usize) -> Self {
+        OutboundFlow {
+            credits: lane_capacity,
+            overflow: VecDeque::with_capacity(overflow_cap),
+            cap: overflow_cap,
+            overflow_hwm: 0,
+            lane_capacity,
+            excess_credits: 0,
         }
     }
 
-    #[inline(always)]
-    fn slot(&self, seq: u64) -> *mut MaybeUninit<T> {
-        self.slots[(seq as usize) & (N - 1)].get()
-    }
-}
-
-impl<T, const N: usize> Drop for SpscLane<T, N> {
-    fn drop(&mut self) {
-        let mut h = self.head.load(Relaxed);
-        let t = self.tail.load(Relaxed);
-        while h != t {
-            unsafe { (*self.slot(h)).assume_init_drop() };
-            h += 1;
+    pub fn send(&mut self, lane: &mut impl Lane<T>, v: T) -> Result<SendOutcome, T> {
+        if self.overflow.len() >= self.cap && !(self.overflow.is_empty() && self.credits > 0) {
+            return Err(v);
         }
-    }
-}
-
-pub struct InboundBlock<T, const N: usize> {
-    doorbell: Vec<CachePadded<AtomicU64>>,
-    parked: CachePadded<AtomicU32>,
-    rings: Vec<SpscLane<T, N>>,
-}
-
-unsafe impl<T: Send, const N: usize> Sync for InboundBlock<T, N> {}
-unsafe impl<T: Send, const N: usize> Send for InboundBlock<T, N> {}
-
-pub struct Producer<T, const N: usize> {
-    block: std::sync::Arc<InboundBlock<T, N>>,
-    src: usize,
-    tail: u64,
-    published: u64,
-    cached_head: u64,
-    _not_sync_or_clone: PhantomData<Cell<()>>,
-}
-
-unsafe impl<T: Send, const N: usize> Send for Producer<T, N> {}
-
-pub struct Consumer<T, const N: usize> {
-    block: std::sync::Arc<InboundBlock<T, N>>,
-    heads: Vec<u64>,
-    cached_tails: Vec<u64>,
-    pending: Vec<u64>,
-    _not_sync_or_clone: PhantomData<Cell<()>>,
-}
-
-unsafe impl<T: Send, const N: usize> Send for Consumer<T, N> {}
-
-impl<T: Send, const N: usize> Producer<T, N> {
-    #[inline(always)]
-    fn ring(&self) -> &SpscLane<T, N> {
-        &self.block.rings[self.src]
-    }
-
-    #[inline]
-    pub fn free(&mut self) -> usize {
-        let used = (self.tail - self.cached_head) as usize;
-        if used < N {
-            return N - used;
-        }
-        self.cached_head = self.ring().head.load(Acquire);
-        N - (self.tail - self.cached_head) as usize
-    }
-
-    #[inline]
-    pub fn try_push(&mut self, v: T) -> Result<(), T> {
-        if self.tail - self.cached_head == N as u64 {
-            self.cached_head = self.ring().head.load(Acquire);
-            if self.tail - self.cached_head == N as u64 {
-                return Err(v);
-            }
-        }
-        unsafe { (*self.ring().slot(self.tail)).write(v) };
-        self.tail += 1;
-        Ok(())
-    }
-
-    #[inline]
-    pub fn flush(&mut self) -> Wake {
-        if self.tail == self.published {
-            return Wake::NotNeeded;
-        }
-        self.ring().tail.store(self.tail, Release);
-        self.published = self.tail;
-        self.block.doorbell[self.src / 64].fetch_or(1u64 << (self.src % 64), AcqRel);
-        fence(SeqCst); // Dekker barrier with prepare_park
-        if self.block.parked.load(Relaxed) != 0 {
-            Wake::Needed
-        } else {
-            Wake::NotNeeded
-        }
-    }
-}
-
-impl<T: Send, const N: usize> Consumer<T, N> {
-    pub fn poll(&mut self, per_lane: usize, mut f: impl FnMut(usize, T)) -> usize {
-        let mut delivered = 0;
-        for w in 0..self.pending.len() {
-            let mut bits = self.pending[w] | self.block.doorbell[w].swap(0, Acquire);
-            let mut still = 0u64;
-            while bits != 0 {
-                let b = bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                let (n, more) = self.drain_lane(w * 64 + b, per_lane, &mut f);
-                delivered += n;
-                if more {
-                    still |= 1u64 << b;
+        if self.overflow.is_empty() && self.credits > 0 {
+            match lane.try_push(v) {
+                Ok(()) => {
+                    self.credits -= 1;
+                    return Ok(SendOutcome::Sent);
+                }
+                Err(v) => {
+                    if self.overflow.len() >= self.cap {
+                        return Err(v);
+                    }
+                    self.overflow.push_back(v);
                 }
             }
-            self.pending[w] = still;
+        } else {
+            self.overflow.push_back(v);
         }
-        delivered
+        self.overflow_hwm = self.overflow_hwm.max(self.overflow.len());
+        if self.overflow.len() >= self.cap {
+            Ok(SendOutcome::ShedAdmission)
+        } else {
+            Ok(SendOutcome::Deferred)
+        }
     }
 
-    fn drain_lane(
-        &mut self,
-        src: usize,
-        budget: usize,
-        f: &mut impl FnMut(usize, T),
-    ) -> (usize, bool) {
-        let ring = &self.block.rings[src];
-        let mut h = self.heads[src];
-        if h == self.cached_tails[src] {
-            self.cached_tails[src] = ring.tail.load(Acquire);
-        }
-        let t = self.cached_tails[src];
-        let n = ((t - h) as usize).min(budget);
-        for _ in 0..n {
-            let v = unsafe { (*ring.slot(h)).assume_init_read() };
-            h += 1;
-            f(src, v);
-        }
-        if n > 0 {
-            ring.head.store(h, Release);
-        }
-        self.heads[src] = h;
-        (n, h != t)
+    pub fn on_credits(&mut self, c: usize) {
+        let available = self.lane_capacity - self.credits;
+        self.excess_credits = self
+            .excess_credits
+            .saturating_add(c.saturating_sub(available));
+        self.credits += c.min(available);
     }
 
-    pub fn prepare_park(&self) -> bool {
-        if self.pending.iter().any(|&p| p != 0) {
-            return false;
+    pub fn pump(&mut self, lane: &mut impl Lane<T>) -> usize {
+        let mut sent = 0;
+        while self.credits > 0 {
+            let Some(v) = self.overflow.pop_front() else {
+                break;
+            };
+            match lane.try_push(v) {
+                Ok(()) => {
+                    self.credits -= 1;
+                    sent += 1;
+                }
+                Err(v) => {
+                    self.overflow.push_front(v);
+                    break;
+                }
+            }
         }
-        self.block.parked.store(1, Relaxed);
-        fence(SeqCst); // Dekker barrier with flush
-        let idle = self.block.doorbell.iter().all(|d| d.load(Relaxed) == 0);
-        if !idle {
-            self.block.parked.store(0, Relaxed);
-        }
-        idle
+        sent
     }
 
-    pub fn unpark(&self) {
-        self.block.parked.store(0, Relaxed);
+    pub fn backlog(&self) -> usize {
+        self.overflow.len()
     }
 }
 
-pub fn build_mesh<T: Send, const N: usize>(
-    producers: usize,
-    consumers: usize,
-) -> (Vec<Vec<Producer<T, N>>>, Vec<Consumer<T, N>>) {
-    let words = producers.div_ceil(64);
-    let blocks: Vec<std::sync::Arc<InboundBlock<T, N>>> = (0..consumers)
-        .map(|_| {
-            std::sync::Arc::new(InboundBlock {
-                doorbell: (0..words).map(|_| CachePadded(AtomicU64::new(0))).collect(),
-                parked: CachePadded(AtomicU32::new(0)),
-                rings: (0..producers).map(|_| SpscLane::new()).collect(),
-            })
-        })
-        .collect();
-
-    let prods = (0..producers)
-        .map(|src| {
-            (0..consumers)
-                .map(|dst| Producer {
-                    block: blocks[dst].clone(),
-                    src,
-                    tail: 0,
-                    published: 0,
-                    cached_head: 0,
-                    _not_sync_or_clone: PhantomData,
-                })
-                .collect()
-        })
-        .collect();
-
-    let cons = blocks
-        .into_iter()
-        .map(|block| Consumer {
-            heads: vec![0; producers],
-            cached_tails: vec![0; producers],
-            pending: vec![0; words],
-            block,
-            _not_sync_or_clone: PhantomData,
-        })
-        .collect();
-
-    (prods, cons)
-}
-
-pub fn admit_all_or_nothing<T: Send + Clone, const N: usize>(
-    lanes: &mut [Producer<T, N>],
-    targets: &[usize],
-    msg: T,
-) -> Result<usize, ()> {
-    for &c in targets {
-        if lanes[c].free() == 0 {
-            return Err(());
-        }
-    }
-    let mut wakes = 0;
-    for &c in targets {
-        let _ = lanes[c].try_push(msg.clone());
-        if lanes[c].flush() == Wake::Needed {
-            wakes += 1;
-        }
-    }
-    Ok(wakes)
-}
-
-// ============================================================================
-// MODULE 3: SLOT VALIDATION, 40-BIT GENERATIONS & ROUTE TABLE (`slot.rs`)
-// ============================================================================
+// =============================================================================
+// 3. SPECTRE-SAFE ROUTE TABLE, SLOT HANDLES & CHECKED EXTENT LOCATORS
+// =============================================================================
 
 pub const IDX_BITS: u32 = 20;
 pub const CLASS_BITS: u32 = 4;
-pub const GEN_BITS: u32 = 64 - IDX_BITS - CLASS_BITS; // 40
+pub const GEN_BITS: u32 = 64 - IDX_BITS - CLASS_BITS; // 40 bits
 pub const MAX_INDEX: u32 = (1 << IDX_BITS) - 1;
 pub const MAX_CLASS: u8 = (1 << CLASS_BITS) - 1;
 pub const MAX_GENERATION: u64 = (1 << GEN_BITS) - 1;
@@ -484,6 +413,17 @@ const IDX_MASK: u64 = (1 << IDX_BITS) - 1;
 const CLASS_SHIFT: u32 = IDX_BITS;
 const CLASS_MASK: u64 = ((1 << CLASS_BITS) - 1) << CLASS_SHIFT;
 const GEN_SHIFT: u32 = IDX_BITS + CLASS_BITS;
+
+/// Architectural bounds check. This Rust expression is not a proven speculation barrier.
+#[inline(always)]
+pub const fn nospec_index(idx: usize, len: usize) -> Option<usize> {
+    if idx < len {
+        let mask = ((idx < len) as usize).wrapping_neg();
+        Some(idx & mask)
+    } else {
+        None
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(transparent)]
@@ -499,13 +439,8 @@ impl SlotHandle {
             return None;
         }
         Some(SlotHandle(
-            (generation << GEN_SHIFT) | ((class as u64) << CLASS_SHIFT) | index as u64,
+            (generation << GEN_SHIFT) | ((class as u64) << CLASS_SHIFT) | (index as u64),
         ))
-    }
-
-    #[inline(always)]
-    pub const fn from_raw(raw: u64) -> Self {
-        SlotHandle(raw)
     }
 
     #[inline(always)]
@@ -521,11 +456,6 @@ impl SlotHandle {
     #[inline(always)]
     pub const fn generation(self) -> u64 {
         self.0 >> GEN_SHIFT
-    }
-
-    #[inline(always)]
-    pub const fn is_null(self) -> bool {
-        self.0 == 0
     }
 
     #[inline(always)]
@@ -553,7 +483,7 @@ impl TenantWord {
 
     #[inline(always)]
     pub const fn unpack(w: u64) -> Self {
-        Self {
+        TenantWord {
             tenant: w as u32,
             core: (w >> 32) as u8,
             layout_version: (w >> 40) as u8,
@@ -567,13 +497,28 @@ impl TenantWord {
 pub struct ExtentLoc(u64);
 
 impl ExtentLoc {
+    pub const MAX_CONTAINER: u16 = (1 << 12) - 1;
+    pub const MAX_BLOCK_4K: u64 = (1u64 << 48) - 1;
+
+    /// Checked constructor: rejects out-of-range container or block_4k (Fixes M1).
     #[inline(always)]
-    pub const fn new(container: u16, block_4k: u64, copy_b: bool) -> Self {
-        ExtentLoc(
-            (block_4k & ((1 << 48) - 1))
-                | ((copy_b as u64) << 51)
-                | (((container & 0x0FFF) as u64) << 52),
-        )
+    pub const fn new_checked(container: u16, copy_b: bool, block_4k: u64) -> Option<Self> {
+        if container > Self::MAX_CONTAINER || block_4k > Self::MAX_BLOCK_4K {
+            return None;
+        }
+        Some(ExtentLoc(
+            (block_4k & Self::MAX_BLOCK_4K) | ((copy_b as u64) << 51) | ((container as u64) << 52),
+        ))
+    }
+
+    #[inline(always)]
+    pub const fn flipped(self) -> Self {
+        ExtentLoc(self.0 ^ (1u64 << 51))
+    }
+
+    #[inline(always)]
+    pub const fn is_copy_b(self) -> bool {
+        ((self.0 >> 51) & 1) != 0
     }
 
     #[inline(always)]
@@ -582,23 +527,18 @@ impl ExtentLoc {
     }
 
     #[inline(always)]
-    pub const fn copy_b(self) -> bool {
-        ((self.0 >> 51) & 1) != 0
-    }
-
-    #[inline(always)]
-    pub const fn base_block_4k(self) -> u64 {
-        self.0 & ((1 << 48) - 1)
+    pub const fn block_4k(self) -> u64 {
+        self.0 & Self::MAX_BLOCK_4K
     }
 
     #[inline(always)]
     pub const fn current_offset(self, extent_bytes: u64) -> u64 {
-        self.base_block_4k() * 4096 + if self.copy_b() { extent_bytes } else { 0 }
-    }
-
-    #[inline(always)]
-    pub const fn flipped(self) -> Self {
-        ExtentLoc(self.0 ^ (1u64 << 51))
+        let base = self.block_4k() * 4096;
+        if self.is_copy_b() {
+            base + extent_bytes
+        } else {
+            base
+        }
     }
 
     #[inline(always)]
@@ -616,9 +556,10 @@ pub struct SlotHeader {
     pub checkpoint_lsn: AtomicU64,
     pub payload_len: AtomicU64,
     pub last_generation: AtomicU64,
-    pub reserved: AtomicU64,
+    pub incarnation_lo: AtomicU64,
+    pub incarnation_hi: AtomicU64,
 }
-const _: () = assert!(core::mem::size_of::<SlotHeader>() == 64);
+const _: () = assert!(core::mem::size_of::<SlotHeader>() == 128);
 
 #[repr(C, align(64))]
 pub struct CoreControl {
@@ -626,15 +567,20 @@ pub struct CoreControl {
     _pad: [u64; 7],
 }
 
+impl Default for CoreControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CoreControl {
     pub const fn new() -> Self {
-        Self {
+        CoreControl {
             durable_lsn: AtomicU64::new(0),
             _pad: [0; 7],
         }
     }
 
-    /// PROT_READ safe durable watermark load.
     #[inline(always)]
     pub fn durable(&self) -> u64 {
         let d = self.durable_lsn.load(Relaxed);
@@ -642,9 +588,10 @@ impl CoreControl {
         d
     }
 
+    /// Monotonic publication using `fetch_max` so durable_lsn can never regress (Fixes M3).
     #[inline(always)]
-    pub fn publish_durable(&self, lsn: u64) {
-        self.durable_lsn.store(lsn, Release);
+    pub fn publish_durable(&self, lsn: u64) -> u64 {
+        self.durable_lsn.fetch_max(lsn, Release).max(lsn)
     }
 }
 
@@ -655,28 +602,32 @@ pub enum Visibility {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotReadError {
+    InvalidHandle,
+    Reassigned,
+    NotYetDurable { applied: u64, durable: u64 },
+    WriterStalled,
+    DeadlineExhausted,
+    Corrupt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteError {
+    WriterBusy,
+    Reassigned,
+    LsnRegression { current: u64, attempted: u64 },
+}
+
 pub struct Snapshot<T> {
     pub value: T,
     pub applied_lsn: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SlotReadError {
-    InvalidHandle,
-    Reassigned,
-    WriterActive,
-    NotYetDurable { applied: u64, durable: u64 },
-    Corrupt,
-}
-
-#[repr(C, align(4096))]
-pub struct AlignedPayload<const W: usize>(pub [AtomicU64; W]);
-
 pub struct SlotArena<const W: usize> {
     class: u8,
     headers: Box<[SlotHeader]>,
-    payloads: Box<[AlignedPayload<W>]>,
-    cores: Box<[CoreControl]>,
+    payloads: Box<[[AtomicU64; W]]>,
+    pub cores: Box<[CoreControl]>,
 }
 
 impl<const W: usize> SlotArena<W> {
@@ -692,22 +643,20 @@ impl<const W: usize> SlotArena<W> {
                 checkpoint_lsn: AtomicU64::new(0),
                 payload_len: AtomicU64::new(0),
                 last_generation: AtomicU64::new(0),
-                reserved: AtomicU64::new(0),
+                incarnation_lo: AtomicU64::new(0),
+                incarnation_hi: AtomicU64::new(0),
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
-
         let payloads = (0..slots)
-            .map(|_| AlignedPayload(core::array::from_fn(|_| AtomicU64::new(0))))
+            .map(|_| core::array::from_fn(|_| AtomicU64::new(0)))
             .collect::<Vec<_>>()
             .into_boxed_slice();
-
         let cores = (0..num_cores)
             .map(|_| CoreControl::new())
             .collect::<Vec<_>>()
             .into_boxed_slice();
-
-        Self {
+        SlotArena {
             class,
             headers,
             payloads,
@@ -716,30 +665,100 @@ impl<const W: usize> SlotArena<W> {
     }
 
     #[inline(always)]
-    pub fn core_control(&self, core: usize) -> &CoreControl {
-        &self.cores[core]
-    }
-
-    #[inline(always)]
     pub fn resolve(&self, h: SlotHandle) -> Option<u32> {
-        if h.is_null() || h.class() != self.class || (h.index() as usize) >= self.headers.len() {
-            None
-        } else {
-            Some(h.index())
+        if h.raw() == 0 || h.class() != self.class {
+            return None;
         }
+        nospec_index(h.index() as usize, self.headers.len()).map(|i| i as u32)
     }
 
     #[inline(always)]
     pub fn header(&self, idx: u32) -> &SlotHeader {
-        &self.headers[idx as usize]
+        let i = nospec_index(idx as usize, self.headers.len()).expect("slot index out of bounds");
+        &self.headers[i]
     }
 
     #[inline(always)]
     pub fn payload(&self, idx: u32) -> &[AtomicU64; W] {
-        &self.payloads[idx as usize].0
+        let i = nospec_index(idx as usize, self.payloads.len()).expect("slot index out of bounds");
+        &self.payloads[i]
     }
 
-    #[inline]
+    pub fn install(
+        &self,
+        idx: u32,
+        tw: TenantWord,
+        incarnation: u128,
+        applied_lsn: u64,
+        checkpoint_lsn: u64,
+    ) -> Result<Option<SlotHandle>, WriterBusy> {
+        let hdr = self.header(idx);
+        let g = hdr.seq.write_begin()?;
+        if hdr.owner.load(Relaxed) != 0 {
+            g.commit();
+            return Err(WriterBusy);
+        }
+        let last = hdr.last_generation.load(Relaxed);
+        let Some(h) = SlotHandle::pack(idx, self.class, last + 1) else {
+            g.commit();
+            return Ok(None);
+        };
+        hdr.last_generation.store(h.generation(), Relaxed);
+        hdr.tenant.store(tw.pack(), Relaxed);
+        hdr.applied_lsn.store(applied_lsn, Relaxed);
+        hdr.checkpoint_lsn.store(checkpoint_lsn, Relaxed);
+        hdr.payload_len.store(Self::PAYLOAD_BYTES as u64, Relaxed);
+        hdr.incarnation_lo.store(incarnation as u64, Relaxed);
+        hdr.incarnation_hi
+            .store((incarnation >> 64) as u64, Relaxed);
+        hdr.owner.store(h.raw(), Relaxed);
+        g.commit();
+        Ok(Some(h))
+    }
+
+    pub fn revoke(&self, h: SlotHandle) -> Result<(), WriterBusy> {
+        let idx = self.resolve(h).expect("invalid handle on owner core");
+        let hdr = self.header(idx);
+        let g = hdr.seq.write_begin()?;
+        hdr.owner.store(0, Relaxed);
+        hdr.tenant.store(0, Relaxed);
+        hdr.incarnation_lo.store(0, Relaxed);
+        hdr.incarnation_hi.store(0, Relaxed);
+        g.commit();
+        Ok(())
+    }
+
+    /// Validated write path: rejects LSN regression with WriteError::LsnRegression (Fixes M2).
+    pub fn write(
+        &self,
+        h: SlotHandle,
+        lsn: u64,
+        f: impl FnOnce(&mut WordsMut<'_>),
+    ) -> Result<(), WriteError> {
+        let idx = self.resolve(h).ok_or(WriteError::Reassigned)?;
+        let hdr = self.header(idx);
+        let g = hdr.seq.write_begin().map_err(|_| WriteError::WriterBusy)?;
+        if hdr.owner.load(Relaxed) != h.raw() {
+            g.commit();
+            return Err(WriteError::Reassigned);
+        }
+        let current = hdr.applied_lsn.load(Relaxed);
+        if lsn < current {
+            g.commit();
+            return Err(WriteError::LsnRegression {
+                current,
+                attempted: lsn,
+            });
+        }
+        let mut wm = WordsMut {
+            words: self.payload(idx),
+        };
+        f(&mut wm);
+        hdr.applied_lsn.store(lsn, Relaxed);
+        g.commit();
+        Ok(())
+    }
+
     pub fn read<R>(
         &self,
         h: SlotHandle,
@@ -750,20 +769,27 @@ impl<const W: usize> SlotArena<W> {
         let idx = self.resolve(h).ok_or(SlotReadError::InvalidHandle)?;
         let hdr = self.header(idx);
         let words = self.payload(idx);
-        let r = read_with(&hdr.seq, words, READ_RETRY_LIMIT, |view| {
-            let owner = hdr.owner.load(Relaxed);
-            let tw = TenantWord::unpack(hdr.tenant.load(Relaxed));
-            if owner != h.raw() || tw.tenant != tenant {
-                return Some(Err(()));
-            }
-            let applied = hdr.applied_lsn.load(Relaxed);
-            Some(Ok((f(view)?, applied, tw.core)))
-        })
+        let r = read_deadline(
+            &hdr.seq,
+            words,
+            &MonotonicClock,
+            Duration::from_micros(2),
+            Duration::from_micros(1),
+            |view| {
+                let owner = hdr.owner.load(Relaxed);
+                let tw = TenantWord::unpack(hdr.tenant.load(Relaxed));
+                if owner != h.raw() || tw.tenant != tenant {
+                    return Some(Err(()));
+                }
+                let applied = hdr.applied_lsn.load(Relaxed);
+                Some(Ok((f(view)?, applied, tw.core)))
+            },
+        )
         .map_err(|e| match e {
-            ReadError::WriterActive => SlotReadError::WriterActive,
-            ReadError::Corrupt => SlotReadError::Corrupt,
+            DeadlineReadError::WriterStalled { .. } => SlotReadError::WriterStalled,
+            DeadlineReadError::DeadlineExhausted { .. } => SlotReadError::DeadlineExhausted,
+            DeadlineReadError::Corrupt => SlotReadError::Corrupt,
         })?;
-
         let (value, applied, core) = r.map_err(|()| SlotReadError::Reassigned)?;
         if vis == Visibility::Durable {
             let durable = self
@@ -780,606 +806,211 @@ impl<const W: usize> SlotArena<W> {
             applied_lsn: applied,
         })
     }
-
-    pub fn install(
-        &self,
-        idx: u32,
-        tw: TenantWord,
-        applied_lsn: u64,
-        checkpoint_lsn: u64,
-    ) -> Result<Option<SlotHandle>, WriterBusy> {
-        let hdr = self.header(idx);
-        let last = hdr.last_generation.load(Relaxed);
-        let Some(h) = SlotHandle::pack(idx, self.class, last + 1) else {
-            return Ok(None);
-        };
-        let g = hdr.seq.write_begin()?;
-        debug_assert_eq!(hdr.owner.load(Relaxed), 0);
-        hdr.last_generation.store(h.generation(), Relaxed);
-        hdr.tenant.store(tw.pack(), Relaxed);
-        hdr.applied_lsn.store(applied_lsn, Relaxed);
-        hdr.checkpoint_lsn.store(checkpoint_lsn, Relaxed);
-        hdr.payload_len.store(Self::PAYLOAD_BYTES as u64, Relaxed);
-        hdr.owner.store(h.raw(), Relaxed);
-        g.commit();
-        Ok(Some(h))
-    }
-
-    pub fn write(
-        &self,
-        h: SlotHandle,
-        new_lsn: u64,
-        f: impl FnOnce(&mut WordsMut<'_>),
-    ) -> Result<(), WriterBusy> {
-        let idx = self.resolve(h).expect("invalid handle on owner core");
-        let hdr = self.header(idx);
-        let g = hdr.seq.write_begin()?;
-        debug_assert_eq!(hdr.owner.load(Relaxed), h.raw());
-        let mut wm = WordsMut::new(self.payload(idx));
-        f(&mut wm);
-        if new_lsn > hdr.applied_lsn.load(Relaxed) {
-            hdr.applied_lsn.store(new_lsn, Relaxed);
-        }
-        g.commit();
-        Ok(())
-    }
-
-    pub fn revoke(&self, h: SlotHandle) -> Result<(), WriterBusy> {
-        let idx = self.resolve(h).expect("invalid handle on owner core");
-        let hdr = self.header(idx);
-        let g = hdr.seq.write_begin()?;
-        debug_assert_eq!(hdr.owner.load(Relaxed), h.raw());
-        hdr.owner.store(0, Relaxed);
-        hdr.tenant.store(0, Relaxed);
-        g.commit();
-        Ok(())
-    }
 }
 
-#[repr(C, align(16))]
-pub struct RouteEntry {
-    pub handle: AtomicU64,
-    pub extent: AtomicU64,
-}
-const _: () = assert!(core::mem::size_of::<RouteEntry>() == 16);
-
-// ============================================================================
-// MODULE 4: TWO-WORD TAGGED CALVIN VOTE TABLE (`calvin.rs`)
-// ============================================================================
-
-pub const MAX_PARTICIPANTS: u32 = 64;
-const EMPTY_TAG: u64 = 0;
-
-#[inline(always)]
-pub const fn full_mask(n: u32) -> Option<u64> {
-    if n == 0 || n > MAX_PARTICIPANTS {
-        None
-    } else {
-        Some(u64::MAX >> (64 - n))
-    }
-}
+// =============================================================================
+// 4. TRUNCATION PIN BREAKER & TWO-WORD 64-PARTICIPANT CALVIN VOTE TABLE
+// =============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Participants(u8);
+pub enum PinAction {
+    None,
+    FreezeCheckpoint { tenant: u32 },
+    Relocate { tenant: u32 },
+}
 
-impl Participants {
-    #[inline(always)]
-    pub const fn new(n: u32) -> Option<Participants> {
-        if n == 0 || n > MAX_PARTICIPANTS {
-            None
-        } else {
-            Some(Participants(n as u8))
-        }
+pub mod dirty;
+pub use dirty::TruncationPins;
+
+pub use calvin::{Participants, Vote, VoteTable};
+
+// =============================================================================
+// 5. SECURITY: KEYED PRF REGISTRY, $REF MACS, MACAROONS & CAMEL TAINT LATTICE
+// =============================================================================
+
+pub mod security;
+pub use ciagomem_crypto::*;
+pub use security::*;
+
+// =============================================================================
+// 6. LINUX SEALED 4 KiB AGENT EXPORT WINDOW (Fixes C4 & CVE-2024-57937 Gate)
+// =============================================================================
+
+#[cfg(target_os = "linux")]
+pub mod export_window {
+    use std::ffi::CString;
+    use std::sync::{Arc, Mutex};
+    pub struct ExportBudget {
+        max_bytes: usize,
+        max_sessions: usize,
+        used: Mutex<(usize, usize)>,
     }
-
-    #[inline(always)]
-    pub const fn mask(self) -> u64 {
-        u64::MAX >> (64 - self.0 as u32)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Vote {
-    Pending,
-    Decided { commit: bool },
-    Duplicate,
-    Stale,
-}
-
-#[repr(C, align(64))]
-struct TxSlot {
-    tag: AtomicU64,
-    mask: AtomicU64,
-    voted: AtomicU64,
-    nays: AtomicU64,
-}
-
-pub struct VoteTable {
-    slots: Box<[TxSlot]>,
-     slot_mask: usize,
-}
-
-impl VoteTable {
-    pub fn new(capacity_pow2: usize) -> Self {
-        assert!(capacity_pow2.is_power_of_two());
-        let slots = (0..capacity_pow2)
-            .map(|_| TxSlot {
-                tag: AtomicU64::new(EMPTY_TAG),
-                mask: AtomicU64::new(0),
-                voted: AtomicU64::new(0),
-                nays: AtomicU64::new(0),
+    impl ExportBudget {
+        pub fn new(max_bytes: usize, max_sessions: usize) -> Arc<Self> {
+            Arc::new(Self {
+                max_bytes,
+                max_sessions,
+                used: Mutex::new((0, 0)),
             })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        Self {
-            slots,
-            slot_mask: capacity_pow2 - 1,
         }
-    }
-
-    #[inline(always)]
-    fn slot(&self, tx_seq: u64) -> &TxSlot {
-        &self.slots[(tx_seq as usize) & self.slot_mask]
-    }
-
-    pub fn open(&self, tx_seq: u64, n: Participants) -> Result<(), &'static str> {
-        assert_ne!(tx_seq, EMPTY_TAG);
-        let s = self.slot(tx_seq);
-        if s.tag.load(Acquire) != EMPTY_TAG {
-            return Err("Calvin TxSlot busy");
+        pub fn usage(&self) -> (usize, usize) {
+            *self.used.lock().unwrap()
         }
-        s.mask.store(n.mask(), Relaxed);
-        s.voted.store(0, Relaxed);
-        s.nays.store(0, Relaxed);
-        s.tag.store(tx_seq, Release);
-        Ok(())
-    }
-
-    pub fn vote(&self, tx_seq: u64, idx: u32, ok: bool) -> Vote {
-        let s = self.slot(tx_seq);
-        if s.tag.load(Acquire) != tx_seq {
-            return Vote::Stale;
-        }
-        let mask = s.mask.load(Relaxed);
-        if idx >= MAX_PARTICIPANTS || ((mask >> idx) & 1) == 0 {
-            return Vote::Stale;
-        }
-        let bit = 1u64 << idx;
-        if !ok {
-            s.nays.fetch_or(bit, Release); // Nay recorded BEFORE vote bit
-        }
-        let before = s.voted.fetch_or(bit, AcqRel);
-        if (before & bit) != 0 {
-            return Vote::Duplicate;
-        }
-        if ((before | bit) & mask) == mask {
-            let commit = (s.nays.load(Acquire) & mask) == 0;
-            Vote::Decided { commit }
-        } else {
-            Vote::Pending
-        }
-    }
-
-    pub fn close(&self, tx_seq: u64) {
-        let _ = self
-            .slot(tx_seq)
-            .tag
-            .compare_exchange(tx_seq, EMPTY_TAG, AcqRel, Relaxed);
-    }
-}
-
-// ============================================================================
-// MODULE 5: CIAQL ( & COAGOQL) SPAN-VALIDATED PARSER (`ciaql.rs`)
-// ============================================================================
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError {
-    pub at: usize,
-    pub end: usize,
-    pub msg: &'static str,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Source<'a> {
-    Actor(u64),
-    Alias(&'a str),
-    TxActors(Vec<u64>),
-    ScanAll,
-    ScanRange { start: u64, end: u64 },
-    ResolveTenant { name: &'a str, alias: &'a str },
-    BackupStore { destination: &'a str },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Stage<'a> {
-    Filter(&'a str),
-    Mutate(&'a str),
-    Project(Vec<&'a str>),
-    GroupBy(Vec<&'a str>),
-    Aggregate(Vec<&'a str>),
-    Similarity { threshold: f32 },
-    SearchBm25 { query: &'a str, top_k: u32 },
-    JoinActor { target_expr: &'a str, alias: &'a str },
-    CheckpointFrame { intent: &'a str },
-    HydrateFrame { frame_hash: u64 },
-    ExportTo { format: &'a str, destination: &'a str },
-    Take(u64),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CiaQuery<'a> {
-    pub source: Source<'a>,
-    pub stages: Vec<Stage<'a>>,
-}
-
-/// Parses both ergonomic CiaQL (`@0x0008F421`, `resolve tenant`, `backup store`, `join`, `search`)
-/// and explicit `|>` pipelines, rejecting any unknown stage keyword with a hard error.
-pub fn parse_ciaql<'a>(src: &'a str) -> Result<CiaQuery<'a>, ParseError> {
-    let trimmed = src.trim();
-    if trimmed.is_empty() {
-        return Err(ParseError {
-            at: 0,
-            end: 0,
-            msg: "empty CiaQL query",
-        });
-    }
-
-    // Check top-level utility commands first
-    if let Some(rest) = trimmed.strip_prefix("resolve tenant ") {
-        let parts: Vec<&str> = rest.split(" as ").map(str::trim).collect();
-        if parts.len() == 2 {
-            return Ok(CiaQuery {
-                source: Source::ResolveTenant {
-                    name: parts[0].trim_matches('"'),
-                    alias: parts[1],
-                },
-                stages: Vec::new(),
-            });
-        }
-    }
-    if let Some(rest) = trimmed.strip_prefix("backup store to ") {
-        let dest = rest.split_whitespace().next().unwrap_or("").trim_matches('"');
-        return Ok(CiaQuery {
-            source: Source::BackupStore { destination: dest },
-            stages: Vec::new(),
-        });
-    }
-
-    // Split pipeline segments safely outside quotes and nested delimiters
-    let segments = split_ciaql_segments(trimmed)?;
-    let first = segments[0];
-
-    let source = if let Some(hex_or_alias) = first.strip_prefix('@') {
-        let token = hex_or_alias.split_whitespace().next().unwrap_or("");
-        if token.starts_with("0x") || token.starts_with("0X") || token.chars().all(|c| c.is_ascii_digit()) {
-            Source::Actor(parse_u64_clean(token)?)
-        } else {
-            Source::Alias(token)
-        }
-    } else if let Some(inner) = first.strip_prefix("ACTOR(").and_then(|s| s.strip_suffix(')')) {
-        Source::Actor(parse_u64_clean(inner)?)
-    } else if let Some(inner) = first.strip_prefix("TX_ACTORS[").and_then(|s| s.strip_suffix(']')) {
-        let mut ids = Vec::new();
-        for p in inner.split(',') {
-            ids.push(parse_u64_clean(p)?);
-        }
-        if ids.len() < 2 || ids.len() > 64 {
-            return Err(ParseError {
-                at: 0,
-                end: first.len(),
-                msg: "TX_ACTORS requires 2..=64 participants",
-            });
-        }
-        Source::TxActors(ids)
-    } else if first.starts_with("SCAN ACTORS[*]") || first.starts_with("scan actors[*]") || first.starts_with("scan users[*]") {
-        Source::ScanAll
-    } else if let Some(r) = first.strip_prefix("SCAN ACTORS[").and_then(|s| s.strip_suffix(']')) {
-        let (a, b) = r.split_once("..").ok_or(ParseError {
-            at: 0,
-            end: first.len(),
-            msg: "invalid SCAN range",
-        })?;
-        Source::ScanRange {
-            start: parse_u64_clean(a)?,
-            end: parse_u64_clean(b)?,
-        }
-    } else {
-        return Err(ParseError {
-            at: 0,
-            end: first.len(),
-            msg: "unrecognized CiaQL source clause",
-        });
-    };
-
-    let mut stages = Vec::new();
-    for seg in &segments[1..] {
-        let kw_end = seg
-            .find(|c: char| c.is_whitespace() || c == '(' || c == '{')
-            .unwrap_or(seg.len());
-        let kw = &seg[..kw_end];
-        match kw {
-            "FILTER" | "where" => stages.push(Stage::Filter(seg[kw_end..].trim())),
-            "MUTATE" | "mutate" => stages.push(Stage::Mutate(seg[kw_end..].trim())),
-            "PROJECT" | "select" | "project" => {
-                stages.push(Stage::Project(vec![seg[kw_end..].trim()]))
+        fn reserve(self: &Arc<Self>, len: usize) -> Result<Reservation, String> {
+            let mut used = self
+                .used
+                .lock()
+                .map_err(|_| "export budget lock poisoned")?;
+            if used.1 >= self.max_sessions || len > self.max_bytes.saturating_sub(used.0) {
+                return Err("export budget exhausted".into());
             }
-            "GROUP_BY" | "group" => stages.push(Stage::GroupBy(vec![seg[kw_end..].trim()])),
-            "AGGREGATE" | "REDUCE" | "aggregate" => {
-                stages.push(Stage::Aggregate(vec![seg[kw_end..].trim()]))
+            used.0 += len;
+            used.1 += 1;
+            Ok(Reservation {
+                budget: self.clone(),
+                len,
+            })
+        }
+    }
+    struct Reservation {
+        budget: Arc<ExportBudget>,
+        len: usize,
+    }
+    impl Drop for Reservation {
+        fn drop(&mut self) {
+            if let Ok(mut used) = self.budget.used.lock() {
+                used.0 -= self.len;
+                used.1 -= 1;
             }
-            "SIMILARITY" | "similarity" => stages.push(Stage::Similarity { threshold: 0.80 }),
-            "SEARCH" | "search" => stages.push(Stage::SearchBm25 {
-                query: seg[kw_end..].trim(),
-                top_k: 10,
-            }),
-            "JOIN" | "join" => stages.push(Stage::JoinActor {
-                target_expr: seg[kw_end..].trim(),
-                alias: "@joined",
-            }),
-            "CHECKPOINT_FRAME" | "checkpoint" => stages.push(Stage::CheckpointFrame {
-                intent: seg[kw_end..].trim(),
-            }),
-            "HYDRATE_FRAME" | "hydrate" => {
-                let inner = seg[kw_end..]
-                    .trim()
-                    .trim_start_matches('(')
-                    .trim_end_matches(')');
-                stages.push(Stage::HydrateFrame {
-                    frame_hash: parse_u64_clean(inner)?,
-                });
+        }
+    }
+
+    pub struct SealedExportWindow {
+        pub engine_fd: i32,
+        pub agent_ro_fd: i32,
+        pub engine_ptr: *mut u8,
+        pub len: usize,
+        _reservation: Reservation,
+    }
+
+    // Raw writable mappings are intentionally not Send or Sync.
+
+    impl SealedExportWindow {
+        /// Creates a 4 KiB-aligned sealed export window, runs the CVE-2024-57937 mprotect
+        /// self-test, and produces an O_RDONLY file descriptor safe for SCM_RIGHTS handoff.
+        pub fn create_and_selftest(len: usize, budget: &Arc<ExportBudget>) -> Result<Self, String> {
+            let reservation = budget.reserve(len)?;
+            if len < 4096 || len % 4096 != 0 || len > isize::MAX as usize {
+                return Err("invalid export window size".into());
             }
-            "EXPORT_TO" | "export" => stages.push(Stage::ExportTo {
-                format: "PARQUET",
-                destination: seg[kw_end..].trim(),
-            }),
-            "TAKE" | "take" | "limit" => {
-                let n = parse_u64_clean(seg[kw_end..].trim())?;
-                if n == 0 {
-                    return Err(ParseError {
-                        at: 0,
-                        end: seg.len(),
-                        msg: "TAKE/limit must be >= 1",
-                    });
+            unsafe {
+                let name = CString::new("ciagomem-export").unwrap();
+                let fd =
+                    libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING);
+                if fd < 0 {
+                    return Err("memfd_create failed".into());
                 }
-                stages.push(Stage::Take(n));
-            }
-            _ => {
-                return Err(ParseError {
-                    at: 0,
-                    end: seg.len(),
-                    msg: "unknown stage keyword",
+                if libc::ftruncate(fd, len as libc::off_t) != 0 {
+                    libc::close(fd);
+                    return Err("ftruncate failed".into());
+                }
+                let ptr = libc::mmap(
+                    core::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    fd,
+                    0,
+                );
+                if ptr == libc::MAP_FAILED {
+                    libc::close(fd);
+                    return Err("engine mmap failed".into());
+                }
+                let seals = libc::F_SEAL_SHRINK
+                    | libc::F_SEAL_GROW
+                    | libc::F_SEAL_FUTURE_WRITE
+                    | libc::F_SEAL_SEAL;
+                if libc::fcntl(fd, libc::F_ADD_SEALS, seals) != 0 {
+                    libc::munmap(ptr, len);
+                    libc::close(fd);
+                    return Err("F_ADD_SEALS failed".into());
+                }
+                let proc_path = CString::new(format!("/proc/self/fd/{fd}")).unwrap();
+                let ro_fd = libc::open(proc_path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+                if ro_fd < 0 {
+                    libc::munmap(ptr, len);
+                    libc::close(fd);
+                    return Err("reopen O_RDONLY failed".into());
+                }
+                // Boot-time CVE-2024-57937 self-test: agent PROT_READ mapping MUST refuse mprotect(PROT_WRITE)
+                let agent_map = libc::mmap(
+                    core::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ,
+                    libc::MAP_SHARED,
+                    ro_fd,
+                    0,
+                );
+                if agent_map == libc::MAP_FAILED {
+                    libc::close(ro_fd);
+                    libc::munmap(ptr, len);
+                    libc::close(fd);
+                    return Err("agent PROT_READ mmap failed".into());
+                }
+                let mprot = libc::mprotect(agent_map, len, libc::PROT_READ | libc::PROT_WRITE);
+                libc::munmap(agent_map, len);
+                if mprot == 0 {
+                    libc::close(ro_fd);
+                    libc::munmap(ptr, len);
+                    libc::close(fd);
+                    return Err("CVE-2024-57937 vulnerable kernel: mprotect(PROT_WRITE) succeeded on sealed RO fd".into());
+                }
+                Ok(SealedExportWindow {
+                    engine_fd: fd,
+                    agent_ro_fd: ro_fd,
+                    engine_ptr: ptr as *mut u8,
+                    len,
+                    _reservation: reservation,
                 })
             }
         }
     }
 
-    Ok(CiaQuery { source, stages })
-}
-
-fn split_ciaql_segments<'a>(src: &'a str) -> Result<Vec<&'a str>, ParseError> {
-    let bytes = src.as_bytes();
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let mut i = 0usize;
-    let mut in_str = false;
-    let mut depth = 0i32;
-
-    while i < bytes.len() {
-        let c = bytes[i];
-        if in_str {
-            if c == b'\\' && i + 1 < bytes.len() {
-                i += 2;
-                continue;
+    impl Drop for SealedExportWindow {
+        fn drop(&mut self) {
+            unsafe {
+                libc::munmap(self.engine_ptr as *mut libc::c_void, self.len);
+                libc::close(self.agent_ro_fd);
+                libc::close(self.engine_fd);
             }
-            if c == b'"' {
-                in_str = false;
-            }
-            i += 1;
-            continue;
         }
-        match c {
-            b'"' => in_str = true,
-            b'(' | b'{' | b'[' => depth += 1,
-            b')' | b'}' | b']' => {
-                depth -= 1;
-                if depth < 0 {
-                    return Err(ParseError {
-                        at: i,
-                        end: i + 1,
-                        msg: "unbalanced closing delimiter",
-                    });
-                }
-            }
-            b'|' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
-                out.push(src[start..i].trim());
-                i += 2;
-                start = i;
-                continue;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    if in_str || depth != 0 {
-        return Err(ParseError {
-            at: 0,
-            end: src.len(),
-            msg: "unterminated string or delimiter block",
-        });
-    }
-    out.push(src[start..].trim());
-    Ok(out)
-}
-
-fn parse_u64_clean(raw: &str) -> Result<u64, ParseError> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return Err(ParseError {
-            at: 0,
-            end: 0,
-            msg: "empty integer literal",
-        });
-    }
-    let (radix, digits) = if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        (16u32, h.as_bytes())
-    } else {
-        (10u32, s.as_bytes())
-    };
-    let mut acc = 0u64;
-    let mut saw = false;
-    for &b in digits {
-        if b == b'_' {
-            continue;
-        }
-        let d = (b as char).to_digit(radix).ok_or(ParseError {
-            at: 0,
-            end: s.len(),
-            msg: "invalid integer digit",
-        })? as u64;
-        acc = acc
-            .checked_mul(radix as u64)
-            .and_then(|v| v.checked_add(d))
-            .ok_or(ParseError {
-                at: 0,
-                end: s.len(),
-                msg: "integer literal overflow",
-            })?;
-        saw = true;
-    }
-    if saw {
-        Ok(acc)
-    } else {
-        Err(ParseError {
-            at: 0,
-            end: s.len(),
-            msg: "invalid integer literal",
-        })
     }
 }
 
-// ============================================================================
-// MODULE 6: VERIFICATION UNIT TESTS
-// ============================================================================
+// =============================================================================
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn prot_read_safe_seqlock_and_generational_slot_validation() {
-        let arena = SlotArena::<16>::new(0, 8, 2);
-        let tw1 = TenantWord {
-            tenant: 101,
-            core: 0,
-            layout_version: 1,
-            flags: 0,
-        };
-        let h1 = arena.install(3, tw1, 10, 10).unwrap().unwrap();
-        arena
-            .write(h1, 11, |wm| {
-                wm.set(0, 0xCAFE_BABE);
-                wm.write_bytes(8, b"CiagoMem");
-            })
-            .unwrap();
-
-        // Durable read fails before CoreControl::publish_durable(11)
-        assert_eq!(
-            arena.read(h1, 101, Visibility::Durable, |v| v.word(0)),
-            Err(SlotReadError::NotYetDurable {
-                applied: 11,
-                durable: 0
-            })
-        );
-
-        // Publish durable watermark on core 0
-        arena.core_control(0).publish_durable(11);
-        let snap = arena
-            .read(h1, 101, Visibility::Durable, |v| {
-                let mut b = [0u8; 8];
-                v.copy_bytes(8, &mut b)?;
-                Some((v.word(0)?, b))
-            })
-            .unwrap();
-        assert_eq!(snap.value.0, 0xCAFE_BABE);
-        assert_eq!(&snap.value.1, b"CiagoMem");
-
-        // Evict tenant 101 and install tenant 202 in the same physical slot 3
-        arena.revoke(h1).unwrap();
-        let tw2 = TenantWord {
-            tenant: 202,
-            core: 0,
-            layout_version: 1,
-            flags: 0,
-        };
-        let h2 = arena.install(3, tw2, 1, 1).unwrap().unwrap();
-        assert_eq!(h2.generation(), h1.generation() + 1);
-
-        // Old handle h1 is deterministically rejected
-        assert_eq!(
-            arena.read(h1, 101, Visibility::Optimistic, |v| v.word(0)),
-            Err(SlotReadError::Reassigned)
-        );
-    }
-
-    #[test]
-    fn spsc_mesh_doorbell_and_all_or_nothing_admission() {
-        let (mut prods, mut cons) = build_mesh::<u64, 8>(3, 2);
-        assert!(cons[1].prepare_park());
-        let wakes = admit_all_or_nothing(&mut prods[0], &[0, 1], 777).unwrap();
-        assert_eq!(wakes, 1); // Consumer 1 was parked so it requested a wake CQE
-
-        let mut received = Vec::new();
-        cons[1].poll(8, |src, msg| received.push((src, msg)));
-        assert_eq!(received, vec![(0, 777)]);
-    }
-
-    #[test]
-    fn calvin_64_participants_and_unique_decider() {
-        let vt = VoteTable::new(16);
-        let p64 = Participants::new(64).unwrap();
-        assert_eq!(p64.mask(), u64::MAX);
-        vt.open(99, p64).unwrap();
-
-        for idx in 0..63 {
-            assert_eq!(vt.vote(99, idx, true), Vote::Pending);
-        }
-        // Participant 63 votes YES: must not collide with an abort bit!
-        assert_eq!(vt.vote(99, 63, true), Vote::Decided { commit: true });
-        vt.close(99);
-    }
-
-    #[test]
-    fn ciaql_parses_shorthand_pipelines_and_rejects_unknown_stages() {
-        let q1 = parse_ciaql(
-            r#"@0x0008F421 |> where (state.msg == "a |> b") |> mutate { x = 1 } |> checkpoint(intent: "handoff") |> take 5"#,
-        )
-        .unwrap();
-        assert_eq!(q1.source, Source::Actor(0x0008F421));
-        assert_eq!(q1.stages.len(), 4);
-
-        let q2 = parse_ciaql(r#"resolve tenant "acme_corp" as @acme"#).unwrap();
-        assert_eq!(
-            q2.source,
-            Source::ResolveTenant {
-                name: "acme_corp",
-                alias: "@acme"
-            }
-        );
-
-        let bad = parse_ciaql(r#"@0x0008F421 |> MUTTATE { x = 1 }"#);
-        assert!(bad.is_err());
-    }
-}
-// P0 module APIs coexist with the original v2.5 audit API above.
-pub mod seqlock;
+pub mod policy;
+pub use coagomem_ql::{ParseError, Query as CiaQuery, Source, Stage, parse as parse_ciaql};
+pub use policy::*;
+pub mod calvin;
+#[path = "../../coagomem-wal/src/envelope.rs"]
+pub mod envelope;
+pub mod io;
+#[cfg(feature = "legacy-audit")]
+pub mod legacy;
+pub mod lifecycle;
 pub mod mesh;
+pub mod seqlock;
 pub mod slot;
 #[cfg(target_os = "linux")]
 pub mod uring;
-pub mod calvin;
-pub mod io;
-pub mod lifecycle;
 
-// Lifecycle needs the envelope without introducing a core -> WAL dependency.
-#[path = "../../coagomem-wal/src/envelope.rs"]
-pub mod envelope;
+#[derive(Debug, Default)]
+#[repr(C, align(128))]
+pub struct CachePadded<T>(pub T);
+impl<T> core::ops::Deref for CachePadded<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}

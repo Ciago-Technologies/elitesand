@@ -1,0 +1,9 @@
+[package]
+name = "ciagomem-crypto"
+version = "0.3.0"
+edition = "2024"
+
+[dependencies]
+hmac = "0.12.1"
+sha2 = "0.10.9"
+subtle = "2.6.1"

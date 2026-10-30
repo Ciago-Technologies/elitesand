@@ -3,9 +3,23 @@ members = [
     "coagomem-core",
     "coagomem-wal",
     "coagomem-ql",
+    "ciagomem-crypto",
 ]
 resolver = "2"
 
 [profile.release]
 panic = "abort"
 opt-level = 3
+
+# Unmodified RustCrypto sources retained for offline builds; see vendor/archive-sha256.json.
+[patch.crates-io]
+hmac = { path = "vendor/hmac-0.12.1" }
+sha2 = { path = "vendor/sha2-0.10.9" }
+digest = { path = "vendor/digest-0.10.7" }
+crypto-common = { path = "vendor/crypto-common-0.1.6" }
+block-buffer = { path = "vendor/block-buffer-0.10.4" }
+generic-array = { path = "vendor/generic-array-0.14.7" }
+typenum = { path = "vendor/typenum-1.17.0" }
+version_check = { path = "vendor/version_check-0.9.5" }
+cpufeatures = { path = "vendor/cpufeatures-0.2.17" }
+subtle = { path = "vendor/subtle-2.6.1" }

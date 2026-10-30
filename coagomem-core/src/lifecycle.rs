@@ -63,17 +63,35 @@ pub enum Probe {
     Other,
     /// Crash recovery (route table lost): read A, then B, keep the newer valid one.
     RecoverA,
-    RecoverB { a: Option<ExtentImage> },
-    RecoverRereadA { a: ExtentImage },
+    RecoverB {
+        a: Option<ExtentImage>,
+    },
+    RecoverRereadA {
+        a: ExtentImage,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     Free,
-    Loading { tenant: u32, loc: ExtentLoc, probe: Probe, layout_version: u8 },
+    Loading {
+        tenant: u32,
+        loc: ExtentLoc,
+        probe: Probe,
+        layout_version: u8,
+    },
     Resident(Residency),
-    Flushing { res: Residency, target: ExtentLoc, lsn: u64, image_seq: u64, evict: bool, deferred: u32 },
-    Quiescing { tenant: u32 },
+    Flushing {
+        res: Residency,
+        target: ExtentLoc,
+        lsn: u64,
+        image_seq: u64,
+        evict: bool,
+        deferred: u32,
+    },
+    Quiescing {
+        tenant: u32,
+    },
     Retired,
 }
 
@@ -91,32 +109,63 @@ struct Meta {
 pub enum Event {
     /// Slot is resident with image `checkpoint_lsn`; replay this tenant's log records with
     /// `lsn > checkpoint_lsn` before serving it.
-    Loaded { tenant: u32, handle: SlotHandle, checkpoint_lsn: u64 },
+    Loaded {
+        tenant: u32,
+        handle: SlotHandle,
+        checkpoint_lsn: u64,
+    },
     /// `errno < 0`: I/O error; `errno == 0`: no valid image in either copy.
-    LoadFailed { tenant: u32, errno: i32 },
+    LoadFailed {
+        tenant: u32,
+        errno: i32,
+    },
     /// Image with all records `<= lsn` is durable at `loc`.
-    Checkpointed { tenant: u32, lsn: u64, loc: ExtentLoc },
+    Checkpointed {
+        tenant: u32,
+        lsn: u64,
+        loc: ExtentLoc,
+    },
     /// Residency ended (route unpublished, generation retired).
-    Evicted { tenant: u32, slot: u32 },
+    Evicted {
+        tenant: u32,
+        slot: u32,
+    },
     /// Slot returned to the free list.
-    Freed { slot: u32 },
+    Freed {
+        slot: u32,
+    },
     /// Mutations deferred during a flush may now run.
-    Resume { tenant: u32, handle: SlotHandle, deferred: u32 },
-    FlushFailed { tenant: u32, res: i32, retries: u8 },
+    Resume {
+        tenant: u32,
+        handle: SlotHandle,
+        deferred: u32,
+    },
+    FlushFailed {
+        tenant: u32,
+        res: i32,
+        retries: u8,
+    },
     /// Flush retries exhausted: slot is pinned in memory, capacity shrinks, alert.
-    DiskDegraded { tenant: u32 },
-    SlotRetired { slot: u32 },
+    DiskDegraded {
+        tenant: u32,
+    },
+    SlotRetired {
+        slot: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdmitError {
     /// No free slot. Caller replies ERR_BACKPRESSURE; nothing was allocated.
-    NoFreeSlot { flushing: u32 },
+    NoFreeSlot {
+        flushing: u32,
+    },
     SqFull,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gate {
+    InvalidMutation,
     Proceed,
     /// Slot is being flushed; the executor parks the message and re-runs it on `Resume`.
     Defer,
@@ -161,7 +210,11 @@ pub struct SlotLifecycle<'a, const W: usize> {
 
 impl<const W: usize> core::fmt::Debug for SlotLifecycle<'_, W> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("SlotLifecycle").field("core", &self.core).field("free", &self.free.len()).field("flushing", &self.flushing).finish()
+        f.debug_struct("SlotLifecycle")
+            .field("core", &self.core)
+            .field("free", &self.free.len())
+            .field("flushing", &self.flushing)
+            .finish()
     }
 }
 
@@ -170,13 +223,43 @@ const EXTENT_BYTES_MAX: usize = u32::MAX as usize;
 impl<'a, const W: usize> SlotLifecycle<'a, W> {
     pub const EXTENT_BYTES: usize = W * 8;
 
-    pub fn new(arena: &'a SlotArena<W>, route: &'a RouteTable, core: u8, range: Range<u32>, cfg: LifecycleConfig) -> Self {
-        assert!(range.end <= arena.len() && !range.is_empty() && Self::EXTENT_BYTES <= EXTENT_BYTES_MAX);
+    pub fn new(
+        arena: &'a SlotArena<W>,
+        route: &'a RouteTable,
+        core: u8,
+        range: Range<u32>,
+        cfg: LifecycleConfig,
+    ) -> Self {
+        assert!(
+            range.end <= arena.len() && !range.is_empty() && Self::EXTENT_BYTES <= EXTENT_BYTES_MAX
+        );
         assert!(cfg.low_free <= cfg.high_free && cfg.max_flush_inflight >= 1);
         let n = range.len();
-        let meta = vec![Meta { state: State::Free, ticket: 0, io_inflight: 0, pins: 0, retries: 0, referenced: false }; n].into_boxed_slice();
+        let meta = vec![
+            Meta {
+                state: State::Free,
+                ticket: 0,
+                io_inflight: 0,
+                pins: 0,
+                retries: 0,
+                referenced: false
+            };
+            n
+        ]
+        .into_boxed_slice();
         let free = range.clone().rev().collect();
-        SlotLifecycle { arena, route, core, range, meta, free, hand: 0, flushing: 0, cfg, stats: Stats::default() }
+        SlotLifecycle {
+            arena,
+            route,
+            core,
+            range,
+            meta,
+            free,
+            hand: 0,
+            flushing: 0,
+            cfg,
+            stats: Stats::default(),
+        }
     }
 
     #[inline]
@@ -211,14 +294,33 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
     }
 
     fn tw(&self, tenant: u32, layout_version: u8) -> TenantWord {
-        TenantWord { tenant, core: self.core, layout_version, flags: 0 }
+        TenantWord {
+            tenant,
+            core: self.core,
+            layout_version,
+            flags: 0,
+        }
     }
 
     fn push_free(&mut self, idx: u32, events: &mut Vec<Event>) {
-        assert_eq!(self.arena.header(idx).owner.load(core::sync::atomic::Ordering::Relaxed), 0, "I1 violated: slot still owned");
+        assert_eq!(
+            self.arena
+                .header(idx)
+                .owner
+                .load(core::sync::atomic::Ordering::Relaxed),
+            0,
+            "I1 violated: slot still owned"
+        );
         let m = self.m(idx);
-        assert!(m.io_inflight == 0 && m.pins == 0, "I1 violated: freeing slot {idx} with I/O or pins outstanding");
-        assert!(matches!(m.state, State::Quiescing { .. } | State::Loading { .. }), "I1 violated: free from {:?}", m.state);
+        assert!(
+            m.io_inflight == 0 && m.pins == 0,
+            "I1 violated: freeing slot {idx} with I/O or pins outstanding"
+        );
+        assert!(
+            matches!(m.state, State::Quiescing { .. } | State::Loading { .. }),
+            "I1 violated: free from {:?}",
+            m.state
+        );
         m.state = State::Free;
         m.retries = 0;
         m.referenced = false;
@@ -238,15 +340,32 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
     fn end_residency(&mut self, idx: u32, r: Residency, events: &mut Vec<Event>) {
         let unpublished = self.route.unpublish(r.tenant, r.handle);
         debug_assert!(unpublished, "route pointed elsewhere");
-        self.arena.revoke(r.handle).expect("owner core is the only writer");
+        self.arena
+            .revoke(r.handle)
+            .expect("owner core is the only writer");
         self.m(idx).state = State::Quiescing { tenant: r.tenant };
         self.stats.evictions += 1;
-        events.push(Event::Evicted { tenant: r.tenant, slot: idx });
+        events.push(Event::Evicted {
+            tenant: r.tenant,
+            slot: idx,
+        });
         self.try_finish_quiesce(idx, events);
     }
 
-    fn install(&mut self, idx: u32, tenant: u32, layout_version: u8, applied: u64, ckpt: u64, events: &mut Vec<Event>) -> Option<SlotHandle> {
-        match self.arena.install(idx, self.tw(tenant, layout_version), applied, ckpt).expect("owner core is the only writer") {
+    fn install(
+        &mut self,
+        idx: u32,
+        tenant: u32,
+        layout_version: u8,
+        applied: u64,
+        ckpt: u64,
+        events: &mut Vec<Event>,
+    ) -> Option<SlotHandle> {
+        match self
+            .arena
+            .install(idx, self.tw(tenant, layout_version), applied, ckpt)
+            .expect("owner core is the only writer")
+        {
             Some(h) => Some(h),
             None => {
                 self.m(idx).state = State::Retired;
@@ -260,15 +379,37 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
 
     /// Brand-new tenant: zeroed payload, resident and dirty immediately. `loc` is a fresh
     /// extent pair from the extent allocator; `lsn` is the creating record's LSN.
-    pub fn admit_new(&mut self, tenant: u32, loc: ExtentLoc, lsn: u64, layout_version: u8, events: &mut Vec<Event>) -> Result<SlotHandle, AdmitError> {
+    pub fn admit_new(
+        &mut self,
+        tenant: u32,
+        loc: ExtentLoc,
+        lsn: u64,
+        layout_version: u8,
+        events: &mut Vec<Event>,
+    ) -> Result<SlotHandle, AdmitError> {
         loop {
-            let idx = self.free.pop().ok_or(AdmitError::NoFreeSlot { flushing: self.flushing })?;
-            self.arena.with_unowned_payload(idx, |w| w.fill(0)).expect("owner core is the only writer");
-            let Some(h) = self.install(idx, tenant, layout_version, lsn, 0, events) else { continue };
+            let idx = self.free.pop().ok_or(AdmitError::NoFreeSlot {
+                flushing: self.flushing,
+            })?;
+            self.arena
+                .with_unowned_payload(idx, |w| w.fill(0))
+                .expect("owner core is the only writer");
+            let Some(h) = self.install(idx, tenant, layout_version, lsn, 0, events) else {
+                continue;
+            };
             self.route.set_extent(tenant, loc);
             self.route.publish(tenant, h);
             let m = self.m(idx);
-            m.state = State::Resident(Residency { tenant, handle: h, dirty: true, last_lsn: lsn, ckpt_lsn: 0, image_seq: 0, loc, layout_version });
+            m.state = State::Resident(Residency {
+                tenant,
+                handle: h,
+                dirty: true,
+                last_lsn: lsn,
+                ckpt_lsn: 0,
+                image_seq: 0,
+                loc,
+                layout_version,
+            });
             m.referenced = true;
             return Ok(h);
         }
@@ -276,10 +417,28 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
 
     /// Cold tenant: read its extent into a free slot. The slot stays unowned (readers
     /// with any older handle fail the owner check) until the image validates.
-    pub fn admit_load<I: IoBackend>(&mut self, tenant: u32, loc: ExtentLoc, layout_version: u8, recover: bool, io: &mut I) -> Result<u32, AdmitError> {
-        let idx = self.free.pop().ok_or(AdmitError::NoFreeSlot { flushing: self.flushing })?;
-        let probe = if recover { Probe::RecoverA } else { Probe::Current };
-        self.m(idx).state = State::Loading { tenant, loc, probe, layout_version };
+    pub fn admit_load<I: IoBackend>(
+        &mut self,
+        tenant: u32,
+        loc: ExtentLoc,
+        layout_version: u8,
+        recover: bool,
+        io: &mut I,
+    ) -> Result<u32, AdmitError> {
+        let idx = self.free.pop().ok_or(AdmitError::NoFreeSlot {
+            flushing: self.flushing,
+        })?;
+        let probe = if recover {
+            Probe::RecoverA
+        } else {
+            Probe::Current
+        };
+        self.m(idx).state = State::Loading {
+            tenant,
+            loc,
+            probe,
+            layout_version,
+        };
         if self.submit_load(idx, loc, probe, io).is_err() {
             self.m(idx).state = State::Free;
             self.free.push(idx);
@@ -298,12 +457,31 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         }
     }
 
-    fn submit_load<I: IoBackend>(&mut self, idx: u32, loc: ExtentLoc, probe: Probe, io: &mut I) -> Result<(), SqFull> {
+    fn submit_load<I: IoBackend>(
+        &mut self,
+        idx: u32,
+        loc: ExtentLoc,
+        probe: Probe,
+        io: &mut I,
+    ) -> Result<(), SqFull> {
         let m = self.m(idx);
         m.ticket = m.ticket.wrapping_add(1);
-        let ud = UserData { op: Op::Load, object: idx, ticket: m.ticket }.encode();
+        let ud = UserData {
+            op: Op::Load,
+            object: idx,
+            ticket: m.ticket,
+        }
+        .encode();
         // SAFETY: the slot is unowned and not on the free list until this CQE (I1/I2).
-        unsafe { io.read_at(ud, loc.container(), self.arena.payload_ptr(idx), Self::EXTENT_BYTES as u32, Self::probe_offset(loc, probe))? };
+        unsafe {
+            io.read_at(
+                ud,
+                loc.container(),
+                self.arena.payload_ptr(idx),
+                Self::EXTENT_BYTES as u32,
+                Self::probe_offset(loc, probe),
+            )?
+        };
         self.m(idx).io_inflight += 1;
         Ok(())
     }
@@ -311,12 +489,27 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
     fn image_of(&self, idx: u32, tenant: u32) -> Option<ExtentImage> {
         // SAFETY: called only after the read CQE; this core is the slot's sole writer and
         // concurrent readers only read, so a non-atomic byte view is race-free.
-        let bytes = unsafe { core::slice::from_raw_parts(self.arena.payload_ptr(idx), Self::EXTENT_BYTES) };
+        let bytes =
+            unsafe { core::slice::from_raw_parts(self.arena.payload_ptr(idx), Self::EXTENT_BYTES) };
         ExtentImage::validate(bytes, tenant)
     }
 
-    fn on_load_cqe<I: IoBackend>(&mut self, idx: u32, res: i32, io: &mut I, events: &mut Vec<Event>) {
-        let State::Loading { tenant, loc, probe, layout_version } = self.state(idx) else { unreachable!() };
+    fn on_load_cqe<I: IoBackend>(
+        &mut self,
+        idx: u32,
+        res: i32,
+        io: &mut I,
+        events: &mut Vec<Event>,
+    ) {
+        let State::Loading {
+            tenant,
+            loc,
+            probe,
+            layout_version,
+        } = self.state(idx)
+        else {
+            unreachable!()
+        };
         let fail = |s: &mut Self, errno: i32, events: &mut Vec<Event>| {
             events.push(Event::LoadFailed { tenant, errno });
             if s.m(idx).io_inflight == 0 {
@@ -339,7 +532,14 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         }
         let img = self.image_of(idx, tenant);
         let next = match (probe, img) {
-            (Probe::Current | Probe::Other, Some(i)) => Ok((i, if probe == Probe::Current { loc } else { loc.flipped() })),
+            (Probe::Current | Probe::Other, Some(i)) => Ok((
+                i,
+                if probe == Probe::Current {
+                    loc
+                } else {
+                    loc.flipped()
+                },
+            )),
             (Probe::Current, None) => Err(Probe::Other),
             (Probe::Other, None) => return fail(self, 0, events),
             (Probe::RecoverA, a) => Err(Probe::RecoverB { a }),
@@ -349,19 +549,36 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
                 (Some(a), None) => Err(Probe::RecoverRereadA { a }),
                 (_, Some(b)) => Ok((b, ExtentLoc::new(loc.container(), loc.base_block(), true))),
             },
-            (Probe::RecoverRereadA { a }, Some(i)) if i == a => Ok((i, ExtentLoc::new(loc.container(), loc.base_block(), false))),
+            (Probe::RecoverRereadA { a }, Some(i)) if i == a => {
+                Ok((i, ExtentLoc::new(loc.container(), loc.base_block(), false)))
+            }
             (Probe::RecoverRereadA { .. }, _) => return fail(self, 0, events),
         };
         match next {
             Err(probe) => {
-                self.m(idx).state = State::Loading { tenant, loc, probe, layout_version };
+                self.m(idx).state = State::Loading {
+                    tenant,
+                    loc,
+                    probe,
+                    layout_version,
+                };
                 if self.submit_load(idx, loc, probe, io).is_err() {
                     fail(self, -libc::EAGAIN, events);
                 }
             }
             Ok((img, used)) => {
-                let Some(h) = self.install(idx, tenant, layout_version, img.checkpoint_lsn, img.checkpoint_lsn, events) else {
-                    events.push(Event::LoadFailed { tenant, errno: -libc::EAGAIN });
+                let Some(h) = self.install(
+                    idx,
+                    tenant,
+                    layout_version,
+                    img.checkpoint_lsn,
+                    img.checkpoint_lsn,
+                    events,
+                ) else {
+                    events.push(Event::LoadFailed {
+                        tenant,
+                        errno: -libc::EAGAIN,
+                    });
                     return;
                 };
                 self.route.set_extent(tenant, used);
@@ -379,7 +596,11 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
                 });
                 m.referenced = true;
                 m.retries = 0;
-                events.push(Event::Loaded { tenant, handle: h, checkpoint_lsn: img.checkpoint_lsn });
+                events.push(Event::Loaded {
+                    tenant,
+                    handle: h,
+                    checkpoint_lsn: img.checkpoint_lsn,
+                });
             }
         }
     }
@@ -402,13 +623,21 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
 
     /// Apply a mutation whose log record has LSN `lsn` (already appended to the
     /// group-commit log). Returns `Err(gate)` if it cannot run now.
-    pub fn mutate<R>(&mut self, h: SlotHandle, lsn: u64, f: impl FnOnce(crate::seqlock::WordsMut<'_>) -> R) -> Result<R, Gate> {
+    pub fn mutate<R>(
+        &mut self,
+        h: SlotHandle,
+        lsn: u64,
+        f: impl FnOnce(crate::seqlock::WordsMut<'_>) -> R,
+    ) -> Result<R, Gate> {
         match self.gate(h) {
             Gate::Proceed => {}
             g => return Err(g),
         }
         let idx = h.index();
-        let r = self.arena.write(h, lsn, f).expect("owner core is the only writer");
+        let r = self
+            .arena
+            .write(h, lsn, f)
+            .map_err(|_| Gate::InvalidMutation)?;
         let m = self.m(idx);
         if let State::Resident(res) = &mut m.state {
             res.dirty = true;
@@ -447,23 +676,49 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
 
     /// Checkpoint without evicting (lets the log truncate). Returns false if not
     /// eligible right now (not resident, clean, WAL-blocked, SQ full).
-    pub fn checkpoint<I: IoBackend>(&mut self, h: SlotHandle, durable_lsn: u64, io: &mut I) -> bool {
+    pub fn checkpoint<I: IoBackend>(
+        &mut self,
+        h: SlotHandle,
+        durable_lsn: u64,
+        io: &mut I,
+    ) -> bool {
         match self.residency(h) {
-            Some((idx, r)) if matches!(self.state(idx), State::Resident(_)) && r.dirty && r.last_lsn <= durable_lsn => {
+            Some((idx, r))
+                if matches!(self.state(idx), State::Resident(_))
+                    && r.dirty
+                    && r.last_lsn <= durable_lsn =>
+            {
                 self.start_flush(idx, r, false, io).is_ok()
             }
             _ => false,
         }
     }
 
-    fn start_flush<I: IoBackend>(&mut self, idx: u32, r: Residency, evict: bool, io: &mut I) -> Result<(), SqFull> {
+    fn start_flush<I: IoBackend>(
+        &mut self,
+        idx: u32,
+        r: Residency,
+        evict: bool,
+        io: &mut I,
+    ) -> Result<(), SqFull> {
         debug_assert!(r.dirty);
         let image_seq = r.image_seq + 1;
         let lsn = r.last_lsn;
-        let img = ExtentImage { tenant: r.tenant, layout_version: r.layout_version as u32, checkpoint_lsn: lsn, epoch: self.cfg.epoch, image_seq };
+        let img = ExtentImage {
+            tenant: r.tenant,
+            layout_version: r.layout_version as u32,
+            checkpoint_lsn: lsn,
+            epoch: self.cfg.epoch,
+            image_seq,
+        };
         // Stamp the image header inside a write section (readers see it atomically).
         // SAFETY: we are the only writer; reading our own payload non-atomically is race-free.
-        let body = unsafe { core::slice::from_raw_parts(self.arena.payload_ptr(idx).add(IMAGE_HEADER_WORDS * 8), Self::EXTENT_BYTES - IMAGE_HEADER_WORDS * 8) };
+        let body = unsafe {
+            core::slice::from_raw_parts(
+                self.arena.payload_ptr(idx).add(IMAGE_HEADER_WORDS * 8),
+                Self::EXTENT_BYTES - IMAGE_HEADER_WORDS * 8,
+            )
+        };
         let hw = img.header_words(body);
         self.arena
             .write(r.handle, lsn, |w| {
@@ -475,16 +730,35 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         let target = r.loc.flipped();
         let m = self.m(idx);
         let ticket = m.ticket.wrapping_add(1);
-        let ud = UserData { op: Op::Checkpoint, object: idx, ticket }.encode();
+        let ud = UserData {
+            op: Op::Checkpoint,
+            object: idx,
+            ticket,
+        }
+        .encode();
         // SAFETY: Flushing freezes CPU writes to this payload until the CQE (I2), and the
         // slot cannot be freed while io_inflight > 0 (I1).
         unsafe {
-            io.write_at(ud, target.container(), self.arena.payload_ptr(idx), Self::EXTENT_BYTES as u32, target.current_offset(Self::EXTENT_BYTES as u64), true)?;
+            io.write_at(
+                ud,
+                target.container(),
+                self.arena.payload_ptr(idx),
+                Self::EXTENT_BYTES as u32,
+                target.current_offset(Self::EXTENT_BYTES as u64),
+                true,
+            )?;
         }
         let m = self.m(idx);
         m.ticket = ticket;
         m.io_inflight += 1;
-        m.state = State::Flushing { res: r, target, lsn, image_seq, evict, deferred: 0 };
+        m.state = State::Flushing {
+            res: r,
+            target,
+            lsn,
+            image_seq,
+            evict,
+            deferred: 0,
+        };
         self.flushing += 1;
         self.stats.flushes += 1;
         Ok(())
@@ -493,21 +767,30 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
     /// Background eviction pass (CLOCK second-chance). Never frees anything itself for
     /// dirty slots: it only *starts* flushes; slots become free in `on_cqe`.
     /// Returns the number of slots that became free or started flushing.
-    pub fn run_eviction<I: IoBackend>(&mut self, durable_lsn: u64, io: &mut I, events: &mut Vec<Event>) -> u32 {
+    pub fn run_eviction<I: IoBackend>(
+        &mut self,
+        durable_lsn: u64,
+        io: &mut I,
+        events: &mut Vec<Event>,
+    ) -> u32 {
         if self.free_slots() >= self.cfg.low_free {
             return 0;
         }
         let n = self.meta.len();
         let mut progressed = 0;
         for _ in 0..2 * n {
-            if self.free_slots() + self.flushing >= self.cfg.high_free || self.flushing >= self.cfg.max_flush_inflight {
+            if self.free_slots() + self.flushing >= self.cfg.high_free
+                || self.flushing >= self.cfg.max_flush_inflight
+            {
                 break;
             }
             let i = self.hand;
             self.hand = (self.hand + 1) % n;
             let idx = self.range.start + i as u32;
             let m = self.meta[i];
-            let State::Resident(r) = m.state else { continue };
+            let State::Resident(r) = m.state else {
+                continue;
+            };
             if m.pins > 0 || m.retries >= self.cfg.max_retries {
                 continue;
             }
@@ -532,30 +815,67 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
     // ----------------------------------------------------------------- completions
 
     /// Feed every CQE whose op is `Load` or `Checkpoint` here.
-    pub fn on_cqe<I: IoBackend>(&mut self, user_data: u64, res: i32, io: &mut I, events: &mut Vec<Event>) {
-        let Some(ud) = UserData::decode(user_data) else { return };
+    pub fn on_cqe<I: IoBackend>(
+        &mut self,
+        user_data: u64,
+        res: i32,
+        io: &mut I,
+        events: &mut Vec<Event>,
+    ) {
+        let Some(ud) = UserData::decode(user_data) else {
+            return;
+        };
         if !self.range.contains(&ud.object) {
             self.stats.stale_cqes += 1;
             return;
         }
         let idx = ud.object;
         let m = self.m(idx);
-        assert!(m.io_inflight > 0, "CQE for slot {idx} with no I/O in flight");
+        assert!(
+            m.io_inflight > 0,
+            "CQE for slot {idx} with no I/O in flight"
+        );
         m.io_inflight -= 1;
         let current = m.ticket == ud.ticket;
         match (ud.op, m.state) {
             (Op::Load, State::Loading { .. }) if current => self.on_load_cqe(idx, res, io, events),
-            (Op::Checkpoint, State::Flushing { res: r, target, lsn, image_seq, evict, deferred }) if current => {
+            (
+                Op::Checkpoint,
+                State::Flushing {
+                    res: r,
+                    target,
+                    lsn,
+                    image_seq,
+                    evict,
+                    deferred,
+                },
+            ) if current => {
                 self.flushing -= 1;
                 if res >= 0 && res as usize == Self::EXTENT_BYTES {
-                    let nr = Residency { dirty: false, ckpt_lsn: lsn, image_seq, loc: target, ..r };
+                    let nr = Residency {
+                        dirty: false,
+                        ckpt_lsn: lsn,
+                        image_seq,
+                        loc: target,
+                        ..r
+                    };
                     self.route.set_extent(r.tenant, target);
-                    self.arena.set_checkpoint_lsn(r.handle, lsn).expect("owner core is the only writer");
+                    self.arena
+                        .set_checkpoint_lsn(r.handle, lsn)
+                        .expect("owner core is the only writer");
                     self.m(idx).retries = 0;
-                    events.push(Event::Checkpointed { tenant: r.tenant, lsn, loc: target });
+                    events.push(Event::Checkpointed {
+                        tenant: r.tenant,
+                        lsn,
+                        loc: target,
+                    });
                     if deferred > 0 {
                         self.m(idx).state = State::Resident(nr);
-                        events.push(Event::Resume { tenant: r.tenant, handle: r.handle, deferred });
+                        events.push(Event::Resume {
+                            tenant: r.tenant,
+                            handle: r.handle,
+                            deferred,
+                        });
                     } else if evict {
                         self.end_residency(idx, nr, events);
                     } else {
@@ -568,9 +888,17 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
                     m.retries = m.retries.saturating_add(1);
                     let retries = m.retries;
                     m.state = State::Resident(r);
-                    events.push(Event::FlushFailed { tenant: r.tenant, res, retries });
+                    events.push(Event::FlushFailed {
+                        tenant: r.tenant,
+                        res,
+                        retries,
+                    });
                     if deferred > 0 {
-                        events.push(Event::Resume { tenant: r.tenant, handle: r.handle, deferred });
+                        events.push(Event::Resume {
+                            tenant: r.tenant,
+                            handle: r.handle,
+                            deferred,
+                        });
                     }
                     if retries == self.cfg.max_retries {
                         events.push(Event::DiskDegraded { tenant: r.tenant });
@@ -595,16 +923,29 @@ mod tests {
     const DATA: usize = IMAGE_HEADER_WORDS; // first application word
 
     fn cfg() -> LifecycleConfig {
-        LifecycleConfig { low_free: 2, high_free: 3, max_flush_inflight: 2, max_retries: 3, epoch: 1 }
+        LifecycleConfig {
+            low_free: 2,
+            high_free: 3,
+            max_flush_inflight: 2,
+            max_retries: 3,
+            epoch: 1,
+        }
     }
     /// Tenant t owns blocks [2 + 2t, 2 + 2t + 2): copy A then copy B (block 0 unused).
     fn loc(t: u32) -> ExtentLoc {
         ExtentLoc::new(0, 2 + 2 * t as u64, false)
     }
     fn value(arena: &SlotArena<W>, h: SlotHandle, t: u32) -> Result<u64, SlotReadError> {
-        arena.read(h, t, Visibility::Applied, |v| v.word(DATA)).map(|s| s.value)
+        arena
+            .read(h, t, Visibility::Applied, |v| v.word(DATA))
+            .map(|s| s.value)
     }
-    fn deliver<const W2: usize>(lc: &mut SlotLifecycle<'_, W2>, io: &mut SimIo, i: usize, o: Outcome) -> Vec<Event> {
+    fn deliver<const W2: usize>(
+        lc: &mut SlotLifecycle<'_, W2>,
+        io: &mut SimIo,
+        i: usize,
+        o: Outcome,
+    ) -> Vec<Event> {
         let (ud, res) = io.complete(i, o);
         let mut ev = Vec::new();
         lc.on_cqe(ud, res, io, &mut ev);
@@ -618,10 +959,16 @@ mod tests {
         let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..4, cfg());
         let mut io = SimIo::new(1, 40 * 4096);
         let mut ev = Vec::new();
-        let hs: Vec<_> = (0..4).map(|t| lc.admit_new(t, loc(t), 1 + t as u64, 1, &mut ev).unwrap()).collect();
-        assert_eq!(lc.admit_new(9, loc(9), 9, 1, &mut ev), Err(AdmitError::NoFreeSlot { flushing: 0 }));
+        let hs: Vec<_> = (0..4)
+            .map(|t| lc.admit_new(t, loc(t), 1 + t as u64, 1, &mut ev).unwrap())
+            .collect();
+        assert_eq!(
+            lc.admit_new(9, loc(9), 9, 1, &mut ev),
+            Err(AdmitError::NoFreeSlot { flushing: 0 })
+        );
         for (t, &h) in hs.iter().enumerate() {
-            lc.mutate(h, 10 + t as u64, |w| w.set(DATA, 0xA0 + t as u64)).unwrap();
+            lc.mutate(h, 10 + t as u64, |w| w.set(DATA, 0xA0 + t as u64))
+                .unwrap();
         }
 
         // WAL rule (I3): nothing is durable yet, so nothing may be written back.
@@ -630,30 +977,65 @@ mod tests {
 
         // Durable: flushes start, but no slot is free until a CQE arrives.
         assert_eq!(lc.run_eviction(100, &mut io, &mut ev), 2);
-        assert_eq!((io.inflight.len(), lc.free_slots(), lc.flushing()), (2, 0, 2));
-        assert_eq!(lc.admit_new(9, loc(9), 20, 1, &mut ev), Err(AdmitError::NoFreeSlot { flushing: 2 }), "back-pressure while flushing");
+        assert_eq!(
+            (io.inflight.len(), lc.free_slots(), lc.flushing()),
+            (2, 0, 2)
+        );
+        assert_eq!(
+            lc.admit_new(9, loc(9), 20, 1, &mut ev),
+            Err(AdmitError::NoFreeSlot { flushing: 2 }),
+            "back-pressure while flushing"
+        );
         assert!(ev.iter().all(|e| !matches!(e, Event::Freed { .. })));
 
         // Mutations against a flushing slot are deferred (I2: DMA source is frozen).
-        let flushing: Vec<u32> = (0..4).filter(|&i| matches!(lc.state(i), State::Flushing { .. })).collect();
+        let flushing: Vec<u32> = (0..4)
+            .filter(|&i| matches!(lc.state(i), State::Flushing { .. }))
+            .collect();
         let (fa, fb) = (flushing[0], flushing[1]);
-        assert_eq!(lc.mutate(hs[fa as usize], 30, |w| w.set(DATA, 1)), Err(Gate::Defer));
+        assert_eq!(
+            lc.mutate(hs[fa as usize], 30, |w| w.set(DATA, 1)),
+            Err(Gate::Defer)
+        );
 
         // A failed write keeps the slot resident and dirty, and resumes the deferred op.
-        let ia = io.find(|op| UserData::decode(op.user_data).unwrap().object == fa).unwrap();
+        let ia = io
+            .find(|op| UserData::decode(op.user_data).unwrap().object == fa)
+            .unwrap();
         let e = deliver(&mut lc, &mut io, ia, Outcome::Err(libc::EIO));
-        assert!(e.contains(&Event::FlushFailed { tenant: fa, res: -libc::EIO, retries: 1 }));
-        assert!(e.contains(&Event::Resume { tenant: fa, handle: hs[fa as usize], deferred: 1 }));
-        assert!(matches!(lc.state(fa), State::Resident(Residency { dirty: true, .. })));
+        assert!(e.contains(&Event::FlushFailed {
+            tenant: fa,
+            res: -libc::EIO,
+            retries: 1
+        }));
+        assert!(e.contains(&Event::Resume {
+            tenant: fa,
+            handle: hs[fa as usize],
+            deferred: 1
+        }));
+        assert!(matches!(
+            lc.state(fa),
+            State::Resident(Residency { dirty: true, .. })
+        ));
         assert_eq!(value(&arena, hs[fa as usize], fa), Ok(0xA0 + fa as u64));
 
         // A short write is a failure too (the image would be torn).
-        let ib = io.find(|op| UserData::decode(op.user_data).unwrap().object == fb).unwrap();
+        let ib = io
+            .find(|op| UserData::decode(op.user_data).unwrap().object == fb)
+            .unwrap();
         let op = io.inflight[ib];
-        assert_eq!(op.offset, loc(fb).flipped().current_offset(4096), "I4: checkpoint goes to the other copy");
+        assert_eq!(
+            op.offset,
+            loc(fb).flipped().current_offset(4096),
+            "I4: checkpoint goes to the other copy"
+        );
         let e = deliver(&mut lc, &mut io, ib, Outcome::Short(2048));
         assert!(matches!(e[0], Event::FlushFailed { .. }));
-        assert_eq!(route.lookup(fb).unwrap().1, loc(fb), "route still points at the old copy");
+        assert_eq!(
+            route.lookup(fb).unwrap().1,
+            loc(fb),
+            "route still points at the old copy"
+        );
 
         // Retry, succeed: Checkpointed -> Evicted -> Freed, in that order, only now.
         let e = loop {
@@ -666,13 +1048,24 @@ mod tests {
             }
         };
         let pos = |p: fn(&Event) -> bool| e.iter().position(p).unwrap();
-        assert!(pos(|e| matches!(e, Event::Checkpointed { .. })) < pos(|e| matches!(e, Event::Evicted { .. })));
-        assert!(pos(|e| matches!(e, Event::Evicted { .. })) < pos(|e| matches!(e, Event::Freed { .. })));
-        assert_eq!(route.lookup(fb).unwrap(), (SlotHandle::NULL, loc(fb).flipped()));
+        assert!(
+            pos(|e| matches!(e, Event::Checkpointed { .. }))
+                < pos(|e| matches!(e, Event::Evicted { .. }))
+        );
+        assert!(
+            pos(|e| matches!(e, Event::Evicted { .. })) < pos(|e| matches!(e, Event::Freed { .. }))
+        );
+        assert_eq!(
+            route.lookup(fb).unwrap(),
+            (SlotHandle::NULL, loc(fb).flipped())
+        );
         let img = &io.files[0][op.offset as usize..op.offset as usize + 4096];
         let parsed = ExtentImage::validate(img, fb).expect("valid image on disk");
         assert_eq!(parsed.checkpoint_lsn, 10 + fb as u64);
-        assert_eq!(u64::from_le_bytes(img[DATA * 8..DATA * 8 + 8].try_into().unwrap()), 0xA0 + fb as u64);
+        assert_eq!(
+            u64::from_le_bytes(img[DATA * 8..DATA * 8 + 8].try_into().unwrap()),
+            0xA0 + fb as u64
+        );
 
         // Stale handle after reuse: the old generation can never read the new tenant.
         let old = hs[fb as usize];
@@ -685,7 +1078,17 @@ mod tests {
 
         // Out-of-range CQE: counted, ignored.
         let mut e = Vec::new();
-        lc.on_cqe(UserData { op: Op::Checkpoint, object: 77, ticket: 1 }.encode(), 4096, &mut io, &mut e);
+        lc.on_cqe(
+            UserData {
+                op: Op::Checkpoint,
+                object: 77,
+                ticket: 1,
+            }
+            .encode(),
+            4096,
+            &mut io,
+            &mut e,
+        );
         assert!(e.is_empty() && lc.stats.stale_cqes == 1);
     }
 
@@ -693,7 +1096,17 @@ mod tests {
     fn load_validates_image_and_falls_back_to_other_copy() {
         let arena = SlotArena::<W>::new_heap(0, 2, 1);
         let route = RouteTable::new(16);
-        let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..2, LifecycleConfig { low_free: 2, high_free: 2, ..cfg() });
+        let mut lc = SlotLifecycle::new(
+            &arena,
+            &route,
+            0,
+            0..2,
+            LifecycleConfig {
+                low_free: 2,
+                high_free: 2,
+                ..cfg()
+            },
+        );
         let mut io = SimIo::new(1, 40 * 4096);
         let mut ev = Vec::new();
         // Tenant 3: write two checkpoints (A/B), evict.
@@ -706,15 +1119,29 @@ mod tests {
         }
         // CLOCK: first pass clears `referenced`, second evicts the clean slot.
         lc.run_eviction(6, &mut io, &mut ev);
-        assert!(ev.iter().any(|e| matches!(e, Event::Evicted { tenant: 3, .. })));
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::Evicted { tenant: 3, .. }))
+        );
         let (_, cur) = route.lookup(3).unwrap();
         assert_eq!(cur, loc(3), "two flips: back to copy A");
 
         // Normal load.
         let idx = lc.admit_load(3, cur, 1, false, &mut io).unwrap();
-        assert_eq!(value(&arena, h, 3), Err(SlotReadError::Reassigned), "loading slot is unowned");
+        assert_eq!(
+            value(&arena, h, 3),
+            Err(SlotReadError::Reassigned),
+            "loading slot is unowned"
+        );
         let e = deliver(&mut lc, &mut io, 0, Outcome::Ok);
-        let Event::Loaded { handle, checkpoint_lsn, .. } = e[0] else { panic!("{e:?}") };
+        let Event::Loaded {
+            handle,
+            checkpoint_lsn,
+            ..
+        } = e[0]
+        else {
+            panic!("{e:?}")
+        };
         assert_eq!((handle.index(), checkpoint_lsn), (idx, 6));
         assert_eq!(value(&arena, handle, 3), Ok(222));
 
@@ -725,9 +1152,19 @@ mod tests {
         let a = cur.current_offset(4096) as usize;
         io.files[0][a + 100] ^= 0xFF;
         lc.admit_load(3, cur, 1, false, &mut io).unwrap();
-        assert!(deliver(&mut lc, &mut io, 0, Outcome::Ok).is_empty(), "retries the other copy");
+        assert!(
+            deliver(&mut lc, &mut io, 0, Outcome::Ok).is_empty(),
+            "retries the other copy"
+        );
         let e = deliver(&mut lc, &mut io, 0, Outcome::Ok);
-        let Event::Loaded { handle, checkpoint_lsn: 5, .. } = e[0] else { panic!("{e:?}") };
+        let Event::Loaded {
+            handle,
+            checkpoint_lsn: 5,
+            ..
+        } = e[0]
+        else {
+            panic!("{e:?}")
+        };
         assert_eq!(value(&arena, handle, 3), Ok(111));
         assert_eq!(route.lookup(3).unwrap().1, cur.flipped());
 
@@ -736,13 +1173,19 @@ mod tests {
         lc.admit_load(5, loc(5), 1, false, &mut io).unwrap();
         deliver(&mut lc, &mut io, 0, Outcome::Ok);
         let e = deliver(&mut lc, &mut io, 0, Outcome::Ok);
-        assert!(e.contains(&Event::LoadFailed { tenant: 5, errno: 0 }));
+        assert!(e.contains(&Event::LoadFailed {
+            tenant: 5,
+            errno: 0
+        }));
         assert!(matches!(e.last(), Some(Event::Freed { .. })));
         assert_eq!(lc.free_slots(), free_before);
         // I/O error on load.
         lc.admit_load(5, loc(5), 1, false, &mut io).unwrap();
         let e = deliver(&mut lc, &mut io, 0, Outcome::Err(libc::EIO));
-        assert!(e.contains(&Event::LoadFailed { tenant: 5, errno: -libc::EIO }));
+        assert!(e.contains(&Event::LoadFailed {
+            tenant: 5,
+            errno: -libc::EIO
+        }));
     }
 
     #[test]
@@ -770,7 +1213,14 @@ mod tests {
             }
             e = deliver(&mut lc2, &mut io, 0, Outcome::Ok);
         }
-        let Event::Loaded { handle, checkpoint_lsn: 7, .. } = e[0] else { panic!("{e:?}") };
+        let Event::Loaded {
+            handle,
+            checkpoint_lsn: 7,
+            ..
+        } = e[0]
+        else {
+            panic!("{e:?}")
+        };
         assert_eq!(value(&arena2, handle, 4), Ok(3));
         assert_eq!(route2.lookup(4).unwrap().1, loc(4).flipped());
     }
@@ -786,7 +1236,19 @@ mod tests {
         for seed in 1..=if cfg!(miri) { 1 } else { 40 } {
             let arena = SlotArena::<W>::new_heap(0, S, 1);
             let route = RouteTable::new(T);
-            let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..S, LifecycleConfig { low_free: 3, high_free: 4, max_flush_inflight: 3, max_retries: 50, epoch: 1 });
+            let mut lc = SlotLifecycle::new(
+                &arena,
+                &route,
+                0,
+                0..S,
+                LifecycleConfig {
+                    low_free: 3,
+                    high_free: 4,
+                    max_flush_inflight: 3,
+                    max_retries: 50,
+                    epoch: 1,
+                },
+            );
             let mut io = SimIo::new(1, (2 + 2 * T as usize + 2) * 4096);
             let mut rng = Rng(0x5EED ^ seed);
             // Model: committed value per tenant, and whether it exists on disk.
@@ -804,7 +1266,13 @@ mod tests {
                         if lc.mutate(h, lsn, |w| w.set(DATA, v)).is_ok() {
                             model[t as usize] = Some(v);
                         }
-                        assert_eq!(value(&arena, h, t).ok().zip(model[t as usize]).is_none_or(|(a, b)| a == b), true);
+                        assert_eq!(
+                            value(&arena, h, t)
+                                .ok()
+                                .zip(model[t as usize])
+                                .is_none_or(|(a, b)| a == b),
+                            true
+                        );
                     }
                     0..=5 if !loading[t as usize] => match model[t as usize] {
                         None => {
@@ -842,7 +1310,11 @@ mod tests {
                     match e {
                         Event::Loaded { tenant, handle, .. } => {
                             loading[tenant as usize] = false;
-                            assert_eq!(value(&arena, handle, tenant).ok(), model[tenant as usize], "seed {seed}: reload returned wrong state");
+                            assert_eq!(
+                                value(&arena, handle, tenant).ok(),
+                                model[tenant as usize],
+                                "seed {seed}: reload returned wrong state"
+                            );
                         }
                         Event::LoadFailed { tenant, errno } => {
                             assert!(errno < 0, "seed {seed}: a checkpointed image vanished");
@@ -857,7 +1329,11 @@ mod tests {
                 // Free + flushing + resident + loading accounting never exceeds capacity.
                 assert!(lc.free_slots() <= S);
             }
-            assert!(lc.stats.evictions > 20 && lc.stats.flush_errors > 0 && lc.stats.deferred > 0, "seed {seed}: weak coverage {:?}", lc.stats);
+            assert!(
+                lc.stats.evictions > 20 && lc.stats.flush_errors > 0 && lc.stats.deferred > 0,
+                "seed {seed}: weak coverage {:?}",
+                lc.stats
+            );
         }
     }
 }
