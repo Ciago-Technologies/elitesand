@@ -1,5 +1,5 @@
 use coagomem_core::io::{Outcome, SimIo};
-use coagomem_core::slot::CoreControl;
+use coagomem_core::slot::{CoreControl, SlotArena, TenantWord, Visibility};
 use coagomem_wal::envelope::KIND_DATA;
 use coagomem_wal::gclog::*;
 
@@ -18,7 +18,18 @@ fn r5_w1_fence_is_indeterminate_and_late_completion_cannot_publish() {
         max_retries: 3,
     };
     let mut io = SimIo::new(1, (cfg.data_offset() + cfg.capacity) as usize);
-    let core = CoreControl::default();
+    let controls = CoreControl::shared(2);
+    let class0 = SlotArena::<512>::new(0, 1, controls.clone());
+    let class1 = SlotArena::<512>::new(1, 1, controls);
+    let tw = TenantWord {
+        tenant: 1,
+        core: 0,
+        layout_version: 1,
+        flags: 0,
+    };
+    let h0 = class0.install(0, tw, 123, 1, 0).unwrap().unwrap();
+    let h1 = class1.install(0, tw, 123, 1, 0).unwrap().unwrap();
+    let core = class0.core(0);
     let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh());
     log.superblock_durable(&sb);
     log.append(1, KIND_DATA, b"a", Some(10), 0, &mut io)
@@ -34,7 +45,7 @@ fn r5_w1_fence_is_indeterminate_and_late_completion_cannot_publish() {
         let i = io.inflight.len() - 1; // batch B (retries are resubmitted at the end)
         let (ud, res) = io.complete(i, Outcome::Err(libc::EIO));
         fenced |= log
-            .on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed)
+            .on_cqe(ud, res, core, &mut io, &mut acks, &mut failed)
             .is_err();
     }
     assert!(fenced);
@@ -46,9 +57,19 @@ fn r5_w1_fence_is_indeterminate_and_late_completion_cannot_publish() {
     );
     // Batch A was healthy and completes after the fence.
     let (ud, res) = io.complete(0, Outcome::Ok);
-    let r = log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed);
+    let r = log.on_cqe(ud, res, core, &mut io, &mut acks, &mut failed);
     assert!(r.is_err(), "late completion remains fenced");
     assert!(core.is_fenced());
     assert_eq!(core.durable(), 0);
     assert!(acks.is_empty());
+    assert!(
+        class0
+            .read(h0, 1, 123, Visibility::Applied, |_| Some(()))
+            .is_err()
+    );
+    assert!(
+        class1
+            .read(h1, 1, 123, Visibility::Applied, |_| Some(()))
+            .is_err()
+    );
 }

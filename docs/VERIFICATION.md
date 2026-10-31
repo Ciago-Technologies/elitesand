@@ -1,27 +1,25 @@
-# Verification of the R5 remediation revision
+# Verification of the R6 remediation revision
 
-Executed on 31 October 2026 with rustc 1.99.1 on Linux x86_64. Results apply to component/reference execution, not a production service.
+Executed locally on 31 October 2026 with rustc 1.99.1 stable, Linux x86_64. These are component/reference results, not production qualification.
 
 | Command/check | Observed result |
 | --- | --- |
-| `cargo test --release --offline --workspace` | **100 passed, 0 failed**, including 26 ecosystem tests, 24 corrected v3 regressions, 13 R5 regressions, a corrected WAL regression and two compile-fail label doctests |
-| `cargo test --release --offline --workspace --all-features` | **128 passed, 0 failed**; includes historical vulnerability reproductions behind legacy-audit |
+| Original R6 probes before fixes | Seven core probes and one WAL probe passed, reproducing the reported defects/guards; original assertion text and reviewer logs retained under review/r6 |
+| `cargo test --release --offline --workspace` | **112 passed, 0 failed**: includes 26 engine tests, 24 v30 regressions, 13 R5 regressions, 10 corrected R6 core tests, two WAL regression targets and three compile-fail doctests |
+| `cargo test --release --offline --workspace --all-features` | **140 passed, 0 failed**; additional historical defect assertions are opt-in evidence, not remediation proof |
 | `cargo fmt --all -- --check` | Passed |
-| `python3 scripts/validate_workspace.py` | Passed: crate DAG, parser/crypto/engine boundaries, opt-in legacy API, embedded source, local links, vendor inventory and all 39 R5 finding dispositions |
+| `python3 scripts/validate_workspace.py` | Passed: crate boundaries/DAG, opt-in legacy API, source listing, local links, vendor inventory, 39 R5 and 7 R6 dispositions, control-field privacy |
 | `cargo clippy --workspace --all-targets --offline` | Completed successfully with warnings; no warning-free gate claimed |
-| `python3 scripts/check_mesh_progress.py` | **1,000** deterministic interleaving runs and **25** concurrent grid runs passed, each in an independently timed child process |
-| `cargo run --release --offline -p ciagomem-core --example layout` | SlotHeader=128, Label=160, CoreControl=384, VaultLoc=56, ExtentImage Rust struct=64, RefToken=24 bytes on this target; image wire header is 128 bytes |
-| Vendor comparison | All **43 packages** byte-for-byte equal to retained original crate archive contents; archive SHA256 inventory checked. Original archives came from the Cargo cache or direct upstream downloads. |
-| Extracted upload ZIP | All **128 all-feature tests passed** after extraction with empty CARGO_HOME and a separate target directory, fully offline; extracted documentation validator also passed |
-| Empty-cache metadata | `cargo metadata --offline` succeeded with a new empty CARGO_HOME; all resolved package sources are local paths |
-| Local smoke benchmark | Executed; see [ECOSYSTEM_BENCHMARK.md](ECOSYSTEM_BENCHMARK.md) and source-hashed JSON |
+| `python3 scripts/check_mesh_progress.py` | **1,000** cached-tail and **25** concurrent-grid runs passed in independently timed child processes |
+| `cargo run --release --offline -p coagomem-core --example layout` | SlotHeader=128, Label=176, CoreControl=256, VaultLoc=56, Rust ExtentImage=64, RefToken=24, FrameValue=320 bytes. Image wire header=128 bytes |
+| Vendor comparison | All 43 vendored package trees match their original crate archives and recorded SHA256 inventory |
+| Extracted R6 upload ZIP | **140 all-feature tests passed** fully offline with a new empty CARGO_HOME and separate target directory; extracted workspace/documentation validator passed |
+| Local benchmark | Executed on current source: bitmap 1,036 ns/query, scalar 4,609,543 ns/query, snapshot lookup 27 ns/call. See [scope and raw evidence](ECOSYSTEM_BENCHMARK.md) |
 
-Label reader storage adds up to 64 bytes of allocated u128 payload, plus allocator overhead, to the 160-byte Label object. Serialized proofs, action permits and retained journal images cost additional memory. Do not reuse the old 40-byte label estimate. Layout is target/compiler dependent.
+Label reader payload adds up to 64 bytes and allocator overhead. Dirty arrays now cost 33 bytes per slot with the checkpoint-barrier flag. Core controls are shared once across classes; the host must pass that same allocation to its WAL. Replay budgets charge both hash and heap storage. These are layout/arithmetic checks, not process RSS or million-user measurements.
 
-Corrected tests cover tenant/session/audience checks, destination roots and filesystem traversal/symlinks, signed provenance and action scope, replay/reader rejection, independent-anchor identity rollback and prefix corruption, unacknowledged tails, checkpoint pin coverage, image incarnation/epoch/tombstones, indeterminate WAL fencing, duplicate lifecycle CQEs, equal-LSN rejection, duplicate credits, vector bounds and deep AST validation/destruction. The earlier actor-native join/schema/search/analytics suite remains present.
+R6 tests now check cross-class durability/fencing and other-core availability, mid-read fencing, denial of unsigned derived Fact content plus successful fresh signing, joint journal/anchor restore with fresh incarnations, approval TTL/quota/expiry and restart binding, previous/future image epochs, trusted metadata mismatch, absent versus corrupt images, retained/truncated WAL, route publication only after replay, replay abort, and hot-tenant barrier progress/failure. Existing query, mesh, lifecycle and simulated WAL recovery tests remain present.
 
-The mesh consumer refreshes the published tail before dropping pending state; finite progress deadlines and the subprocess runner prevent a deadlock from hanging verification indefinitely. Repetition is evidence for these tested schedules, not a weak-memory proof.
+The R6 reviewer's Miri subset and aarch64 compile logs apply to the preceding R5 workspace. They are attributed external evidence under review/r6/logs, not checks executed for these new changes. Only the stable toolchain is installed here. No current Miri/loom/Shuttle, ARM execution, long fuzzing, physical power cuts, full service transaction/replay certification, SQL comparison or one-million-user qualification was performed. Those gates remain open.
 
-Miri, loom, aarch64 execution, long fuzz/property campaigns, hardware power cuts, integrated transaction/replay certification, authenticated server transport, SQL comparison and one-million-tenant capacity qualification were **not** performed for this revision. The independent review describes its own checks on the older snapshot; those are not our current results. No production sign-off is claimed.
-
-Historical adversarial assertions pass when old defects exist; they are retained solely as compatibility/provenance evidence. See [R5_REMEDIATION.md](R5_REMEDIATION.md) for every finding and remaining gates.
+See [R6_REMEDIATION.md](R6_REMEDIATION.md) for current guarantees, breaking API changes and integration limits.

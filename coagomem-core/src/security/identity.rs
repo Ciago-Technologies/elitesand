@@ -300,23 +300,7 @@ impl TenantRegistry {
             Err(RegistryError::Missing) => {}
             Err(e) => return Err(e),
         }
-        let seq = self
-            .store
-            .head
-            .sequence
-            .checked_add(1)
-            .ok_or(RegistryError::InvalidName)?;
-        let inc = u128::from_le_bytes(
-            k.mac128(
-                b"ciagomem/incarnation/v2",
-                &[
-                    self.store.uuid.as_slice(),
-                    &seq.to_le_bytes(),
-                    &id.to_le_bytes(),
-                ]
-                .concat(),
-            ),
-        );
+        let inc = ciagomem_crypto::random_id().map_err(RegistryError::Persistence)?;
         self.store
             .append(1, id, inc, ns, name)
             .map_err(RegistryError::Persistence)?;

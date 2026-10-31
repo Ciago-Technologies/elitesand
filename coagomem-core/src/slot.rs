@@ -218,18 +218,28 @@ pub struct SlotHeader {
 }
 const _: () = assert!(core::mem::size_of::<SlotHeader>() == 128);
 
-/// Engine-private durability/fence state; agent projections must copy an attested watermark.
+/// Node-owned durability/fence state shared by every size-class arena.
+/// ```compile_fail
+/// use coagomem_core::CoreControl;
+/// CoreControl::default().durable_lsn.store(9, std::sync::atomic::Ordering::Release);
+/// ```
 #[derive(Debug, Default)]
 #[repr(C)]
 pub struct CoreControl {
     /// Highest LSN of this core's log with a successful CQE for it and every prior record.
-    pub durable_lsn: CachePadded<AtomicU64>,
-    /// Bumped on every engine (re)start; readers drop all cached handles on change.
-    pub engine_epoch: CachePadded<AtomicU64>,
+    durable_lsn: CachePadded<AtomicU64>,
+    publication: std::sync::Mutex<()>,
     fenced: core::sync::atomic::AtomicBool,
 }
 
 impl CoreControl {
+    pub fn shared(cores: usize) -> std::sync::Arc<[Self]> {
+        assert!((1..=256).contains(&cores));
+        (0..cores)
+            .map(|_| Self::default())
+            .collect::<Vec<_>>()
+            .into()
+    }
     /// Reader side: relaxed load + acquire fence (read-only-mapping safe).
     #[inline(always)]
     pub fn durable(&self) -> u64 {
@@ -240,11 +250,13 @@ impl CoreControl {
     /// Log side: monotonic publish.
     #[inline(always)]
     pub fn publish_durable(&self, lsn: u64) {
+        let _guard = self.publication.lock().unwrap_or_else(|p| p.into_inner());
         if !self.is_fenced() {
             self.durable_lsn.fetch_max(lsn, Release);
         }
     }
     pub fn fence(&self) {
+        let _guard = self.publication.lock().unwrap_or_else(|p| p.into_inner());
         self.fenced.store(true, Release);
     }
     pub fn is_fenced(&self) -> bool {
@@ -257,7 +269,7 @@ impl CoreControl {
 // ---------------------------------------------------------------------------------
 
 /// One slot's payload. 4 KiB alignment makes it a valid O_DIRECT / `WRITE_FIXED`
-/// source and destination with no bounce buffer. Words 0..8 hold the on-disk extent
+/// source and destination with no bounce buffer. Words 0..16 hold the on-disk extent
 /// image header (`envelope::ExtentImage`), application data starts at word 8.
 #[derive(Debug)]
 #[repr(C, align(4096))]
@@ -328,7 +340,7 @@ pub struct SlotArena<const W: usize> {
     n: u32,
     headers: NonNull<SlotHeader>,
     payloads: NonNull<Payload<W>>,
-    cores: Box<[CoreControl]>,
+    cores: std::sync::Arc<[CoreControl]>,
     backing: Backing,
     base: NonNull<u8>,
 }
@@ -365,11 +377,11 @@ impl<const W: usize> SlotArena<W> {
     }
 
     /// Zeroed heap backing (tests, non-Linux, or no hugepages reserved).
-    pub fn new(class: u8, n: usize, cores: usize) -> Self {
+    pub fn new(class: u8, n: usize, cores: std::sync::Arc<[CoreControl]>) -> Self {
         Self::new_heap(class, n.try_into().expect("slot count exceeds u32"), cores)
     }
-    pub fn new_heap(class: u8, n: u32, cores: usize) -> Self {
-        Self::check(class, n, cores);
+    pub fn new_heap(class: u8, n: u32, cores: std::sync::Arc<[CoreControl]>) -> Self {
+        Self::check(class, n, cores.len());
         let layout =
             std::alloc::Layout::from_size_align(Self::region_bytes(n as usize), 2 * 1024 * 1024)
                 .unwrap();
@@ -382,9 +394,13 @@ impl<const W: usize> SlotArena<W> {
     /// HugeTLB-backed memfd (2 MiB pages, reserved at boot via `hugepages=`), mapped
     /// `MAP_SHARED | MAP_POPULATE`. Private engine allocation; no descriptor is returned.
     #[cfg(target_os = "linux")]
-    pub fn new_hugetlb(class: u8, n: u32, cores: usize) -> std::io::Result<Self> {
+    pub fn new_hugetlb(
+        class: u8,
+        n: u32,
+        cores: std::sync::Arc<[CoreControl]>,
+    ) -> std::io::Result<Self> {
         use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-        Self::check(class, n, cores);
+        Self::check(class, n, cores.len());
         let len = Self::region_bytes(n as usize).next_multiple_of(2 * 1024 * 1024);
         let name = c"coagomem-slab";
         // MFD_HUGE_2MB = 21 << MFD_HUGE_SHIFT(26)
@@ -431,13 +447,18 @@ impl<const W: usize> SlotArena<W> {
         }
     }
 
-    fn from_base(class: u8, n: u32, cores: usize, base: NonNull<u8>, backing: Backing) -> Self {
+    fn from_base(
+        class: u8,
+        n: u32,
+        cores: std::sync::Arc<[CoreControl]>,
+        base: NonNull<u8>,
+        backing: Backing,
+    ) -> Self {
         let headers = base.cast::<SlotHeader>();
         // SAFETY: header_region is within the allocation and 4 KiB aligned (2 MiB multiple).
         let payloads =
             unsafe { NonNull::new_unchecked(base.as_ptr().add(Self::header_region(n as usize))) }
                 .cast::<Payload<W>>();
-        let cores = (0..cores).map(|_| CoreControl::default()).collect();
         SlotArena {
             class,
             n,
@@ -503,13 +524,10 @@ impl<const W: usize> SlotArena<W> {
         vis: Visibility,
         mut f: impl FnMut(WordView<'_>) -> Option<R>,
     ) -> Result<Snapshot<R>, SlotReadError> {
-        if self.cores.iter().any(CoreControl::is_fenced) {
-            return Err(SlotReadError::Fenced);
-        }
         let idx = self.resolve(h).ok_or(SlotReadError::InvalidHandle)?;
         let hdr = self.header(idx);
         let words = self.payload(idx);
-        // `Err(())` inside the closure = validated owner mismatch.
+        // Owner, identity and core checks are validated by the same seqlock snapshot.
         let r = read_deadline(
             &hdr.seq,
             words,
@@ -524,7 +542,13 @@ impl<const W: usize> SlotArena<W> {
                     || hdr.incarnation_lo.load(Relaxed) != expected_incarnation as u64
                     || hdr.incarnation_hi.load(Relaxed) != (expected_incarnation >> 64) as u64
                 {
-                    return Some(Err(()));
+                    return Some(Err(SlotReadError::Reassigned));
+                }
+                let Some(control) = self.cores.get(tw.core as usize) else {
+                    return Some(Err(SlotReadError::Corrupt));
+                };
+                if control.is_fenced() {
+                    return Some(Err(SlotReadError::Fenced));
                 }
                 let applied = hdr.applied_lsn.load(Relaxed);
                 Some(Ok((f(view)?, applied, tw.core)))
@@ -535,16 +559,22 @@ impl<const W: usize> SlotArena<W> {
             crate::DeadlineReadError::DeadlineExhausted { .. } => SlotReadError::DeadlineExhausted,
             crate::DeadlineReadError::Corrupt => SlotReadError::Corrupt,
         })?;
-        let (value, applied, core) = r.map_err(|()| SlotReadError::Reassigned)?;
+        let (value, applied, core) = r?;
+        let control = self
+            .cores
+            .get(core as usize)
+            .ok_or(SlotReadError::Corrupt)?;
+        if control.is_fenced() {
+            return Err(SlotReadError::Fenced);
+        }
         if vis == Visibility::Durable {
-            let durable = self
-                .cores
-                .get(core as usize)
-                .ok_or(SlotReadError::Corrupt)?
-                .durable();
+            let durable = control.durable();
             if applied > durable {
                 return Err(SlotReadError::NotYetDurable { applied, durable });
             }
+        }
+        if control.is_fenced() {
+            return Err(SlotReadError::Fenced);
         }
         Ok(Snapshot {
             value,
@@ -788,7 +818,7 @@ mod tests {
 
     #[test]
     fn stale_handle_cannot_read_new_tenant() {
-        let arena = SlotArena::<W>::new_heap(0, 4, 2);
+        let arena = SlotArena::<W>::new_heap(0, 4, CoreControl::shared(2));
         let route = RouteTable::new(16);
         let tw = |t| TenantWord {
             tenant: t,
@@ -838,7 +868,7 @@ mod tests {
 
     #[test]
     fn durable_visibility_follows_core_watermark() {
-        let arena = SlotArena::<W>::new_heap(0, 1, 1);
+        let arena = SlotArena::<W>::new_heap(0, 1, CoreControl::shared(1));
         let tw = TenantWord {
             tenant: 1,
             core: 0,

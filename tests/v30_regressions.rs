@@ -15,6 +15,7 @@ fn session(tenant: u128, ops: u64) -> VerifiedMacaroon {
             Caveat::PeerUid(1000),
             Caveat::Session(1),
             Caveat::Audience(7),
+            Caveat::BootEpoch(1),
             Caveat::Ops(ops),
             Caveat::KeyEpoch(2),
         ],
@@ -30,6 +31,7 @@ fn session(tenant: u128, ops: u64) -> VerifiedMacaroon {
             peer_uid: 1000,
             session: 1,
             audience: 7,
+            boot_epoch: 1,
         },
     )
     .unwrap()
@@ -257,6 +259,7 @@ fn s6_endorsements_require_authentication_and_binding() {
     let approval = Approval {
         tenant: 11,
         session: 1,
+        boot_epoch: 1,
         nonce: 1,
         field: FrameField::ActiveIntent as u8,
         sources: 2,
@@ -276,7 +279,7 @@ fn s6_endorsements_require_authentication_and_binding() {
         sink: 11,
         verifier: &verifier,
     };
-    let mut nonces = NonceTracker::new(10);
+    let mut nonces = NonceTracker::new(10, 128, 1);
     let mut value = admit_to_frame(
         FrameField::ActiveIntent,
         label.clone(),
@@ -305,7 +308,7 @@ fn s6_endorsements_require_authentication_and_binding() {
             label.clone(),
             Some(&forged),
             &context,
-            &mut NonceTracker::new(10)
+            &mut NonceTracker::new(10, 128, 1)
         )
         .is_err()
     );
@@ -319,7 +322,7 @@ fn s6_endorsements_require_authentication_and_binding() {
             label,
             Some(&e),
             &wrong,
-            &mut NonceTracker::new(10)
+            &mut NonceTracker::new(10, 128, 1)
         )
         .is_err()
     );
@@ -336,6 +339,7 @@ fn s6b_signature_ops_and_mandatory_caveats_required() {
         peer_uid: 1000,
         session: 1,
         audience: 7,
+        boot_epoch: 1,
     };
     let base = vec![
         Caveat::Tenant(1),
@@ -343,6 +347,7 @@ fn s6b_signature_ops_and_mandatory_caveats_required() {
         Caveat::PeerUid(1000),
         Caveat::Session(1),
         Caveat::Audience(7),
+        Caveat::BootEpoch(1),
         Caveat::KeyEpoch(0),
     ];
     assert!(
@@ -367,6 +372,7 @@ fn s6b_signature_ops_and_mandatory_caveats_required() {
             Caveat::PeerUid(1000),
             Caveat::Session(1),
             Caveat::Audience(7),
+            Caveat::BootEpoch(1),
             Caveat::KeyEpoch(0),
             Caveat::Ops(1),
         ],
@@ -403,7 +409,7 @@ impl Clock for StepClock {
 }
 #[test]
 fn s9_slot_read_uses_a_deadline() {
-    let a = SlotArena::<512>::new(0, 1, 1);
+    let a = SlotArena::<512>::new(0, 1, CoreControl::shared(1));
     let h = a
         .install(
             0,
@@ -534,7 +540,7 @@ fn sixty_four_votes_required() {
 #[test]
 fn checked_primitives_reject_regression_before_mutating() {
     assert!(ExtentLoc::new_checked(4103, false, 1).is_none());
-    let a = SlotArena::<512>::new(0, 1, 1);
+    let a = SlotArena::<512>::new(0, 1, CoreControl::shared(1));
     let h = a
         .install(
             0,
@@ -570,7 +576,7 @@ fn checked_primitives_reject_regression_before_mutating() {
 #[test]
 fn p0_slot_regressions_are_also_rejected_in_release() {
     use coagomem_core::slot as p0;
-    let a = p0::SlotArena::<512>::new_heap(0, 1, 1);
+    let a = p0::SlotArena::<512>::new_heap(0, 1, CoreControl::shared(1));
     let h = a
         .install(
             0,

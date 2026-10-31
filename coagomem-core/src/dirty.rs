@@ -9,6 +9,7 @@ pub struct TruncationPins {
     lsn: Box<[u64]>,
     since: Box<[u64]>,
     latest: Box<[u64]>,
+    checkpointing: Box<[bool]>,
     head: u32,
     tail: u32,
     last_lsn: u64,
@@ -19,6 +20,7 @@ pub enum DirtyError {
     LsnRegression,
     ZeroLsn,
     StaleCheckpoint,
+    CheckpointInProgress,
 }
 impl TruncationPins {
     pub fn new(tenants: usize) -> Self {
@@ -29,6 +31,7 @@ impl TruncationPins {
             lsn: vec![0; tenants].into(),
             since: vec![0; tenants].into(),
             latest: vec![0; tenants].into(),
+            checkpointing: vec![false; tenants].into(),
             head: NIL,
             tail: NIL,
             last_lsn: 0,
@@ -38,6 +41,9 @@ impl TruncationPins {
         let i = t as usize;
         if i >= self.lsn.len() {
             return Err(DirtyError::InvalidTenant);
+        }
+        if self.checkpointing[i] {
+            return Err(DirtyError::CheckpointInProgress);
         }
         if lsn == 0 {
             return Err(DirtyError::ZeroLsn);
@@ -62,6 +68,26 @@ impl TruncationPins {
         self.tail = t;
         Ok(())
     }
+    /// Owner barrier: defer mutations before applying them until completion or failure.
+    pub fn begin_checkpoint(&mut self, t: u32) -> Result<u64, DirtyError> {
+        let i = t as usize;
+        if i >= self.lsn.len() {
+            return Err(DirtyError::InvalidTenant);
+        }
+        if self.checkpointing[i] {
+            return Err(DirtyError::CheckpointInProgress);
+        }
+        self.checkpointing[i] = true;
+        Ok(self.latest[i])
+    }
+    pub fn checkpoint_failed(&mut self, t: u32) -> Result<(), DirtyError> {
+        let frozen = self
+            .checkpointing
+            .get_mut(t as usize)
+            .ok_or(DirtyError::InvalidTenant)?;
+        *frozen = false;
+        Ok(())
+    }
     pub fn on_checkpointed(&mut self, t: u32, image_lsn: u64) -> Result<(), DirtyError> {
         let i = t as usize;
         if i >= self.lsn.len() {
@@ -70,6 +96,7 @@ impl TruncationPins {
         if self.latest[i] > image_lsn {
             return Err(DirtyError::StaleCheckpoint);
         }
+        self.checkpointing[i] = false;
         if self.lsn[i] == 0 {
             return Ok(());
         }

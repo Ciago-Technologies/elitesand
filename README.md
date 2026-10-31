@@ -6,7 +6,7 @@ CiagoMem — SLAE, also called **The Store**, is a Rust systems project for acto
 
 The **0.3.0 engineering workspace** combines the P0 components with a corrected version of the v3.0 reference kernel supplied in the production-readiness review. The [corrected technical whitepaper](../ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md) distinguishes implementation evidence from architectural requirements.
 
-> **Status:** Actor-native reference query execution, component libraries, security regressions and I/O simulation. A complete server, integrated transaction recovery, replication, and production qualification remain open. See the [R5 remediation ledger](docs/R5_REMEDIATION.md) and [earlier ledger](docs/REVIEW_REMEDIATION.md).
+> **Status:** Actor-native reference query execution, component libraries, security regressions and I/O simulation. A complete server, integrated transaction recovery, replication, and production qualification remain open. See the [R6 remediation ledger](docs/R6_REMEDIATION.md) and [earlier ledger](docs/REVIEW_REMEDIATION.md).
 
 ## Architecture
 
@@ -102,14 +102,14 @@ Runtime vector bindings, tenant-name aliases, general SQL joins, schema administ
 
 ## Security and persistence
 
-- **Authenticated capabilities:** RustCrypto HMAC-SHA256 replaces the home-grown ARX function. Macaroons require signed tenant, expiry, UID, session, audience, operation and epoch caveats. Ed25519 provenance and approvals bind content, frame field, session, nonce, tool and sink; verifiers hold only public keys.
+- **Authenticated capabilities:** RustCrypto HMAC-SHA256 replaces the home-grown ARX function. Macaroons require signed tenant, expiry, UID, session, audience, boot epoch, operation and key epoch caveats. Ed25519 provenance and approvals bind content, frame field, session, boot epoch, nonce, tool and sink; verifiers hold only public keys.
 - **Explicit readers:** Labels contain bounded sets of full 128-bit reader IDs, avoiding modulo-64 tenant aliasing. LLM outputs inherit context restrictions; Q-LLM output is External.
-- **Persistent identity:** An exclusive hash-chained journal restores tenant mappings and deletion history. A mandatory independent rollback anchor separates acknowledged records from recoverable unacknowledged tails. A deployable durable anchor and WAL/backup integration remain open.
-- **Bounded progress:** Overflow returns the rejected item at its hard cap. Cumulative consumption acknowledgements reject duplicate inflation; control/data mesh capacity is separate. Dirty tracking uses a preallocated intrusive FIFO and rejects stale checkpoint completion. Voting requires exclusive owner access, eliminating the slot-tag/RMW race.
+- **Persistent identity:** An exclusive hash-chained journal restores tenant mappings and deletion history. New incarnations use fresh OS randomness. A mandatory independent rollback anchor separates acknowledged records from recoverable unacknowledged tails. A deployable durable anchor and WAL/backup integration remain open.
+- **Bounded progress:** Overflow returns the rejected item at its hard cap. Cumulative consumption acknowledgements reject duplicate inflation; control/data mesh capacity is separate. Dirty tracking uses a preallocated intrusive FIFO and an explicit owner checkpoint barrier; stale completions cannot release pins. Voting requires exclusive owner access, eliminating the slot-tag/RMW race.
 - **Read semantics:** The canonical arena uses deadlines and report stalled writers without declaring them dead. The clock currently uses `Instant`; calibrated hardware counters remain a qualification task.
 - **Agent exports:** Linux windows are sealed and tested against writable upgrades. A shared byte/session budget reserves capacity before allocation and releases it on failure/drop. Session transport and publication remain unimplemented.
 
-Root exports now alias the canonical persistence-wired arena/seqlock types. Reads check full incarnations; mutation writes reject equal/regressing LSNs. Extent image v3 validates incarnation/epoch and rejects tombstones. WAL failure fences the core and reports indeterminate outcomes; late completions cannot publish durability. Durable deletion and recovery orchestration remain open. Component tests do not establish end-to-end tenant isolation or ACID for a running service.
+Root exports now alias the canonical persistence-wired arena/seqlock types. Arena constructors require node-shared durability/fence controls. Reads check full incarnations; mutation writes reject equal/regressing LSNs. Extent image v3 accepts earlier epochs under trusted recovery bounds and distinguishes absent/corrupt images. Single-copy recovery requires retained WAL coverage; routes stay unpublished until required replay completes. WAL failure fences the core and reports indeterminate outcomes; late completions cannot publish durability. Durable deletion and recovery orchestration remain open. Component tests do not establish end-to-end tenant isolation or ACID for a running service.
 
 ## Review and validation
 
@@ -125,7 +125,7 @@ This enables historical exploit reproductions under `coagomem_core::legacy`. A p
 
 Read the [actor-native engine design](docs/ACTOR_NATIVE_QUERY_ENGINE.md) for the five capability scopes, the [benchmark report](docs/ECOSYSTEM_BENCHMARK.md) for measured internal-path comparisons, and the [verification report](docs/VERIFICATION.md) for executed checks.
 
-The [R5 remediation ledger](docs/R5_REMEDIATION.md) maps all 39 current findings to source and tests and tracks remaining integration work. Simulation is not a substitute for physical power-loss tests, clock calibration, Miri/loom/fuzzing, transaction-history analysis or production benchmarks. Existing P0 and upstream-vendored lint warnings remain; zero-warning production sign-off is not claimed.
+The [R6 remediation ledger](docs/R6_REMEDIATION.md) covers all seven new findings and affected earlier guarantees to source and tests and tracks remaining integration work. Simulation is not a substitute for physical power-loss tests, clock calibration, Miri/loom/fuzzing, transaction-history analysis or production benchmarks. Existing P0 and upstream-vendored lint warnings remain; zero-warning production sign-off is not claimed.
 
 ## License
 

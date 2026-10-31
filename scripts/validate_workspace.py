@@ -48,5 +48,9 @@ assert all((root / "vendor" / p).exists() for p in json.loads((root / "vendor/ar
 ledger=(root / "docs/R5_REMEDIATION.md").read_text()
 required={"M1","D1","W1","I1","L1","T1","T2","T3","F1","F2","F3","F4","F5","P1","P2","P3","P4","Q1","Q2","Q3","Q4","Q5","Q6","X1","X2","A1","A2","A3","A4","O1","V1","S1","L2","C1","C2","C3","B1","G1","G2"}
 assert required <= set(re.findall(r"R5-([A-Z]\d+)",ledger)), "R5 finding lacks disposition"
+r6=(root / "docs/R6_REMEDIATION.md").read_text()
+assert {f"R6-N{i}" for i in range(1,8)} <= set(re.findall(r"R6-N\d+",r6)), "R6 finding lacks disposition"
+slot=(root / "coagomem-core/src/slot.rs").read_text()
+assert "pub durable_lsn:" not in slot and "pub fenced:" not in slot
 print("Validated crate DAG, parser/crypto boundaries, opt-in legacy API, source listing, links and vendor inventory.")
 print("VERDICT: PASS")

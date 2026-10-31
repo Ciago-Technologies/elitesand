@@ -15,6 +15,7 @@ fn session(tenant: u128) -> VerifiedMacaroon {
             Caveat::PeerUid(42),
             Caveat::Session(1),
             Caveat::Audience(7),
+            Caveat::BootEpoch(1),
             Caveat::Ops(OP_READ | OP_WRITE | OP_OPERATOR),
             Caveat::KeyEpoch(1),
         ],
@@ -30,6 +31,7 @@ fn session(tenant: u128) -> VerifiedMacaroon {
             peer_uid: 42,
             session: 1,
             audience: 7,
+            boot_epoch: 1,
         },
     )
     .unwrap()
@@ -607,6 +609,7 @@ fn readonly_scope_cannot_mutate_or_add_links() {
             Caveat::PeerUid(42),
             Caveat::Session(1),
             Caveat::Audience(7),
+            Caveat::BootEpoch(1),
             Caveat::Ops(OP_READ),
             Caveat::KeyEpoch(1),
         ],
@@ -622,6 +625,7 @@ fn readonly_scope_cannot_mutate_or_add_links() {
             peer_uid: 42,
             session: 1,
             audience: 7,
+            boot_epoch: 1,
         },
     )
     .unwrap();
@@ -843,11 +847,12 @@ fn test_label(
     let proof = issuer.provenance(coagomem_core::Provenance {
         tenant,
         session: 1,
+        boot_epoch: 1,
         integrity: integrity as u8,
         sources,
         readers,
         digest: coagomem_core::content_digest(b"value"),
         expires_at: 1000,
     });
-    Label::attested(&proof, &issuer.verifier(), tenant, 1, b"value", 1)
+    Label::attested(&proof, &issuer.verifier(), tenant, 1, 1, b"value", 1)
 }

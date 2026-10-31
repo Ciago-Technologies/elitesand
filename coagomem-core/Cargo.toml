@@ -28,3 +28,7 @@ path = "../tests/v30_regressions.rs"
 [[test]]
 name = "r5_regressions"
 path = "../tests/r5_regressions.rs"
+
+[[test]]
+name = "r6_regressions"
+path = "../tests/r6_regressions.rs"

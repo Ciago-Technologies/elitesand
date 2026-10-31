@@ -1,0 +1,251 @@
+//! Independent R6 re-verification probes (reviewer-authored).
+//!
+//! Convention: a test named `defect_*` PASSES when the second-order defect EXISTS
+//! (it documents current behaviour). A test named `guard_*` PASSES when the
+//! claimed protection holds. Invert `defect_*` assertions once fixed.
+mod support;
+use coagomem_core::*;
+use std::{
+    collections::HashMap,
+    fs,
+    sync::{Arc, Mutex},
+};
+
+fn session(tenant: u128) -> VerifiedMacaroon {
+    let k = KeyedPrf([9; 32]);
+    Macaroon::issue(
+        &k,
+        vec![
+            Caveat::Tenant(tenant),
+            Caveat::ExpiresAt(100),
+            Caveat::PeerUid(1000),
+            Caveat::Session(1),
+            Caveat::Audience(7),
+            Caveat::Ops(OP_READ | OP_OPERATOR),
+            Caveat::KeyEpoch(2),
+        ],
+    )
+    .unwrap()
+    .verify(
+        &k,
+        &RequestCtx {
+            tenant_incarnation: tenant,
+            key_epoch: 2,
+            now_ns: 1,
+            op_bit: OP_READ,
+            peer_uid: 1000,
+            session: 1,
+            audience: 7,
+        },
+    )
+    .unwrap()
+}
+
+fn tw() -> TenantWord {
+    TenantWord {
+        tenant: 1,
+        core: 0,
+        layout_version: 1,
+        flags: 0,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R6-N1: CoreControl (durable LSN + fence) is private per arena. The spec
+// requires 16 size classes, so one log/core must publish into 16 arenas; a
+// fence on one class does not fence the others, and durable_lsn is a public
+// field that bypasses publish_durable()'s fence check.
+// ---------------------------------------------------------------------------
+#[test]
+fn defect_n1_fence_and_durable_lsn_do_not_span_size_class_arenas() {
+    let class0 = SlotArena::<512>::new(0, 1, 1);
+    let class1 = SlotArena::<512>::new(1, 1, 1);
+    let h1 = class1.install(0, tw(), 123, 5, 0).unwrap().unwrap();
+    // Log for core 0 hits a terminal write error and fences "its" CoreControl.
+    class0.core(0).fence();
+    // Class-1 arena on the same core still serves reads: the fence is not global.
+    assert!(class1
+        .read(h1, 1, 123, Visibility::Applied, |_| Some(()))
+        .is_ok());
+    // A durable publish via the public atomic field bypasses fence/monotonic checks.
+    class0
+        .core(0)
+        .durable_lsn
+        .store(u64::MAX, std::sync::atomic::Ordering::Release);
+    assert_eq!(class0.core(0).durable(), u64::MAX);
+    // And class1 never learns durability published to class0's control block.
+    assert_eq!(class1.core(0).durable(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// R6-N2: Label::derived(content, parents) is public and self-asserts a fresh
+// content digest while inheriting the parent's issuer, scope, expiry and
+// AgentDerived integrity. Any holder of one attested label can mint a label
+// that passes Fact admission for arbitrary bytes with no signature over them.
+// ---------------------------------------------------------------------------
+#[test]
+fn defect_n2_label_derived_launders_arbitrary_content_into_fact() {
+    let signer = AttestationSigner::from_seed([3; 32]);
+    let verifier = signer.verifier();
+    let token = session(11);
+    let attested = support::label(Integrity::AgentDerived, 2, vec![11]).unwrap();
+    let evil = b"attacker chosen bytes never signed by the issuer";
+    let laundered = Label::derived(evil, &[attested]);
+    let ctx = AdmissionContext {
+        session: &token,
+        reader: 11,
+        content: evil,
+        now: 1,
+        nonce: 1,
+        tool: "none",
+        sink: 11,
+        verifier: &verifier,
+    };
+    let admitted = admit_to_frame(
+        FrameField::Fact,
+        laundered,
+        None,
+        &ctx,
+        &mut NonceTracker::new(4),
+    );
+    assert!(admitted.is_ok(), "unsigned content admitted as Fact");
+}
+
+// ---------------------------------------------------------------------------
+// R6-N3: incarnation = PRF(domain uuid, seq, id) is deterministic. If the
+// journal and the anchor are restored together (VM snapshot, backup restore),
+// replaying the same operations reissues an incarnation that was previously
+// acknowledged to a different lifetime of the tenant (T2 residual).
+// ---------------------------------------------------------------------------
+#[derive(Default)]
+struct SnapAnchor(Mutex<HashMap<[u8; 16], IdentityHead>>);
+impl IdentityAnchor for SnapAnchor {
+    fn initialize(&self, id: [u8; 16]) -> std::io::Result<()> {
+        self.0.lock().unwrap().insert(id, IdentityHead::default());
+        Ok(())
+    }
+    fn head(&self, id: [u8; 16]) -> std::io::Result<IdentityHead> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(&id)
+            .copied()
+            .ok_or_else(|| std::io::Error::other("unknown"))
+    }
+    fn advance(&self, id: [u8; 16], e: IdentityHead, n: IdentityHead) -> std::io::Result<()> {
+        let mut m = self.0.lock().unwrap();
+        if m.get(&id) != Some(&e) {
+            return Err(std::io::Error::other("conflict"));
+        }
+        m.insert(id, n);
+        Ok(())
+    }
+}
+
+#[test]
+fn defect_n3_joint_journal_and_anchor_rollback_reissues_incarnation() {
+    let path = std::env::temp_dir().join(format!("ciagomem-r6-n3-{}", std::process::id()));
+    let _ = fs::remove_file(&path);
+    let anchor = Arc::new(SnapAnchor::default());
+    let k = KeyedPrf([9; 32]);
+    let mut r = TenantRegistry::new(IncarnationStore::create(&path, anchor.clone()).unwrap());
+    r.create(&k, "ns", "t").unwrap();
+    drop(r);
+    // Coordinated snapshot of BOTH journal and anchor state.
+    let journal_snapshot = fs::read(&path).unwrap();
+    let anchor_snapshot = anchor.0.lock().unwrap().clone();
+    let mut r = TenantRegistry::new(IncarnationStore::open(&path, anchor.clone()).unwrap());
+    r.delete(&k, "ns", "t").unwrap();
+    let second_life = r.create(&k, "ns", "t").unwrap();
+    drop(r);
+    // Restore both together.
+    fs::write(&path, &journal_snapshot).unwrap();
+    *anchor.0.lock().unwrap() = anchor_snapshot;
+    let mut r = TenantRegistry::new(IncarnationStore::open(&path, anchor.clone()).unwrap());
+    r.delete(&k, "ns", "t").unwrap();
+    let replayed = r.create(&k, "ns", "t").unwrap();
+    assert_eq!(replayed, second_life, "same incarnation reissued after joint rollback");
+    let _ = fs::remove_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// R6-N4: NonceTracker is one global in-memory map keyed by (tenant, session,
+// nonce) with no TTL clamp. Approvals with far-future expiry are never
+// evicted, so one tenant's approved actions exhaust capacity for all tenants;
+// state is lost on restart.
+// ---------------------------------------------------------------------------
+#[test]
+fn defect_n4_nonce_tracker_far_future_expiry_exhausts_shared_capacity() {
+    let signer = AttestationSigner::from_seed([3; 32]);
+    let verifier = signer.verifier();
+    let token = session(11);
+    let mut tracker = NonceTracker::new(1);
+    let endorse = |nonce: u128| {
+        signer.endorse(Approval {
+            tenant: 11,
+            session: 1,
+            nonce,
+            field: FrameField::ActiveIntent as u8,
+            sources: 2,
+            digest: content_digest(b"value"),
+            sink: 11,
+            tool: "send".into(),
+            expires_at: u64::MAX,
+        })
+    };
+    let admit = |nonce: u128, now: u64, tr: &mut NonceTracker| {
+        let label = support::label(Integrity::AgentDerived, 2, vec![11]).unwrap();
+        let ctx = AdmissionContext {
+            session: &token,
+            reader: 11,
+            content: b"value",
+            now,
+            nonce,
+            tool: "send",
+            sink: 11,
+            verifier: &verifier,
+        };
+        admit_to_frame(FrameField::ActiveIntent, label, Some(&endorse(nonce)), &ctx, tr)
+    };
+    assert!(admit(1, 1, &mut tracker).is_ok());
+    // Much later (label still valid at now=999 < 1000), a distinct approved action fails.
+    assert!(matches!(admit(2, 999, &mut tracker), Err(FlowDenied::Capacity)));
+}
+
+// ---------------------------------------------------------------------------
+// Guards (expected to pass): claimed protections hold.
+// ---------------------------------------------------------------------------
+#[test]
+fn guard_dirty_hot_tenant_stays_pinned_until_covering_checkpoint() {
+    let mut p = TruncationPins::new(1);
+    p.on_dirty(0, 10, 0).unwrap();
+    for lsn in 11..1000 {
+        p.on_dirty(0, lsn, 0).unwrap();
+        // Each checkpoint image lags the newest mutation by one record.
+        assert!(p.on_checkpointed(0, lsn - 1).is_err());
+    }
+    // Conservative but live-locked: the pin never moves past the first dirty LSN.
+    assert_eq!(p.min_needed_lsn(5000), 10);
+}
+
+#[test]
+fn guard_label_derived_cannot_escalate_above_parent() {
+    let ext = Label::external(1, vec![11]).unwrap();
+    let d = Label::derived(b"x", &[ext]);
+    assert_eq!(d.integrity(), Integrity::External);
+}
+
+#[test]
+fn guard_measured_sizes_match_remediation_ledger() {
+    use std::mem::size_of;
+    let sizes = [
+        ("Label", size_of::<Label>()),
+        ("SlotHeader", size_of::<SlotHeader>()),
+        ("CoreControl", size_of::<CoreControl>()),
+        ("FrameValue", size_of::<FrameValue>()),
+    ];
+    eprintln!("R6 sizes: {sizes:?}");
+    assert_eq!(sizes[0].1, 160);
+    assert_eq!(sizes[1].1, 128);
+    assert_eq!(sizes[2].1, 384);
+}

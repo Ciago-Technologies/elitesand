@@ -12,6 +12,7 @@ fn session(tenant: u128) -> VerifiedMacaroon {
             Caveat::PeerUid(1000),
             Caveat::Session(1),
             Caveat::Audience(7),
+            Caveat::BootEpoch(1),
             Caveat::Ops(OP_READ | OP_OPERATOR),
             Caveat::KeyEpoch(2),
         ],
@@ -27,6 +28,7 @@ fn session(tenant: u128) -> VerifiedMacaroon {
             peer_uid: 1000,
             session: 1,
             audience: 7,
+            boot_epoch: 1,
         },
     )
     .unwrap()
@@ -113,7 +115,7 @@ fn i1_disk_images_bind_full_incarnation_epoch_and_tombstone() {
     let bytes = encode(image);
     assert!(ExtentImage::validate(&bytes, 3, image.incarnation, 2).is_some());
     assert!(ExtentImage::validate(&bytes, 3, 1, 2).is_none());
-    assert!(ExtentImage::validate(&bytes, 3, image.incarnation, 3).is_none());
+    assert!(ExtentImage::validate(&bytes, 3, image.incarnation, 1).is_none());
     image.tombstone = true;
     assert!(ExtentImage::validate(&encode(image), 3, image.incarnation, 2).is_none());
 }
@@ -199,7 +201,7 @@ fn o1_duplicate_cumulative_credit_does_not_inflate_capacity() {
 }
 #[test]
 fn a1_a3_a4_s1_canonical_slot_checks_incarnation_and_equal_lsn() {
-    let a = SlotArena::<512>::new(0, 1, 1);
+    let a = SlotArena::<512>::new(0, 1, CoreControl::shared(1));
     let h = a
         .install(
             0,
@@ -279,6 +281,7 @@ fn f1_f2_f3_f4_f5_frame_permits_bind_reader_field_action_and_issuer() {
     let e = signer.endorse(Approval {
         tenant: 11,
         session: 1,
+        boot_epoch: 1,
         nonce: 9,
         field: FrameField::ActiveIntent as u8,
         sources: 2,
@@ -303,7 +306,7 @@ fn f1_f2_f3_f4_f5_frame_permits_bind_reader_field_action_and_issuer() {
             label.clone(),
             Some(&e),
             &ctx,
-            &mut NonceTracker::new(4)
+            &mut NonceTracker::new(4, 128, 1)
         )
         .is_err()
     );
@@ -314,7 +317,7 @@ fn f1_f2_f3_f4_f5_frame_permits_bind_reader_field_action_and_issuer() {
             label.clone(),
             Some(&e),
             &wrong,
-            &mut NonceTracker::new(4)
+            &mut NonceTracker::new(4, 128, 1)
         ),
         Err(FlowDenied::ReaderDenied)
     ));
@@ -328,7 +331,7 @@ fn f1_f2_f3_f4_f5_frame_permits_bind_reader_field_action_and_issuer() {
             label.clone(),
             Some(&e),
             &wrong,
-            &mut NonceTracker::new(4)
+            &mut NonceTracker::new(4, 128, 1)
         )
         .is_err()
     );
@@ -343,7 +346,7 @@ fn f1_f2_f3_f4_f5_frame_permits_bind_reader_field_action_and_issuer() {
             label.clone(),
             Some(&e),
             &wrong,
-            &mut NonceTracker::new(4)
+            &mut NonceTracker::new(4, 128, 1)
         )
         .is_err()
     );
@@ -353,7 +356,7 @@ fn f1_f2_f3_f4_f5_frame_permits_bind_reader_field_action_and_issuer() {
         label,
         Some(&e),
         &ctx,
-        &mut NonceTracker::new(4),
+        &mut NonceTracker::new(4, 128, 1),
     )
     .unwrap();
     assert!(authorize_tool_call(&mut permit, &token, "delete", 11, b"value", 2).is_err());
@@ -371,6 +374,7 @@ fn c2_session_and_audience_are_mandatory_and_nontransferable() {
         peer_uid: 1000,
         session: 1,
         audience: 7,
+        boot_epoch: 1,
     };
     let caveats = vec![
         Caveat::Tenant(11),
@@ -386,9 +390,23 @@ fn c2_session_and_audience_are_mandatory_and_nontransferable() {
             .is_err()
     );
     let mut caveats = caveats;
-    caveats.extend([Caveat::Session(1), Caveat::Audience(7)]);
+    caveats.extend([
+        Caveat::Session(1),
+        Caveat::Audience(7),
+        Caveat::BootEpoch(1),
+    ]);
     let m = Macaroon::issue(&k, caveats).unwrap();
     assert!(m.verify(&k, &ctx).is_ok());
     assert!(m.verify(&k, &RequestCtx { session: 2, ..ctx }).is_err());
-    assert!(m.verify(&k, &RequestCtx { audience: 8, ..ctx }).is_err());
+    assert!(
+        m.verify(
+            &k,
+            &RequestCtx {
+                audience: 8,
+                boot_epoch: 1,
+                ..ctx
+            }
+        )
+        .is_err()
+    );
 }

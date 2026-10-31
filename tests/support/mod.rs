@@ -53,11 +53,12 @@ pub fn label(
     let proof = key.provenance(Provenance {
         tenant,
         session: 1,
+        boot_epoch: 1,
         integrity: integrity as u8,
         sources,
         readers,
         digest: content_digest(b"value"),
         expires_at: 1000,
     });
-    Label::attested(&proof, &key.verifier(), tenant, 1, b"value", 1)
+    Label::attested(&proof, &key.verifier(), tenant, 1, 1, b"value", 1)
 }

@@ -1,6 +1,6 @@
 # Actor-native execution benchmark
 
-R5 revision measurement. Observed on 31 October 2026 using Rust 1.99.1, release optimization, a single unpinned Linux x86_64 process and an in-memory journal. Four partitions are simulated in-process; these are not four concurrent reactor threads.
+R6 revision measurement. Observed on 31 October 2026 using Rust 1.99.1, release optimization, a single unpinned Linux x86_64 process and an in-memory journal. Four partitions are simulated in-process; these are not four concurrent reactor threads.
 
 Command:
 
@@ -12,8 +12,8 @@ The example inserts 10,000 one-field records, warms the indexed path, parses onc
 
 | Path | Observed average | Instrumented work units |
 | --- | ---: | ---: |
-| Bitmap candidate pushdown | 1,130 ns/query | 7 |
-| Scalar path in the same executor | 5,294,179 ns/query | 20,001 |
+| Bitmap candidate pushdown | 1,036 ns/query | 7 |
+| Scalar path in the same executor | 4,609,543 ns/query | 20,001 |
 | Snapshot handle lookup/pin, 100,000 calls | 27 ns/call | Not a complete query |
 
 Reported actor/index byte estimate: **10,260,000 bytes**, excluding independent MemoryJournal retention, external pinned snapshots and process/kernel overhead. This is not measured RSS or a one-million-user capacity result.

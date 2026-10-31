@@ -7,6 +7,29 @@ pub fn content_digest(bytes: &[u8]) -> [u8; 32] {
 }
 use subtle::ConstantTimeEq;
 
+/// OS entropy is required after restart; failure never falls back to a counter.
+pub fn random_id() -> std::io::Result<u128> {
+    use std::io::Read;
+    let mut random = std::fs::File::open("/dev/urandom")?;
+    loop {
+        let mut bytes = [0; 16];
+        random.read_exact(&mut bytes)?;
+        let id = u128::from_le_bytes(bytes);
+        if id != 0 {
+            return Ok(id);
+        }
+    }
+}
+/// Create once per engine start; never restore this value from a data backup.
+pub struct SessionEpoch(u128);
+impl SessionEpoch {
+    pub fn new() -> std::io::Result<Self> {
+        Ok(Self(random_id()?))
+    }
+    pub fn id(&self) -> u128 {
+        self.0
+    }
+}
 pub trait Prf {
     fn mac256(&self, domain: &[u8], msg: &[u8]) -> [u8; 32];
     fn mac128(&self, domain: &[u8], msg: &[u8]) -> [u8; 16] {
@@ -36,6 +59,7 @@ pub enum Caveat {
     KeyEpoch(u64),
     Audience(u64),
     Session(u128),
+    BootEpoch(u128),
     Unknown(Vec<u8>),
 }
 fn encode(c: &Caveat) -> Vec<u8> {
@@ -47,6 +71,7 @@ fn encode(c: &Caveat) -> Vec<u8> {
         Caveat::KeyEpoch(v) => [vec![4], v.to_le_bytes().to_vec()].concat(),
         Caveat::Audience(v) => [vec![5], v.to_le_bytes().to_vec()].concat(),
         Caveat::Session(v) => [vec![6], v.to_le_bytes().to_vec()].concat(),
+        Caveat::BootEpoch(v) => [vec![7], v.to_le_bytes().to_vec()].concat(),
         Caveat::Unknown(v) => [vec![255], v.clone()].concat(),
     }
 }
@@ -64,6 +89,7 @@ pub struct RequestCtx {
     pub peer_uid: u32,
     pub session: u128,
     pub audience: u64,
+    pub boot_epoch: u128,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum CaveatError {
@@ -79,13 +105,21 @@ pub struct VerifiedMacaroon {
     ops: u64,
     session: u128,
     audience: u64,
+    boot_epoch: u128,
+    expires_at: u64,
 }
 impl VerifiedMacaroon {
+    pub fn expires_at(&self) -> u64 {
+        self.expires_at
+    }
     pub fn tenant_incarnation(&self) -> u128 {
         self.tenant
     }
     pub fn session_id(&self) -> u128 {
         self.session
+    }
+    pub fn boot_epoch(&self) -> u128 {
+        self.boot_epoch
     }
     pub fn audience(&self) -> u64 {
         self.audience
@@ -129,7 +163,8 @@ impl Macaroon {
         }
         let (mut t, mut e, mut p, mut o, mut epoch) = (false, false, false, false, false);
         let mut ops = u64::MAX;
-        let (mut session, mut audience) = (false, false);
+        let mut expires_at = u64::MAX;
+        let (mut session, mut audience, mut boot) = (false, false, false);
         for c in &self.caveats {
             let ok = match c {
                 Caveat::Tenant(v) => {
@@ -138,6 +173,7 @@ impl Macaroon {
                 }
                 Caveat::ExpiresAt(v) => {
                     e = true;
+                    expires_at = expires_at.min(*v);
                     ctx.now_ns < *v
                 }
                 Caveat::PeerUid(v) => {
@@ -161,13 +197,17 @@ impl Macaroon {
                     audience = true;
                     *v == ctx.audience
                 }
+                Caveat::BootEpoch(v) => {
+                    boot = true;
+                    *v != 0 && *v == ctx.boot_epoch
+                }
                 Caveat::Unknown(_) => false,
             };
             if !ok {
                 return Err(CaveatError::Denied);
             }
         }
-        if !(t && e && p && o && epoch && session && audience) {
+        if !(t && e && p && o && epoch && session && audience && boot) {
             return Err(CaveatError::MissingMandatory);
         }
         Ok(VerifiedMacaroon {
@@ -175,6 +215,8 @@ impl Macaroon {
             ops,
             session: ctx.session,
             audience: ctx.audience,
+            boot_epoch: ctx.boot_epoch,
+            expires_at,
         })
     }
 }

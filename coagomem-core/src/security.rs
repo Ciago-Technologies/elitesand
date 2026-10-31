@@ -3,7 +3,8 @@ use ciagomem_crypto::{
     Approval, AttestationVerifier, Endorsement, Prf, SignedProvenance, VerifiedMacaroon,
     content_digest, ct_eq,
 };
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultLoc {
     pub segment: u32,
@@ -95,7 +96,7 @@ pub struct Label {
     readers: Vec<u128>,
     digest: Option<[u8; 32]>,
     issuer: Option<[u8; 32]>,
-    scope: Option<(u128, u128)>,
+    scope: Option<(u128, u128, u128)>,
     expires_at: u64,
 }
 impl Label {
@@ -120,10 +121,11 @@ impl Label {
         key: &AttestationVerifier,
         tenant: u128,
         session: u128,
+        boot_epoch: u128,
         content: &[u8],
         now: u64,
     ) -> Result<Self, &'static str> {
-        if !proof.verify(key, tenant, session, content, now) {
+        if !proof.verify(key, tenant, session, boot_epoch, content, now) {
             return Err("invalid provenance");
         }
         let mut l = Self::external(proof.claims.sources, proof.claims.readers.clone())?;
@@ -136,7 +138,7 @@ impl Label {
         };
         l.digest = Some(content_digest(content));
         l.issuer = Some(key.to_bytes());
-        l.scope = Some((tenant, session));
+        l.scope = Some((tenant, session, boot_epoch));
         l.expires_at = proof.claims.expires_at;
         Ok(l)
     }
@@ -196,16 +198,28 @@ pub enum FlowDenied {
     Replay,
     Capacity,
     WrongAction,
+    ExpiredSession,
 }
+/// Approval times use the monotonic nanosecond clock of the current boot epoch.
+pub const MAX_APPROVAL_TTL_NS: u64 = 300_000_000_000;
 pub struct NonceTracker {
-    seen: std::collections::BTreeMap<(u128, u128, u128), u64>,
-    capacity: usize,
+    seen: HashSet<(u128, u128, u128)>,
+    expiry: BinaryHeap<Reverse<(u64, u128, u128, u128)>>,
+    counts: HashMap<u128, usize>,
+    per_tenant: usize,
+    max_tenants: usize,
+    boot_epoch: u128,
 }
 impl NonceTracker {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(per_tenant: usize, max_tenants: usize, boot_epoch: u128) -> Self {
+        assert!(per_tenant > 0 && max_tenants > 0 && boot_epoch != 0);
         Self {
-            seen: Default::default(),
-            capacity,
+            seen: HashSet::new(),
+            expiry: BinaryHeap::new(),
+            counts: HashMap::new(),
+            per_tenant,
+            max_tenants,
+            boot_epoch,
         }
     }
     fn consume(
@@ -216,15 +230,32 @@ impl NonceTracker {
         expires: u64,
         now: u64,
     ) -> Result<(), FlowDenied> {
-        self.seen.retain(|_, until| *until > now);
+        if expires <= now || expires - now > MAX_APPROVAL_TTL_NS {
+            return Err(FlowDenied::InvalidEndorsement);
+        }
+        while let Some(&Reverse((expires, tenant, session, nonce))) = self.expiry.peek() {
+            if expires > now {
+                break;
+            }
+            self.expiry.pop();
+            self.seen.remove(&(tenant, session, nonce));
+            let count = self.counts.get_mut(&tenant).unwrap();
+            *count -= 1;
+            if *count == 0 {
+                self.counts.remove(&tenant);
+            }
+        }
         let key = (tenant, session, nonce);
-        if self.seen.contains_key(&key) {
+        if self.seen.contains(&key) {
             return Err(FlowDenied::Replay);
         }
-        if self.seen.len() >= self.capacity {
+        let count = self.counts.get(&tenant).copied().unwrap_or(0);
+        if count >= self.per_tenant || count == 0 && self.counts.len() >= self.max_tenants {
             return Err(FlowDenied::Capacity);
         }
-        self.seen.insert(key, expires);
+        self.seen.insert(key);
+        self.counts.insert(tenant, count + 1);
+        self.expiry.push(Reverse((expires, tenant, session, nonce)));
         Ok(())
     }
 }
@@ -243,6 +274,7 @@ pub struct FrameValue {
     label: Label,
     tenant: u128,
     session: u128,
+    boot_epoch: u128,
     digest: [u8; 32],
     tool: String,
     sink: u128,
@@ -265,12 +297,18 @@ pub fn admit_to_frame(
     if !label.readers.contains(&ctx.reader) {
         return Err(FlowDenied::ReaderDenied);
     }
+    if ctx.now >= ctx.session.expires_at() {
+        return Err(FlowDenied::ExpiredSession);
+    }
+    if ctx.session.boot_epoch() != nonces.boot_epoch {
+        return Err(FlowDenied::Replay);
+    }
     let tenant = ctx.session.tenant_incarnation();
     let session = ctx.session.session_id();
     let digest = content_digest(ctx.content);
     if label.integrity != Integrity::External
         && (label.issuer != Some(ctx.verifier.to_bytes())
-            || label.scope != Some((tenant, session))
+            || label.scope != Some((tenant, session, ctx.session.boot_epoch()))
             || label.digest != Some(digest)
             || ctx.now >= label.expires_at)
     {
@@ -284,6 +322,7 @@ pub fn admit_to_frame(
         let expected = Approval {
             tenant,
             session,
+            boot_epoch: ctx.session.boot_epoch(),
             nonce: ctx.nonce,
             field: field as u8,
             sources: label.sources,
@@ -315,10 +354,12 @@ pub fn admit_to_frame(
     Ok(FrameValue {
         expires_at: label
             .expires_at
-            .min(endorsement.map_or(u64::MAX, |e| e.approval.expires_at)),
+            .min(endorsement.map_or(u64::MAX, |e| e.approval.expires_at))
+            .min(ctx.session.expires_at()),
         label,
         tenant,
         session,
+        boot_epoch: ctx.session.boot_epoch(),
         digest,
         tool: ctx.tool.into(),
         sink: ctx.sink,
@@ -342,10 +383,12 @@ pub fn authorize_tool_call(
         || !value.action
         || value.tenant != session.tenant_incarnation()
         || value.session != session.session_id()
+        || value.boot_epoch != session.boot_epoch()
         || value.tool != tool
         || value.sink != sink
         || value.digest != content_digest(args)
         || now >= value.expires_at
+        || now >= session.expires_at()
         || !value.label.readers.contains(&sink)
     {
         return Err(FlowDenied::WrongAction);
@@ -360,6 +403,8 @@ pub fn label_pllm_output(context: &[Label]) -> Label {
     let mut out = rest.iter().fold(first.clone(), |a, b| a.join(b));
     out.integrity = out.integrity.min(Integrity::AgentDerived);
     out.digest = None;
+    out.issuer = None;
+    out.scope = None;
     out
 }
 pub fn label_qllm_output(context: &[Label]) -> Label {

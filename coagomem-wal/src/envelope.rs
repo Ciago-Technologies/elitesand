@@ -230,6 +230,12 @@ pub struct ExtentImage {
     pub epoch: u64,
     pub image_seq: u64,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageStatus {
+    Absent,
+    Invalid,
+    Valid(ExtentImage),
+}
 impl ExtentImage {
     pub fn header_words(&self, body: &[u8]) -> [u64; IMG_WORDS] {
         let mut w = [0; IMG_WORDS];
@@ -245,39 +251,69 @@ impl ExtentImage {
         w[6] = crc32c(&[&bytes]) as u64;
         w
     }
-    pub fn validate(bytes: &[u8], tenant: u32, incarnation: u128, epoch: u64) -> Option<Self> {
-        if bytes.len() < IMG_BYTES || incarnation == 0 {
-            return None;
+    /// `current_epoch` is the reopened log epoch, not the epoch that wrote this image.
+    pub fn validate(
+        bytes: &[u8],
+        tenant: u32,
+        incarnation: u128,
+        current_epoch: u64,
+    ) -> Option<Self> {
+        match Self::inspect(bytes, tenant, incarnation, current_epoch, None) {
+            ImageStatus::Valid(i) => Some(i),
+            _ => None,
         }
-        let w: [u64; IMG_WORDS] = core::array::from_fn(|i| {
-            u64::from_le_bytes(bytes[i * 8..i * 8 + 8].try_into().unwrap())
-        });
-        if w[0] as u32 != IMG_MAGIC
-            || (w[0] >> 32) as u16 != IMG_VERSION
-            || w[0] >> 48 != 0
-            || w[1] as u32 != tenant
-            || w[3] != epoch
-            || (w[8] as u128 | ((w[9] as u128) << 64)) != incarnation
-        {
-            return None;
+    }
+    pub fn inspect(
+        bytes: &[u8],
+        tenant: u32,
+        incarnation: u128,
+        current_epoch: u64,
+        trusted_epoch: Option<u64>,
+    ) -> ImageStatus {
+        if bytes.len() < IMG_BYTES {
+            return ImageStatus::Invalid;
         }
-        let mut header = bytes[..IMG_BYTES].to_vec();
-        header[48..56].fill(0);
-        if crc32c(&[&header]) as u64 != w[6] || crc32c(&[&bytes[IMG_BYTES..]]) as u64 != w[5] {
-            return None;
+        if bytes.iter().all(|b| *b == 0) {
+            return ImageStatus::Absent;
         }
-        if w[7] != 0 || w[10..].iter().any(|w| *w != 0) {
-            return None;
-        }
-        Some(Self {
-            tenant,
-            incarnation,
-            tombstone: false,
-            layout_version: (w[1] >> 32) as u32,
-            checkpoint_lsn: w[2],
-            epoch: w[3],
-            image_seq: w[4],
-        })
+        let check = || {
+            if incarnation == 0 {
+                return None;
+            }
+            let w: [u64; IMG_WORDS] = core::array::from_fn(|i| {
+                u64::from_le_bytes(bytes[i * 8..i * 8 + 8].try_into().unwrap())
+            });
+            if w[0] as u32 != IMG_MAGIC
+                || (w[0] >> 32) as u16 != IMG_VERSION
+                || w[0] >> 48 != 0
+                || w[1] as u32 != tenant
+                || w[3] == 0
+                || w[3] > current_epoch
+                || trusted_epoch.is_some_and(|epoch| w[3] != epoch)
+                || (w[8] as u128 | ((w[9] as u128) << 64)) != incarnation
+            {
+                return None;
+            }
+            let mut header = bytes[..IMG_BYTES].to_vec();
+            header[48..56].fill(0);
+            if crc32c(&[&header]) as u64 != w[6]
+                || crc32c(&[&bytes[IMG_BYTES..]]) as u64 != w[5]
+                || w[7] != 0
+                || w[10..].iter().any(|w| *w != 0)
+            {
+                return None;
+            }
+            Some(Self {
+                tenant,
+                incarnation,
+                tombstone: false,
+                layout_version: (w[1] >> 32) as u32,
+                checkpoint_lsn: w[2],
+                epoch: w[3],
+                image_seq: w[4],
+            })
+        };
+        check().map_or(ImageStatus::Invalid, ImageStatus::Valid)
     }
 }
 

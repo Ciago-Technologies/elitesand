@@ -36,7 +36,7 @@
 //!   after a full-length successful CQE. A torn checkpoint never destroys the last image.
 //! * I5 CQEs are matched by `(object, ticket)`; a stale CQE never changes state.
 
-use crate::envelope::ExtentImage;
+use crate::envelope::{ExtentImage, ImageStatus};
 use crate::io::{IoBackend, Op, SqFull, UserData};
 use crate::slot::{ExtentLoc, IMAGE_HEADER_WORDS, RouteTable, SlotArena, SlotHandle, TenantWord};
 use core::ops::Range;
@@ -62,7 +62,7 @@ pub enum Probe {
     /// Crash recovery (route table lost): read A, then B, keep the newer valid one.
     RecoverA,
     RecoverB {
-        a: Option<ExtentImage>,
+        a: ImageStatus,
     },
     RecoverRereadA {
         a: ExtentImage,
@@ -79,6 +79,10 @@ pub enum State {
         layout_version: u8,
     },
     Resident(Residency),
+    Replaying {
+        res: Residency,
+        through_lsn: u64,
+    },
     Flushing {
         res: Residency,
         target: ExtentLoc,
@@ -93,10 +97,25 @@ pub enum State {
     Retired,
 }
 
+/// Trusted recovered log interval; CRC images alone cannot prove log coverage.
+#[derive(Debug, Clone, Copy)]
+pub struct RecoveryBounds {
+    pub current_epoch: u64,
+    pub expected_image_epoch: Option<u64>,
+    pub wal_start_lsn: u64,
+    pub wal_end_lsn: u64,
+}
+impl RecoveryBounds {
+    fn covers(&self, checkpoint: u64) -> bool {
+        self.wal_start_lsn > 0
+            && self.wal_start_lsn - 1 <= checkpoint
+            && checkpoint <= self.wal_end_lsn
+    }
+}
 #[derive(Debug, Clone, Copy)]
 struct Meta {
     incarnation: u128,
-    expected_epoch: u64,
+    recovery: RecoveryBounds,
     state: State,
     ticket: u32,
     io_inflight: u8,
@@ -110,14 +129,22 @@ pub enum Event {
     NeedsRepair {
         tenant: u32,
     },
-    /// Slot is resident with image `checkpoint_lsn`; replay this tenant's log records with
-    /// `lsn > checkpoint_lsn` before serving it.
+    Absent {
+        tenant: u32,
+    },
+    ReplayRequired {
+        tenant: u32,
+        handle: SlotHandle,
+        from_lsn: u64,
+        through_lsn: u64,
+    },
+    /// Route published only after the required recovered log suffix has been applied.
     Loaded {
         tenant: u32,
         handle: SlotHandle,
         checkpoint_lsn: u64,
     },
-    /// `errno < 0`: I/O error; `errno == 0`: no valid image in either copy.
+    /// Negative I/O/validation error. Only all-zero image pairs emit Absent.
     LoadFailed {
         tenant: u32,
         errno: i32,
@@ -164,6 +191,7 @@ pub enum AdmitError {
         flushing: u32,
     },
     SqFull,
+    InvalidRecovery,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,7 +275,12 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
                 retries: 0,
                 referenced: false,
                 incarnation: 0,
-                expected_epoch: cfg.epoch
+                recovery: RecoveryBounds {
+                    current_epoch: cfg.epoch,
+                    expected_image_epoch: None,
+                    wal_start_lsn: 1,
+                    wal_end_lsn: 0
+                }
             };
             n
         ]
@@ -434,17 +467,23 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         &mut self,
         tenant: u32,
         incarnation: u128,
-        expected_epoch: u64,
+        recovery: RecoveryBounds,
         loc: ExtentLoc,
         layout_version: u8,
         recover: bool,
         io: &mut I,
     ) -> Result<u32, AdmitError> {
+        if recovery.current_epoch == 0
+            || recovery.wal_start_lsn == 0
+            || recovery.wal_end_lsn < recovery.wal_start_lsn - 1
+        {
+            return Err(AdmitError::InvalidRecovery);
+        }
         let idx = self.free.pop().ok_or(AdmitError::NoFreeSlot {
             flushing: self.flushing,
         })?;
         self.m(idx).incarnation = incarnation;
-        self.m(idx).expected_epoch = expected_epoch;
+        self.m(idx).recovery = recovery;
         let probe = if recover {
             Probe::RecoverA
         } else {
@@ -502,16 +541,17 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         Ok(())
     }
 
-    fn image_of(&self, idx: u32, tenant: u32) -> Option<ExtentImage> {
-        // SAFETY: called only after the read CQE; this core is the slot's sole writer and
-        // concurrent readers only read, so a non-atomic byte view is race-free.
+    fn image_of(&self, idx: u32, tenant: u32) -> ImageStatus {
+        // SAFETY: the read CQE completed and this unowned payload has no readers/writers.
         let bytes =
             unsafe { core::slice::from_raw_parts(self.arena.payload_ptr(idx), Self::EXTENT_BYTES) };
-        ExtentImage::validate(
+        let m = &self.meta[(idx - self.range.start) as usize];
+        ExtentImage::inspect(
             bytes,
             tenant,
-            self.meta[(idx - self.range.start) as usize].incarnation,
-            self.meta[(idx - self.range.start) as usize].expected_epoch,
+            m.incarnation,
+            m.recovery.current_epoch,
+            m.recovery.expected_image_epoch,
         )
     }
 
@@ -553,26 +593,46 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
             return;
         }
         let img = self.image_of(idx, tenant);
+        let repair = |s: &mut Self, events: &mut Vec<Event>| {
+            events.push(Event::NeedsRepair { tenant });
+            fail(s, -libc::EUCLEAN, events);
+        };
         let next = match (probe, img) {
-            (Probe::Current, Some(i)) => Ok((i, loc)),
-            (Probe::Current, None) => {
-                events.push(Event::NeedsRepair { tenant });
-                return fail(self, -libc::EUCLEAN, events);
+            (Probe::Current, ImageStatus::Valid(i)) => Ok((i, loc)),
+            (Probe::Current, _) => {
+                repair(self, events);
+                return;
             }
             (Probe::RecoverA, a) => Err(Probe::RecoverB { a }),
             (Probe::RecoverB { a }, b) => match (a, b) {
-                (None, None) => return fail(self, 0, events),
-                (Some(a), Some(b)) if a.image_seq > b.image_seq => Err(Probe::RecoverRereadA { a }),
-                (Some(_), None) | (None, Some(_)) => {
-                    events.push(Event::NeedsRepair { tenant });
-                    return fail(self, -libc::EUCLEAN, events);
+                (ImageStatus::Absent, ImageStatus::Absent) => {
+                    if self.m(idx).recovery.expected_image_epoch.is_some() {
+                        repair(self, events);
+                        return;
+                    }
+                    events.push(Event::Absent { tenant });
+                    self.push_free(idx, events);
+                    return;
                 }
-                (_, Some(b)) => Ok((b, ExtentLoc::new(loc.container(), loc.base_block(), true))),
+                (ImageStatus::Valid(a), ImageStatus::Valid(b)) if a.image_seq > b.image_seq => {
+                    Err(Probe::RecoverRereadA { a })
+                }
+                (_, ImageStatus::Valid(b)) => {
+                    Ok((b, ExtentLoc::new(loc.container(), loc.base_block(), true)))
+                }
+                (ImageStatus::Valid(a), _) => Err(Probe::RecoverRereadA { a }),
+                _ => {
+                    repair(self, events);
+                    return;
+                }
             },
-            (Probe::RecoverRereadA { a }, Some(i)) if i == a => {
+            (Probe::RecoverRereadA { a }, ImageStatus::Valid(i)) if i == a => {
                 Ok((i, ExtentLoc::new(loc.container(), loc.base_block(), false)))
             }
-            (Probe::RecoverRereadA { .. }, _) => return fail(self, 0, events),
+            (Probe::RecoverRereadA { .. }, _) => {
+                repair(self, events);
+                return;
+            }
         };
         match next {
             Err(probe) => {
@@ -587,6 +647,10 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
                 }
             }
             Ok((img, used)) => {
+                if !self.m(idx).recovery.covers(img.checkpoint_lsn) {
+                    repair(self, events);
+                    return;
+                }
                 let Some(h) = self.install(
                     idx,
                     tenant,
@@ -601,10 +665,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
                     });
                     return;
                 };
-                self.route.set_extent(tenant, used);
-                self.route.publish(tenant, h);
-                let m = self.m(idx);
-                m.state = State::Resident(Residency {
+                let res = Residency {
                     tenant,
                     handle: h,
                     dirty: false,
@@ -613,16 +674,91 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
                     image_seq: img.image_seq,
                     loc: used,
                     layout_version,
-                });
-                m.referenced = true;
-                m.retries = 0;
-                events.push(Event::Loaded {
-                    tenant,
-                    handle: h,
-                    checkpoint_lsn: img.checkpoint_lsn,
-                });
+                };
+                let through_lsn = self.m(idx).recovery.wal_end_lsn;
+                self.m(idx).state = State::Replaying { res, through_lsn };
+                if through_lsn > img.checkpoint_lsn {
+                    events.push(Event::ReplayRequired {
+                        tenant,
+                        handle: h,
+                        from_lsn: img.checkpoint_lsn + 1,
+                        through_lsn,
+                    });
+                } else {
+                    self.finish_replay(h, events);
+                }
             }
         }
+    }
+
+    /// Trusted replay driver applies only validated committed records for this identity.
+    pub fn replay<R>(
+        &mut self,
+        h: SlotHandle,
+        lsn: u64,
+        f: impl FnOnce(crate::WordsMut<'_>) -> R,
+    ) -> Result<R, Gate> {
+        let idx = self.handle_idx(h).ok_or(Gate::Stale)?;
+        match self.state(idx) {
+            State::Replaying { res, through_lsn } if res.handle == h && lsn <= through_lsn => self
+                .arena
+                .write(h, lsn, f)
+                .map_err(|_| Gate::InvalidMutation),
+            _ => Err(Gate::Stale),
+        }
+    }
+    /// A failed replay or replayed deletion must never publish a partial actor.
+    pub fn abort_replay(&mut self, h: SlotHandle, events: &mut Vec<Event>) -> bool {
+        let Some(idx) = self.handle_idx(h) else {
+            return false;
+        };
+        let State::Replaying { res, .. } = self.state(idx) else {
+            return false;
+        };
+        if res.handle != h || self.arena.revoke(h).is_err() {
+            return false;
+        }
+        self.m(idx).state = State::Quiescing { tenant: res.tenant };
+        self.try_finish_quiesce(idx, events);
+        true
+    }
+    /// Called after scanning the complete trusted suffix, including no-op LSN gaps.
+    pub fn finish_replay(&mut self, h: SlotHandle, events: &mut Vec<Event>) -> bool {
+        let Some(idx) = self.handle_idx(h) else {
+            return false;
+        };
+        let State::Replaying {
+            mut res,
+            through_lsn,
+        } = self.state(idx)
+        else {
+            return false;
+        };
+        if res.handle != h
+            || self.arena.core(self.core).is_fenced()
+            || self
+                .arena
+                .header(idx)
+                .applied_lsn
+                .load(core::sync::atomic::Ordering::Acquire)
+                != through_lsn
+        {
+            return false;
+        }
+        res.last_lsn = through_lsn;
+        res.dirty = through_lsn > res.ckpt_lsn;
+        let m = self.m(idx);
+        m.state = State::Resident(res);
+        m.referenced = true;
+        m.retries = 0;
+        self.route.set_extent(res.tenant, res.loc);
+        self.route.publish(res.tenant, h);
+        events.push(Event::Loaded {
+            tenant: res.tenant,
+            handle: h,
+            checkpoint_lsn: res.ckpt_lsn,
+        });
+        true
     }
 
     // ----------------------------------------------------------------- mutation path
@@ -946,7 +1082,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
 mod tests {
     use super::*;
     use crate::io::{Outcome, Rng, SimIo};
-    use crate::slot::{SlotReadError, Visibility};
+    use crate::slot::{CoreControl, SlotReadError, Visibility};
 
     const W: usize = 512; // 4 KiB extents
     const DATA: usize = IMAGE_HEADER_WORDS; // first application word
@@ -983,7 +1119,7 @@ mod tests {
 
     #[test]
     fn r5_l2_stale_and_duplicate_cqes_do_not_decrement_or_abort() {
-        let arena = SlotArena::<W>::new_heap(0, 4, 1);
+        let arena = SlotArena::<W>::new_heap(0, 4, CoreControl::shared(1));
         let route = RouteTable::new(16);
         let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..4, cfg());
         let mut io = SimIo::new(1, 40 * 4096);
@@ -1014,7 +1150,7 @@ mod tests {
 
     #[test]
     fn slot_is_freed_only_after_its_checkpoint_cqe() {
-        let arena = SlotArena::<W>::new_heap(0, 4, 1);
+        let arena = SlotArena::<W>::new_heap(0, 4, CoreControl::shared(1));
         let route = RouteTable::new(16);
         let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..4, cfg());
         let mut io = SimIo::new(1, 40 * 4096);
@@ -1160,7 +1296,7 @@ mod tests {
 
     #[test]
     fn load_validates_image_and_fails_closed_when_current_copy_is_corrupt() {
-        let arena = SlotArena::<W>::new_heap(0, 2, 1);
+        let arena = SlotArena::<W>::new_heap(0, 2, CoreControl::shared(1));
         let route = RouteTable::new(16);
         let mut lc = SlotLifecycle::new(
             &arena,
@@ -1196,7 +1332,20 @@ mod tests {
 
         // Normal load.
         let idx = lc
-            .admit_load(3, (3) as u128 + 1, 1, cur, 1, false, &mut io)
+            .admit_load(
+                3,
+                (3) as u128 + 1,
+                RecoveryBounds {
+                    current_epoch: 2,
+                    expected_image_epoch: None,
+                    wal_start_lsn: 1,
+                    wal_end_lsn: 6,
+                },
+                cur,
+                1,
+                false,
+                &mut io,
+            )
             .unwrap();
         assert_eq!(
             value(&arena, h, 3),
@@ -1221,8 +1370,21 @@ mod tests {
         assert_eq!(route.lookup(3).unwrap().0, SlotHandle::NULL);
         let a = cur.current_offset(4096) as usize;
         io.files[0][a + 100] ^= 0xFF;
-        lc.admit_load(3, (3) as u128 + 1, 1, cur, 1, false, &mut io)
-            .unwrap();
+        lc.admit_load(
+            3,
+            (3) as u128 + 1,
+            RecoveryBounds {
+                current_epoch: 2,
+                expected_image_epoch: None,
+                wal_start_lsn: 1,
+                wal_end_lsn: 6,
+            },
+            cur,
+            1,
+            false,
+            &mut io,
+        )
+        .unwrap();
         let events = deliver(&mut lc, &mut io, 0, Outcome::Ok);
         assert!(events.contains(&Event::NeedsRepair { tenant: 3 }));
         assert!(events.iter().all(|e| !matches!(e, Event::Loaded { .. })));
@@ -1232,7 +1394,7 @@ mod tests {
 
     #[test]
     fn crash_recovery_load_picks_newest_valid_copy() {
-        let arena = SlotArena::<W>::new_heap(0, 2, 1);
+        let arena = SlotArena::<W>::new_heap(0, 2, CoreControl::shared(1));
         let route = RouteTable::new(16);
         let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..2, cfg());
         let mut io = SimIo::new(1, 40 * 4096);
@@ -1247,10 +1409,23 @@ mod tests {
         }
         // Newest image (seq 3, lsn 7) is in copy B. Lose the route table: recover.
         let route2 = RouteTable::new(16);
-        let arena2 = SlotArena::<W>::new_heap(0, 2, 1);
+        let arena2 = SlotArena::<W>::new_heap(0, 2, CoreControl::shared(1));
         let mut lc2 = SlotLifecycle::new(&arena2, &route2, 0, 0..2, cfg());
-        lc2.admit_load(4, (4) as u128 + 1, 1, loc(4), 1, true, &mut io)
-            .unwrap();
+        lc2.admit_load(
+            4,
+            (4) as u128 + 1,
+            RecoveryBounds {
+                current_epoch: 2,
+                expected_image_epoch: None,
+                wal_start_lsn: 1,
+                wal_end_lsn: 7,
+            },
+            loc(4),
+            1,
+            true,
+            &mut io,
+        )
+        .unwrap();
         let mut e = Vec::new();
         for _ in 0..3 {
             if io.inflight.is_empty() {
@@ -1279,7 +1454,7 @@ mod tests {
         const T: u32 = 24;
         const S: u32 = 6;
         for seed in 1..=if cfg!(miri) { 1 } else { 40 } {
-            let arena = SlotArena::<W>::new_heap(0, S, 1);
+            let arena = SlotArena::<W>::new_heap(0, S, CoreControl::shared(1));
             let route = RouteTable::new(T);
             let mut lc = SlotLifecycle::new(
                 &arena,
@@ -1332,7 +1507,20 @@ mod tests {
                         Some(_) => {
                             let cur = route.lookup(t).unwrap().1;
                             if lc
-                                .admit_load(t, (t) as u128 + 1, 1, cur, 1, false, &mut io)
+                                .admit_load(
+                                    t,
+                                    (t) as u128 + 1,
+                                    RecoveryBounds {
+                                        current_epoch: 1,
+                                        expected_image_epoch: None,
+                                        wal_start_lsn: 1,
+                                        wal_end_lsn: lsn,
+                                    },
+                                    cur,
+                                    1,
+                                    false,
+                                    &mut io,
+                                )
                                 .is_ok()
                             {
                                 loading[t as usize] = true;
@@ -1359,6 +1547,22 @@ mod tests {
                 }
                 for e in ev.drain(..) {
                     match e {
+                        Event::ReplayRequired {
+                            handle,
+                            through_lsn,
+                            ..
+                        } => {
+                            lc.replay(handle, through_lsn, |_| ()).unwrap();
+                            assert!(lc.finish_replay(handle, &mut Vec::new()));
+                            let State::Resident(r) = lc.state(handle.index()) else {
+                                panic!("replay did not finish")
+                            };
+                            loading[r.tenant as usize] = false;
+                            assert_eq!(
+                                value(&arena, handle, r.tenant).ok(),
+                                model[r.tenant as usize]
+                            );
+                        }
                         Event::Loaded { tenant, handle, .. } => {
                             loading[tenant as usize] = false;
                             assert_eq!(

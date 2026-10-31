@@ -1,0 +1,3 @@
+Validated crate DAG, parser/crypto boundaries, opt-in legacy API, source listing, links and vendor inventory.
+VERDICT: PASS
+EXIT 0

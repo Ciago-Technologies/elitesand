@@ -1,5 +1,8 @@
 # v3.0 review remediation ledger
 
+> Historical ledger. The [R6 remediation ledger](R6_REMEDIATION.md) supersedes shared core controls, derived-label authority, random incarnations, replay quotas/boot binding, recovery epochs and checkpoint barriers.
+
+
 > Historical first-review ledger. The [R5 ledger](R5_REMEDIATION.md) supersedes identity, image-format, label, endorsement, scope and flow-control contracts described below.
 
 Source material: `New File/CiagoMem-SLAE v3.0 Production-Readiness Sign-Off Review.md` and `New File/ciagomem-v30-review-harness.zip`, supplied alongside this workspace. Original reference source and defect assertions are preserved as text under `review/v30`; they are not compiled as passing security regressions.

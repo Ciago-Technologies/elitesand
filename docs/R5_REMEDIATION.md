@@ -1,5 +1,8 @@
 # R5 review disposition — 31 October 2026
 
+> Historical ledger. The [R6 remediation ledger](R6_REMEDIATION.md) supersedes shared core controls, derived-label authority, random incarnations, replay quotas/boot binding, recovery epochs and checkpoint barriers.
+
+
 The supplied **CiagoMem-SLAE v3.0 Remediation Deep-Research Review** and `ciagomem-r5-review-harness.zip` analyze the older four-crate upload. The current workspace also includes the actor-native reference executor. We retained that executor and applied the relevant fixes to its dependencies and callers. We did not overwrite current sources with the older archive.
 
 Original core/WAL defect assertions and the mesh patch are preserved under [review/r5](../review/r5). Several original tests pass when a vulnerability exists. Corrected positive and negative contracts live in [r5_regressions.rs](../tests/r5_regressions.rs), [v30_regressions.rs](../tests/v30_regressions.rs), [WAL regressions](../coagomem-wal/tests/r5_wal.rs) and module tests. Passing historical reproductions is not security sign-off.

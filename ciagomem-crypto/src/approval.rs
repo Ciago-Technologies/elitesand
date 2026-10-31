@@ -43,6 +43,7 @@ impl AttestationVerifier {
 pub struct Provenance {
     pub tenant: u128,
     pub session: u128,
+    pub boot_epoch: u128,
     pub integrity: u8,
     pub sources: u64,
     pub readers: Vec<u128>,
@@ -51,9 +52,10 @@ pub struct Provenance {
 }
 impl Provenance {
     fn message(&self) -> Vec<u8> {
-        let mut out = b"ciagomem/provenance/v2".to_vec();
+        let mut out = b"ciagomem/provenance/v3".to_vec();
         out.extend(self.tenant.to_le_bytes());
         out.extend(self.session.to_le_bytes());
+        out.extend(self.boot_epoch.to_le_bytes());
         out.push(self.integrity);
         out.extend(self.sources.to_le_bytes());
         out.extend(self.expires_at.to_le_bytes());
@@ -76,11 +78,13 @@ impl SignedProvenance {
         key: &AttestationVerifier,
         tenant: u128,
         session: u128,
+        boot_epoch: u128,
         content: &[u8],
         now: u64,
     ) -> bool {
         self.claims.tenant == tenant
             && self.claims.session == session
+            && self.claims.boot_epoch == boot_epoch
             && self.claims.sources != 0
             && now < self.claims.expires_at
             && self.claims.readers.len() <= 4
@@ -93,6 +97,7 @@ impl SignedProvenance {
 pub struct Approval {
     pub tenant: u128,
     pub session: u128,
+    pub boot_epoch: u128,
     pub nonce: u128,
     pub field: u8,
     pub sources: u64,
@@ -103,9 +108,10 @@ pub struct Approval {
 }
 impl Approval {
     fn message(&self) -> Vec<u8> {
-        let mut out = b"ciagomem/approval/v2".to_vec();
+        let mut out = b"ciagomem/approval/v3".to_vec();
         out.extend(self.tenant.to_le_bytes());
         out.extend(self.session.to_le_bytes());
+        out.extend(self.boot_epoch.to_le_bytes());
         out.extend(self.nonce.to_le_bytes());
         out.push(self.field);
         out.extend(self.sources.to_le_bytes());
