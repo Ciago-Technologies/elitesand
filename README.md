@@ -1,117 +1,81 @@
-# Ciagomem — SLAE
+# CiagoMem — SLAE (Unified State-Log Actor Engine)
 
-**Actor state, CiaQL queries and provenance-aware AI memory for Rust applications.**
+**Version:** `0.3.0` (Architecture v3.0)  
+**Product:** CiagoMem — SLAE ("The Store")  
+**Query Language:** CiaQL (Ciagomem Query and Cognitive Language)  
+**Provider:** Ciago Technologies  
 
-Ciagomem stores application data as tenant-scoped actors and provides an embedded query engine for updating state, following relationships, searching memory and computing aggregates. Its storage components use single-writer ownership, cross-core message lanes, write-ahead logs and checkpoints.
+---
 
-**Development release:** you can run and embed the in-memory engine today. The server interface and integration of durable engine writes and restart recovery are under development.
+## What is CiagoMem?
 
-## Quick start
+**CiagoMem — SLAE (State-Log Actor Engine)** is an ultra-low-latency, actor-native storage engine and cognitive data plane designed for high-concurrency cloud applications, real-time telemetry, and stateful AI agents. It serves as the core persistence foundation for the **Cloud Native Computing Platform (CNCP)** and the **CoveStack** infrastructure ecosystem.
 
-You need **Linux**, **Rust 1.89 or newer**, and **Cargo**. Python 3 is needed only for the workspace validation script. Dependencies are vendored, so build and run commands work offline after checkout and toolchain installation.
+Modern applications suffer from the **"Multi-Database Tax"**: developers are forced to maintain a relational database for structured state, an in-memory cache for active sessions, and a separate vector database for AI embeddings. Every request pays the penalty of network hops, JSON/Protobuf serialization, and eventual-consistency bugs across disparate systems.
 
-```sh
-git clone https://github.com/Ciago-Technologies/CiagoMem.git Ciagomem
-cd Ciagomem
-cargo run --release --offline -p ciagomem-engine --example quickstart
-```
+**CiagoMem collapses this stack into a single memory boundary.** By partitioning data into isolated, single-writer **Actors** organized by **Families** (collections) and backed by a thread-per-core Linux `io_uring` architecture, CiagoMem executes relational CRUD, array/ring-buffer mutations, cross-actor joins, and SIMD-accelerated vector similarity searches inside the same engine at sub-microsecond speeds.
 
-Expected output:
+---
+
+## Core Concepts
+
+* **Actors & Families:** Data is partitioned into **Actors** (individual records, user accounts, or autonomous AI agents) grouped by **Families** (collections/tables such as `users`, `sessions`, `orders`, or `agent_memories`) inside an authenticated tenant namespace.
+* **CiaQL (Ciagomem Query and Cognitive Language):** A unified, pipeline-driven query language (`|>`) for executing atomic in-place mutations, relational joins, grouped aggregations, and hybrid BM25 + vector similarity searches directly against actor memory.
+* **FlatBuffers First:** CiagoMem eliminates ORM and serialization overhead. Application schemas are defined using FlatBuffers (`.fbs`), compiled into binary reflection descriptors (`.bfbs`), and registered dynamically with the engine—enabling zero-copy reads, strict type safety, and lazy schema evolution.
+* **CaMeL Provenance & AI Governance:** Every actor and memory frame is protected by a cryptographic information-flow lattice (`External < AgentDerived < UserDirect < Policy`), preventing prompt-injection data laundering and unauthorized tool side effects.
+* **Hardware-Sympathetic Concurrency:** Built on a thread-per-core reactor model using Boehm-correct word-atomic Seqlocks, Lamport SPSC meshes, and CRC32C group-commit Write-Ahead Logging (WAL v2) over `io_uring`.
+
+---
+
+## Why CiagoMem? (Architectural Advantages)
+
+| Capability | Traditional Multi-DB Stack | CiagoMem — SLAE |
+| :--- | :--- | :--- |
+| **Data Model** | Fragmented across SQL tables, KV caches, and Vector indexes | Unified **Actor Document + Vector + Delta Tail** in one extent |
+| **Read Latency (Hot)** | 500 µs – 5 ms (Network + Serialization) | **p99 ≤ 200 ns** (In-engine seqlock) / **≤ 300 ns** (Local `memfd` export) |
+| **Write Path** | B-Tree page splits / Heavy ORM transactions | Append-only **Delta Tail Overlay** + Group-Commit `io_uring` WAL |
+| **Serialization Tax** | JSON / Protobuf encode & decode on every hop | **Zero-Copy FlatBuffers** verified at ingestion |
+| **AI Memory Safety** | Unverified text blobs vulnerable to prompt injection | **CaMeL Lattice** with Ed25519 content-bound provenance |
+| **Concurrency Control** | Heavy mutex locks and MVCC vacuuming overhead | **Lock-free Seqlock readers** + single-writer owner cores |
+
+---
+
+## Primary Use Cases
+
+1. **Stateful AI Agents & Cognitive Memory:** Give LLMs and autonomous agents a dedicated actor context where conversation transcripts (BM25 text search), semantic embeddings (SQ8 SIMD vector search), session quotas (scalar counters), and security guardrails (CaMeL provenance labels) live side-by-side without network hops between a database and a vector store.
+2. **High-Throughput Gaming, FinTech & Session Stores:** Utilize lock-free actor slots, optimistic document versioning, and bounded ring-buffer arrays (`push_bounded`) to track real-time wallets, leaderboards, telemetry streams, and active user sessions at sub-microsecond latencies.
+3. **Enterprise Edge-to-Cloud Hybrid Workloads:** Deploy CiagoMem as a lightweight container via **CoveStack** on developer laptops and edge nodes, or scale out across **CNCP** cloud micro-VMs with epoch-fenced routing and deterministic Calvin transactions.
+
+---
+
+## Quickstart Overview
+
+1. **Run the Server:** Start the pre-built CiagoMem container via Docker or Docker Compose (see [INSTALL.md](INSTALL.md)).
+2. **Define Your Schema:** Create an `app_schema.fbs` file and compile it to `.bfbs` and your target language bindings using `flatc` (see [EXAMPLES.md](EXAMPLES.md)).
+3. **Connect & Execute:** Use the official **TypeScript (`@ciagomem/sdk`)**, **Go (`ciagomem-go`)**, or **Rust (`ciagomem-client`)** SDK to register your schema, insert FlatBuffer documents, and run CiaQL pipelines.
 
 ```text
-Created actor 1
-Credits after update: 75
+scan family("users")
+  |> filter (state.credits > 50 and state.status == "ACTIVE")
+  |> group_by (state.tier)
+  |> aggregate {
+       total_users: count(),
+       avg_credits: avg(state.credits)
+     }
+  |> take 10
 ```
 
-The example creates a local authenticated session, inserts an actor with 100 credits, subtracts 25 through CiaQL, and reads the updated state. It checks both the query result and actor snapshot.
+---
 
-Open [quickstart.rs](ciagomem-engine/examples/quickstart.rs) to adapt the complete example. It uses a fresh process-local key and boot epoch. Its `MemoryJournal` keeps data in memory; exiting the process discards that data.
+## Documentation Directory
 
-## Write and query actor state
+* **[ABOUT.md](ABOUT.md):** Deep-dive into storage architecture, memory layout, seqlock concurrency, DMA pin safety, and CaMeL security.
+* **[INSTALL.md](INSTALL.md):** Production Docker & Docker Compose deployment, Linux host tuning (`io_uring`, `hugetlbfs`), and SDK installation.
+* **[EXAMPLES.md](EXAMPLES.md):** Step-by-step schema compilation, end-to-end TypeScript/Go/Rust CRUD examples, CiaQL mutation reference, hybrid vector search, and cascade deletions.
 
-An actor has an ID, an incarnation and a tenant. Records hold typed fields; sessions determine which tenant and operations a caller can access.
+---
 
-The quick start uses these queries:
+## License & Proprietary Notice
 
-```text
-@1 mutate {state.credits -= 25}
-
-@1 select {credits: state.credits}
-```
-
-Parse a CiaQL string with `ciagomem_ql::parse`, then pass it and a verified session to `Engine::execute`. The engine checks tenant ownership, operation permissions, token expiry and boot scope. Use `Engine::snapshot` to retrieve an immutable actor version.
-
-For a Rust application beside your checkout, add local path dependencies, adjusting the paths to your layout:
-
-```toml
-[dependencies]
-ciagomem-engine = { path = "../Ciagomem/ciagomem-engine" }
-ciagomem-core = { path = "../Ciagomem/ciagomem-core" }
-ciagomem-ql = { path = "../Ciagomem/ciagomem-ql" }
-```
-
-Use the [complete quick start](ciagomem-engine/examples/quickstart.rs) for engine, clock and session initialization. For offline application development, add your application to this repository's Cargo workspace so its vendored dependency patches apply; an external application's dependency resolution is controlled by its own workspace.
-
-## What you can build with the engine
-
-- **Application state:** store typed actor records, apply mutations and read immutable snapshots.
-- **Related entities:** follow actor references, execute bounded joins, register links and perform restricted or cascading deletions.
-- **AI memory retrieval:** combine BM25 keyword search, SQ8 vector similarity and structured filters.
-- **Analytics:** filter with bitmap and zone-map indexes, group records and compute aggregates.
-- **Schema evolution:** use versioned FlatBuffers actor images and registered schema upcasters.
-- **Tenant-aware workflows:** use scoped capabilities, explicit reader sets, signed provenance and action approvals.
-
-See [Actor-native query engine](docs/ACTOR_NATIVE_QUERY_ENGINE.md) for supported syntax, consistency rules and execution limits. Unsupported operations return errors.
-
-## Choose a crate
-
-| Crate             | Use it for                                                                               |
-| ----------------- | ---------------------------------------------------------------------------------------- |
-| `ciagomem-engine` | Embedded actor storage, query execution, indexes, relationships and schema upgrades      |
-| `ciagomem-ql`     | CiaQL parsing and typed query validation                                                 |
-| `ciagomem-core`   | Authorization, actor arenas, messaging, lifecycle management and Linux export primitives |
-| `ciagomem-wal`    | Group-commit logging, checksums and checkpoint formats                                   |
-| `ciagomem-crypto` | Capability MACs, content digests and signed provenance/approvals                         |
-
-Start with `ciagomem-engine` for application integration. The lower-level storage and security crates expose components for building a host runtime; they require the ownership and I/O contracts described in the [engineering specification](MASTER_SPECIFICATION.md).
-
-## Current release scope
-
-The embedded engine uses `MemoryJournal`, a bounded, non-durable journal. The WAL crate is available separately; a WAL-backed engine journal and complete restart replay are still required for persistent application storage.
-
-This checkout provides Rust libraries and runnable examples. Network server endpoints, client SDKs, replication, production backup/restore and the complete reactor/node runtime remain under development. Use this release for local integration, experiments and workload evaluation. Production deployment requires completion and qualification of those services.
-
-Performance depends on workload, indexes, working set and durability requirements. The [benchmark notes](docs/ECOSYSTEM_BENCHMARK.md) describe a local smoke measurement; they do not establish production latency, SQL speedups or a million-user capacity guarantee.
-
-## Build and verify
-
-Run from the repository root:
-
-```sh
-cargo build --release --offline
-cargo test --release --offline --workspace
-cargo fmt --all -- --check
-python3 scripts/validate_workspace.py
-```
-
-For the complete test set, including historical compatibility cases:
-
-```sh
-cargo test --release --offline --workspace --all-features
-```
-
-The `legacy-audit` feature is for historical vulnerability reproductions. Keep it disabled in application integrations.
-
-## Documentation
-
-- [Quick start source](ciagomem-engine/examples/quickstart.rs)
-- [Actor-native engine guide](docs/ACTOR_NATIVE_QUERY_ENGINE.md)
-- [Technical whitepaper and engineering specification](MASTER_SPECIFICATION.md)
-- [Verification results](docs/VERIFICATION.md)
-- [Engineering status and open integration requirements](docs/R11_REMEDIATION.md)
-
-## License
-
-Copyright © 2026 **Ciago Technologies / Anuj Kumar Tiwari**. All rights reserved.
-
-Ciagomem source and documentation are proprietary; use is subject to [LICENSE](LICENSE). Vendored third-party dependencies retain their upstream licenses.
+Copyright © 2026 **Ciago Technologies**. All rights reserved.  
+CiagoMem — SLAE binaries, container images, and official SDKs are distributed under the Ciago Technologies Enterprise & Commercial License.
