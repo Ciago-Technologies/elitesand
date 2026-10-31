@@ -1,0 +1,602 @@
+diff -ruN -x target -x vendor a/ciagomem-core/Cargo.toml b/ciagomem-core/Cargo.toml
+--- a/ciagomem-core/Cargo.toml	2026-10-31 07:04:23.859575757 +0000
++++ b/ciagomem-core/Cargo.toml	2026-10-31 07:06:55.707575757 +0000
+@@ -42,5 +42,9 @@
+ path = "../tests/r8_regressions.rs"
+ 
+ [[test]]
++name = "r10_regressions"
++path = "../tests/r10_regressions.rs"
++
++[[test]]
+ name = "r9_regressions"
+ path = "../tests/r9_regressions.rs"
+diff -ruN -x target -x vendor a/ciagomem-core/src/io.rs b/ciagomem-core/src/io.rs
+--- a/ciagomem-core/src/io.rs	2026-10-31 07:04:23.863575757 +0000
++++ b/ciagomem-core/src/io.rs	2026-10-31 07:05:38.599575757 +0000
+@@ -120,6 +120,12 @@
+     Short(u32),
+ }
+ 
++/// ```compile_fail
++/// use ciagomem_core::io::{SimIo, SimOp, SimKind};
++/// let mut io = SimIo::new(1, 4096);
++/// io.inflight.push(SimOp { user_data: 0, file: 0, kind: SimKind::Read,
++///     buf: core::ptr::null_mut(), len: 1, offset: 0 }); // private: R10-2
++/// ```
+ /// In-memory device: a byte vector per file, a queue of in-flight ops, an optional SQ
+ /// capacity. Data moves at *completion* time, which models DMA happening any time
+ /// between submission and CQE: if the engine touched a buffer before its CQE, the
+@@ -127,7 +133,9 @@
+ #[derive(Debug)]
+ pub struct SimIo {
+     pub files: Vec<Vec<u8>>,
+-    pub inflight: Vec<SimOp>,
++    /// Private (R10-2): `complete`/`power_loss` dereference these pointers, so only the
++    /// unsafe `IoBackend` submissions may create entries.
++    inflight: Vec<SimOp>,
+     pub sq_capacity: usize,
+     pub submitted: u64,
+     pub dsync_writes: u64,
+@@ -185,6 +193,17 @@
+         }
+     }
+ 
++    /// Queued operations, oldest first (read-only).
++    pub fn inflight(&self) -> &[SimOp] {
++        &self.inflight
++    }
++
++    /// The simulated ring is destroyed: every queued op is dropped without touching its
++    /// buffer and no CQE will be delivered for it.
++    pub fn abandon_all(&mut self) {
++        self.inflight.clear();
++    }
++
+     pub fn find(&self, pred: impl Fn(&SimOp) -> bool) -> Option<usize> {
+         self.inflight.iter().position(pred)
+     }
+diff -ruN -x target -x vendor a/ciagomem-core/src/lifecycle.rs b/ciagomem-core/src/lifecycle.rs
+--- a/ciagomem-core/src/lifecycle.rs	2026-10-31 07:04:23.863575757 +0000
++++ b/ciagomem-core/src/lifecycle.rs	2026-10-31 07:05:47.411575757 +0000
+@@ -943,10 +943,25 @@
+             ticket,
+         }
+         .encode();
++        // R10-1: commit the ticket and the Flushing state before the backend can retain
++        // the buffer, so a backend that queues and then unwinds leaves the slot frozen
++        // and its eventual CQE matching. A rejected submission restores the old state.
++        let prev = self.m(idx).state;
++        self.arena.io_submitted();
++        let m = self.m(idx);
++        m.io_inflight += 1;
++        m.ticket = ticket;
++        m.state = State::Flushing {
++            res: r,
++            target,
++            lsn,
++            image_seq,
++            evict,
++            deferred: 0,
++        };
++        self.flushing += 1;
+         // SAFETY: Flushing freezes CPU writes to this payload until the CQE (I2), and the
+         // slot cannot be freed while io_inflight > 0 (I1).
+-        self.arena.io_submitted();
+-        self.m(idx).io_inflight += 1;
+         let result = unsafe {
+             io.write_at(
+                 ud,
+@@ -958,21 +973,13 @@
+             )
+         };
+         if let Err(e) = result {
+-            self.m(idx).io_inflight -= 1;
++            let m = self.m(idx);
++            m.io_inflight -= 1;
++            m.state = prev;
++            self.flushing -= 1;
+             self.arena.io_completed();
+             return Err(e);
+         }
+-        let m = self.m(idx);
+-        m.ticket = ticket;
+-        m.state = State::Flushing {
+-            res: r,
+-            target,
+-            lsn,
+-            image_seq,
+-            evict,
+-            deferred: 0,
+-        };
+-        self.flushing += 1;
+         self.stats.flushes += 1;
+         Ok(())
+     }
+@@ -1243,12 +1250,12 @@
+ 
+         // WAL rule (I3): nothing is durable yet, so nothing may be written back.
+         assert_eq!(lc.run_eviction(0, &mut io, &mut ev), 0);
+-        assert!(io.inflight.is_empty() && lc.stats.wal_blocked > 0);
++        assert!(io.inflight().is_empty() && lc.stats.wal_blocked > 0);
+ 
+         // Durable: flushes start, but no slot is free until a CQE arrives.
+         assert_eq!(lc.run_eviction(100, &mut io, &mut ev), 2);
+         assert_eq!(
+-            (io.inflight.len(), lc.free_slots(), lc.flushing()),
++            (io.inflight().len(), lc.free_slots(), lc.flushing()),
+             (2, 0, 2)
+         );
+         assert_eq!(
+@@ -1293,7 +1300,7 @@
+         let ib = io
+             .find(|op| UserData::decode(op.user_data).unwrap().object == fb)
+             .unwrap();
+-        let op = io.inflight[ib];
++        let op = io.inflight()[ib];
+         assert_eq!(
+             op.offset,
+             loc(fb).flipped().current_offset(4096),
+@@ -1455,7 +1462,7 @@
+         assert!(events.contains(&Event::NeedsRepair { tenant: 3 }));
+         assert!(events.iter().all(|e| !matches!(e, Event::Loaded { .. })));
+         assert_eq!(route.lookup(3).unwrap().0, SlotHandle::NULL);
+-        assert!(io.inflight.is_empty());
++        assert!(io.inflight().is_empty());
+     }
+ 
+     #[test]
+@@ -1494,7 +1501,7 @@
+         .unwrap();
+         let mut e = Vec::new();
+         for _ in 0..3 {
+-            if io.inflight.is_empty() {
++            if io.inflight().is_empty() {
+                 break;
+             }
+             e = deliver(&mut lc2, &mut io, 0, Outcome::Ok);
+@@ -1595,10 +1602,10 @@
+                     _ => {}
+                 }
+                 for _ in 0..rng.below(3) {
+-                    if io.inflight.is_empty() {
++                    if io.inflight().is_empty() {
+                         break;
+                     }
+-                    let i = rng.below(io.inflight.len() as u64) as usize;
++                    let i = rng.below(io.inflight().len() as u64) as usize;
+                     let o = match rng.below(12) {
+                         0 => Outcome::Err(libc::EIO),
+                         1 => Outcome::Short(2048),
+diff -ruN -x target -x vendor a/ciagomem-core/src/uring.rs b/ciagomem-core/src/uring.rs
+--- a/ciagomem-core/src/uring.rs	2026-10-31 07:04:23.863575757 +0000
++++ b/ciagomem-core/src/uring.rs	2026-10-31 07:06:07.939575757 +0000
+@@ -11,7 +11,7 @@
+ //!   target core's ring: a parked reactor blocked in `submit_and_wait` wakes with no
+ //!   eventfd and no syscall on its side.
+ 
+-use crate::io::{IoBackend, SqFull};
++use crate::io::{IoBackend, Op, SqFull, UserData};
+ use io_uring::{IoUring, opcode, squeue, types};
+ use std::io;
+ use std::os::fd::{AsRawFd, RawFd};
+@@ -145,8 +145,16 @@
+         n
+     }
+ 
+-    /// Post a CQE with `user_data` into another core's ring (doorbell wakeup).
+-    pub fn post_wake(&mut self, target_ring_fd: RawFd, user_data: u64) -> Result<(), SqFull> {
++    /// Post a wake CQE into another core's ring (doorbell wakeup). The posted
++    /// `user_data` always decodes as `Op::Wake` (R10-4): safe code cannot inject a
++    /// LogWrite/Checkpoint/Load token that a reactor would route to an `on_cqe` handler.
++    pub fn post_wake(&mut self, target_ring_fd: RawFd, wake: u32) -> Result<(), SqFull> {
++        let user_data = UserData {
++            op: Op::Wake,
++            object: 0,
++            ticket: wake,
++        }
++        .encode();
+         let e = opcode::MsgRingData::new(types::Fd(target_ring_fd), 0, user_data, None)
+             .build()
+             .flags(squeue::Flags::SKIP_SUCCESS)
+diff -ruN -x target -x vendor a/ciagomem-wal/src/gclog.rs b/ciagomem-wal/src/gclog.rs
+--- a/ciagomem-wal/src/gclog.rs	2026-10-31 07:04:23.863575757 +0000
++++ b/ciagomem-wal/src/gclog.rs	2026-10-31 07:05:59.231575757 +0000
+@@ -772,21 +772,29 @@
+         if self.binding.control().is_fenced() && self.fenced.is_none() {
+             self.fence(libc::EIO, indeterminate);
+         }
++        let matched = UserData::decode(user_data).and_then(|ud| {
++            let i = ud.object as usize;
++            (ud.op == Op::LogWrite
++                && i < self.bufs.len()
++                && self.bufs[i].state == BufState::InFlight
++                && self.bufs[i].ticket == ud.ticket)
++                .then_some(i)
++        });
+         if let Some(errno) = self.fenced {
+             self.binding.control().fence();
++            // R10-3: a genuine completion still ends the device's use of the buffer even
++            // though nothing is published; without this a fully reaped log stays
++            // non-quiescent and its drop retains every buffer.
++            match matched {
++                Some(i) => self.bufs[i].state = BufState::Sealed,
++                None => self.stats.stale_cqes += 1,
++            }
+             return Err(LogError::Fenced(errno));
+         }
+-        let Some(ud) = UserData::decode(user_data) else {
+-            return Ok(());
+-        };
+-        let i = ud.object as usize;
+-        if i >= self.bufs.len()
+-            || self.bufs[i].state != BufState::InFlight
+-            || self.bufs[i].ticket != ud.ticket
+-        {
++        let Some(i) = matched else {
+             self.stats.stale_cqes += 1;
+             return Ok(());
+-        }
++        };
+         let block = self.cfg.block;
+         let b = &mut self.bufs[i];
+         let want = b.submit_len - b.written;
+@@ -802,6 +810,8 @@
+             b.retries += 1;
+             self.stats.retries += 1;
+             if b.retries > self.cfg.max_retries {
++                // R10-3: this CQE ended the device's use of the buffer.
++                b.state = BufState::Sealed;
+                 let errno = if res < 0 { res } else { -libc::EIO };
+                 self.binding.control().fence();
+                 self.fence(errno, indeterminate);
+@@ -1082,11 +1092,11 @@
+             }
+             log.poll(*now, rng.below(3) == 0, io);
+             for _ in 0..rng.below(3) {
+-                if io.inflight.is_empty() {
++                if io.inflight().is_empty() {
+                     break;
+                 }
+-                let i = rng.below(io.inflight.len() as u64) as usize;
+-                let len = io.inflight[i].len;
++                let i = rng.below(io.inflight().len() as u64) as usize;
++                let len = io.inflight()[i].len;
+                 let outcome = match rng.below(40) {
+                     0 => Outcome::Err(libc::EIO),
+                     1 | 2 => Outcome::Short(rng.below(len as u64) as u32),
+@@ -1241,11 +1251,11 @@
+             log.poll(1_000_000, true, &mut io); // idle + device idle only for the first
+             log.poll(1_000_000, false, &mut io); // age >= max_delay seals the rest
+         }
+-        assert_eq!(io.inflight.len(), 3);
++        assert_eq!(io.inflight().len(), 3);
+         let (mut acks, mut failed) = (Vec::new(), Vec::new());
+         // Complete the last two first: nothing may be acknowledged.
+         for _ in 0..2 {
+-            let i = io.inflight.len() - 1;
++            let i = io.inflight().len() - 1;
+             let (ud, res) = io.complete(i, Outcome::Ok);
+             /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+             unsafe { log.on_cqe(ud, res, &mut io, &mut acks, &mut failed) }.unwrap();
+@@ -1331,7 +1341,7 @@
+                 }
+             }
+             log.poll(now, false, &mut io);
+-            if !io.inflight.is_empty() {
++            if !io.inflight().is_empty() {
+                 let (ud, res) = io.complete(0, Outcome::Ok);
+                 /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+                 unsafe { log.on_cqe(ud, res, &mut io, &mut acks, &mut failed) }.unwrap();
+diff -ruN -x target -x vendor a/ciagomem-wal/tests/r10_recovery.rs b/ciagomem-wal/tests/r10_recovery.rs
+--- a/ciagomem-wal/tests/r10_recovery.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/ciagomem-wal/tests/r10_recovery.rs	2026-10-31 07:06:55.699575757 +0000
+@@ -0,0 +1,96 @@
++//! R10 acceptance: a fenced log becomes reclaimable once its CQEs are reaped, and the log
++//! accepts only LogWrite tokens.
++use ciagomem_core::CoreControl;
++use ciagomem_core::io::{Op, Outcome, SimIo, UserData};
++use ciagomem_wal::envelope::KIND_DATA;
++use ciagomem_wal::gclog::*;
++fn cfg() -> LogConfig {
++    LogConfig { block: 4096, buf_bytes: 16384, buffers: 4, max_inflight: 3, min_batch_bytes: 8192,
++        max_delay_ns: 5000, capacity: 65536, file: 0, tail: TailMode::Pad, max_retries: 3 }
++}
++fn io() -> SimIo { SimIo::new(1, (cfg().data_offset() + cfg().capacity) as usize) }
++fn open(controls: &std::sync::Arc<[CoreControl]>) -> GroupCommitLog {
++    let (mut log, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
++    log.superblock_durable(&sb);
++    log
++}
++#[test]
++fn r10_3_externally_fenced_log_is_quiescent_after_full_reap() {
++    let controls = CoreControl::shared(1);
++    let mut d = io();
++    let mut log = open(&controls);
++    log.append(1, KIND_DATA, b"x", Some(1), 0, &mut d).unwrap();
++    log.poll(1_000_000, true, &mut d);
++    controls[0].fence();
++    let (ud, res) = d.complete(0, Outcome::Ok);
++    let (mut acks, mut ind) = (Vec::new(), Vec::new());
++    // SAFETY: a genuine simulator completion.
++    assert!(unsafe { log.on_cqe(ud, res, &mut d, &mut acks, &mut ind) }.is_err());
++    assert!(acks.is_empty() && controls[0].durable() == 0, "nothing published");
++    assert!(log.quiescent());
++    log.poll(2_000_000, true, &mut d);
++    assert!(d.inflight().is_empty(), "no resubmission after fence");
++    drop(log); // buffers are freed normally
++    assert!(!controls[0].log_bound());
++}
++#[test]
++fn r10_3_retry_exhaustion_leaves_the_failed_buffer_reclaimable() {
++    let controls = CoreControl::shared(1);
++    let mut d = io();
++    let mut log = open(&controls);
++    log.append(1, KIND_DATA, b"x", Some(1), 0, &mut d).unwrap();
++    log.poll(1_000_000, true, &mut d);
++    let (mut acks, mut ind) = (Vec::new(), Vec::new());
++    let mut fenced = false;
++    while !d.inflight().is_empty() {
++        let (ud, res) = d.complete(0, Outcome::Err(libc::EIO));
++        // SAFETY: a genuine simulator completion.
++        fenced |= unsafe { log.on_cqe(ud, res, &mut d, &mut acks, &mut ind) }.is_err();
++    }
++    assert!(fenced && controls[0].is_fenced());
++    assert!(log.quiescent(), "the error CQE ended the device's use of the buffer");
++}
++#[test]
++fn r10_4_log_rejects_non_logwrite_token_with_matching_bits() {
++    let controls = CoreControl::shared(1);
++    let mut d = io();
++    let mut log = open(&controls);
++    log.append(1, KIND_DATA, b"x", Some(1), 0, &mut d).unwrap();
++    log.poll(1_000_000, true, &mut d);
++    let real = UserData::decode(d.inflight()[0].user_data).unwrap();
++    let other = UserData { op: Op::Wake, ..real }.encode();
++    let (mut acks, mut ind) = (Vec::new(), Vec::new());
++    // SAFETY: the token's op differs, so it cannot match a pending LogWrite.
++    unsafe { log.on_cqe(other, 0, &mut d, &mut acks, &mut ind) }.unwrap();
++    assert_eq!(d.inflight().len(), 1, "no resubmission of the in-flight buffer");
++    assert_eq!(log.stats.stale_cqes, 1);
++    let (ud, res) = d.complete(0, Outcome::Ok);
++    // SAFETY: a genuine simulator completion.
++    unsafe { log.on_cqe(ud, res, &mut d, &mut acks, &mut ind) }.unwrap();
++    assert_eq!(acks, vec![1]);
++}
++#[cfg(target_os = "linux")]
++#[test]
++fn r10_uring_log_drop_before_kernel_submission_writes_from_retained_buffer() {
++    use ciagomem_core::uring::UringIo;
++    use std::os::fd::AsRawFd;
++    let Ok(mut ring) = UringIo::new(8) else { eprintln!("SKIPPED: io_uring unavailable"); return };
++    let p = std::env::temp_dir().join(format!("r10w-{}", std::process::id()));
++    let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&p).unwrap();
++    f.set_len(cfg().data_offset() + cfg().capacity).unwrap();
++    let _ = std::fs::remove_file(&p);
++    ring.register_files(&[f.as_raw_fd()]).unwrap();
++    let controls = CoreControl::shared(1);
++    let mut log = open(&controls);
++    log.append(1, KIND_DATA, b"through-the-kernel", Some(7), 0, &mut ring).unwrap();
++    log.poll(1_000_000, true, &mut ring);
++    assert!(!log.quiescent());
++    drop(log);
++    assert!(controls[0].is_fenced() && !controls[0].log_bound());
++    ring.submit_and_wait(1).unwrap();
++    let mut got = Vec::new();
++    ring.reap(|ud, res| got.push((ud, res)));
++    assert_eq!(got.len(), 1);
++    assert!(got[0].1 > 0, "kernel write completed from retained buffer: {got:?}");
++    assert_eq!(controls[0].durable(), 0);
++}
+diff -ruN -x target -x vendor a/ciagomem-wal/tests/r5_wal.rs b/ciagomem-wal/tests/r5_wal.rs
+--- a/ciagomem-wal/tests/r5_wal.rs	2026-10-31 07:04:23.863575757 +0000
++++ b/ciagomem-wal/tests/r5_wal.rs	2026-10-31 07:05:38.603575757 +0000
+@@ -38,11 +38,11 @@
+     log.append(1, KIND_DATA, b"b", Some(11), 0, &mut io)
+         .unwrap();
+     log.poll(1_000_000, false, &mut io);
+-    assert_eq!(io.inflight.len(), 2, "two batches in flight");
++    assert_eq!(io.inflight().len(), 2, "two batches in flight");
+     let (mut acks, mut failed) = (Vec::new(), Vec::new());
+     let mut fenced = false;
+     for _ in 0..=cfg.max_retries {
+-        let i = io.inflight.len() - 1; // batch B (retries are resubmitted at the end)
++        let i = io.inflight().len() - 1; // batch B (retries are resubmitted at the end)
+         let (ud, res) = io.complete(i, Outcome::Err(libc::EIO));
+         fenced |= /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */ unsafe {log
+             .on_cqe(ud, res, &mut io, &mut acks, &mut failed)}
+diff -ruN -x target -x vendor a/ciagomem-wal/tests/r9_recovery.rs b/ciagomem-wal/tests/r9_recovery.rs
+--- a/ciagomem-wal/tests/r9_recovery.rs	2026-10-31 07:04:23.867575757 +0000
++++ b/ciagomem-wal/tests/r9_recovery.rs	2026-10-31 07:05:38.603575757 +0000
+@@ -90,13 +90,13 @@
+     log.append(1, KIND_DATA, b"abandoned", None, 0, &mut d)
+         .unwrap();
+     log.poll(1_000_000, true, &mut d);
+-    d.inflight.clear();
++    d.abandon_all();
+     // SAFETY: all previously submitted simulator operations have been discarded.
+     unsafe { log.release_device_references() };
+     log.append(1, KIND_DATA, b"new operation", None, 2_000_000, &mut d)
+         .unwrap();
+     log.poll(3_000_000, true, &mut d);
+-    assert_eq!(d.inflight.len(), 1);
++    assert_eq!(d.inflight().len(), 1);
+     drop(log);
+     assert!(
+         controls[0].is_fenced(),
+@@ -134,7 +134,7 @@
+             log.append(1, KIND_DATA, b"cancelled", None, 0, &mut disk)
+                 .unwrap();
+             log.poll(1_000_000, true, &mut disk);
+-            disk.inflight.clear();
++            disk.abandon_all();
+             // SAFETY: the simulated device no longer retains any operation.
+             unsafe { log.release_device_references() };
+         }
+diff -ruN -x target -x vendor a/tests/r10_regressions.rs b/tests/r10_regressions.rs
+--- a/tests/r10_regressions.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/tests/r10_regressions.rs	2026-10-31 07:07:11.171575757 +0000
+@@ -0,0 +1,118 @@
++//! R10 acceptance: checkpoint submission unwind, simulator pointer ownership and
++//! wake-token typing.
++use ciagomem_core::io::{Op, Outcome, SimIo, UserData};
++use ciagomem_core::lifecycle::*;
++use ciagomem_core::slot::RouteTable;
++use ciagomem_core::*;
++mod support;
++fn lc_cfg() -> LifecycleConfig {
++    LifecycleConfig { low_free: 0, high_free: 1, max_flush_inflight: 1, max_retries: 2, epoch: 2 }
++}
++#[test]
++fn r10_1_checkpoint_unwind_keeps_slot_frozen_and_its_completion_matching() {
++    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
++    let route = RouteTable::new(4);
++    let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..2, lc_cfg());
++    let mut ev = Vec::new();
++    let h = lc.admit_new(1, 123, ExtentLoc::new(0, 2, false), 5, 1, &mut ev).unwrap();
++    let mut disk = support::PanicAfterSubmit(SimIo::new(1, 8 * 4096));
++    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++        lc.checkpoint(h, 5, &mut disk);
++    }));
++    assert!(caught.is_err());
++    let mut io = disk.0;
++    assert_eq!(io.inflight().len(), 1);
++    assert!(matches!(lc.state(h.index()), State::Flushing { .. }), "slot stays frozen");
++    assert_eq!(lc.flushing(), 1);
++    assert!(lc.mutate(h, 6, |w| w.set(20, 1)).is_err(), "CPU writes are deferred");
++    assert!(!lc.checkpoint(h, 6, &mut io), "no second write of the same payload");
++    let (ud, res) = io.complete(0, Outcome::Ok);
++    // SAFETY: a genuine simulator completion.
++    unsafe { lc.on_cqe(ud, res, &mut io, &mut ev) };
++    assert!(ev.iter().any(|e| matches!(e, Event::Checkpointed { lsn: 5, .. })));
++    assert_eq!(lc.stats.stale_cqes, 0);
++    assert!(lc.quiescent());
++    assert_eq!(arena.io_pending(), 0);
++    drop(lc);
++    assert!(!arena.core(0).is_fenced());
++}
++#[test]
++fn r10_1_rejected_checkpoint_restores_resident_state_and_can_retry() {
++    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
++    let route = RouteTable::new(4);
++    let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..2, lc_cfg());
++    let mut ev = Vec::new();
++    let h = lc.admit_new(1, 123, ExtentLoc::new(0, 2, false), 5, 1, &mut ev).unwrap();
++    let mut full = support::RejectSubmit::default();
++    assert!(!lc.checkpoint(h, 5, &mut full));
++    assert!(matches!(lc.state(h.index()), State::Resident(_)));
++    assert_eq!(lc.flushing(), 0);
++    assert!(lc.mutate(h, 6, |w| w.set(20, 2)).is_ok());
++    let mut io = SimIo::new(1, 8 * 4096);
++    assert!(lc.checkpoint(h, 6, &mut io));
++    let (ud, res) = io.complete(0, Outcome::Ok);
++    // SAFETY: a genuine simulator completion.
++    unsafe { lc.on_cqe(ud, res, &mut io, &mut ev) };
++    assert!(lc.quiescent() && arena.io_pending() == 0);
++}
++#[test]
++fn r10_2_simulator_ops_come_only_from_unsafe_submissions() {
++    let mut io = SimIo::new(1, 8 * 4096);
++    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
++    let route = RouteTable::new(4);
++    let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..2, lc_cfg());
++    lc.admit_load(1, 123, RecoveryBounds::clean(2, 1, 5), ExtentLoc::new(0, 2, false), 1, false, &mut io).unwrap();
++    assert_eq!(io.inflight().len(), 1);
++    io.abandon_all();
++    assert!(io.inflight().is_empty());
++    // SAFETY: the simulated ring was destroyed; no op references the arena.
++    unsafe { lc.release_device_references() };
++}
++#[cfg(target_os = "linux")]
++fn scratch(bytes: u64) -> std::fs::File {
++    let p = std::env::temp_dir().join(format!("r10c-{}-{bytes}", std::process::id()));
++    let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&p).unwrap();
++    f.set_len(bytes).unwrap();
++    let _ = std::fs::remove_file(&p);
++    f
++}
++#[cfg(target_os = "linux")]
++#[test]
++fn r10_4_post_wake_only_posts_wake_tokens() {
++    use ciagomem_core::uring::UringIo;
++    let (Ok(mut target), Ok(mut sender)) = (UringIo::new(8), UringIo::new(8)) else {
++        eprintln!("SKIPPED: io_uring unavailable");
++        return;
++    };
++    sender.post_wake(target.ring_fd(), 7).unwrap();
++    sender.submit().unwrap();
++    target.submit_and_wait(1).unwrap();
++    let mut got = Vec::new();
++    target.reap(|ud, res| got.push((ud, res)));
++    assert_eq!(got.len(), 1);
++    assert_eq!(UserData::decode(got[0].0), Some(UserData { op: Op::Wake, object: 0, ticket: 7 }));
++}
++#[cfg(target_os = "linux")]
++#[test]
++fn r10_uring_lifecycle_drop_before_kernel_submission_reads_into_retained_arena() {
++    use ciagomem_core::uring::UringIo;
++    use std::os::fd::AsRawFd;
++    let Ok(mut ring) = UringIo::new(8) else { eprintln!("SKIPPED: io_uring unavailable"); return };
++    let f = scratch(8 * 4096);
++    ring.register_files(&[f.as_raw_fd()]).unwrap();
++    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
++    let route = RouteTable::new(4);
++    {
++        let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..2, lc_cfg());
++        lc.admit_load(1, 123, RecoveryBounds::clean(2, 1, 5), ExtentLoc::new(0, 2, false), 1, false, &mut ring).unwrap();
++    }
++    assert!(arena.core(0).is_fenced());
++    assert_eq!(arena.io_pending(), 1);
++    drop(arena);
++    drop(route);
++    ring.submit_and_wait(1).unwrap();
++    let mut got = Vec::new();
++    ring.reap(|ud, res| got.push((ud, res)));
++    assert_eq!(got.len(), 1);
++    assert_eq!(got[0].1, 4096, "kernel read completed into retained memory");
++}
+diff -ruN -x target -x vendor a/tests/r6_regressions.rs b/tests/r6_regressions.rs
+--- a/tests/r6_regressions.rs	2026-10-31 07:04:23.899575757 +0000
++++ b/tests/r6_regressions.rs	2026-10-31 07:05:38.603575757 +0000
+@@ -352,7 +352,7 @@
+         }
+         admission.unwrap();
+         let mut events = Vec::new();
+-        while !disk.inflight.is_empty() {
++        while !disk.inflight().is_empty() {
+             let (ud, res) = disk.complete(0, Outcome::Ok);
+             /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+             unsafe { lc.on_cqe(ud, res, &mut disk, &mut events) };
+diff -ruN -x target -x vendor a/tests/r7_regressions.rs b/tests/r7_regressions.rs
+--- a/tests/r7_regressions.rs	2026-10-31 07:04:23.899575757 +0000
++++ b/tests/r7_regressions.rs	2026-10-31 07:05:38.603575757 +0000
+@@ -113,7 +113,7 @@
+     )
+     .unwrap();
+     let mut events = Vec::new();
+-    while !disk.inflight.is_empty() {
++    while !disk.inflight().is_empty() {
+         let (ud, res) = disk.complete(0, Outcome::Ok);
+         /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+         unsafe { lc.on_cqe(ud, res, &mut disk, &mut events) };
+diff -ruN -x target -x vendor a/tests/r9_regressions.rs b/tests/r9_regressions.rs
+--- a/tests/r9_regressions.rs	2026-10-31 07:04:23.899575757 +0000
++++ b/tests/r9_regressions.rs	2026-10-31 07:05:38.603575757 +0000
+@@ -57,7 +57,7 @@
+     )
+     .unwrap();
+     let mut events = Vec::new();
+-    while !disk.inflight.is_empty() {
++    while !disk.inflight().is_empty() {
+         let (ud, res) = disk.complete(0, Outcome::Ok);
+         /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+         unsafe { lc.on_cqe(ud, res, &mut disk, &mut events) };
+@@ -86,7 +86,7 @@
+         &mut disk,
+     )
+     .unwrap();
+-    disk.inflight.clear(); // the device abandons the op (ring destroyed)
++    disk.abandon_all(); // the device abandons the op (ring destroyed)
+     // SAFETY: no simulated op references the arena any more.
+     unsafe { lc.release_device_references() };
+     drop(lc);

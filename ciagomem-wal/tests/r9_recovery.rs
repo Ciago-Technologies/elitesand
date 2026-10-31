@@ -90,13 +90,13 @@ fn r9_1_new_submission_cannot_reuse_an_earlier_device_release() {
     log.append(1, KIND_DATA, b"abandoned", None, 0, &mut d)
         .unwrap();
     log.poll(1_000_000, true, &mut d);
-    d.inflight.clear();
+    d.abandon_all();
     // SAFETY: all previously submitted simulator operations have been discarded.
     unsafe { log.release_device_references() };
     log.append(1, KIND_DATA, b"new operation", None, 2_000_000, &mut d)
         .unwrap();
     log.poll(3_000_000, true, &mut d);
-    assert_eq!(d.inflight.len(), 1);
+    assert_eq!(d.inflight().len(), 1);
     drop(log);
     assert!(
         controls[0].is_fenced(),
@@ -134,7 +134,7 @@ fn r9_1_rejected_submission_restores_teardown_state() {
             log.append(1, KIND_DATA, b"cancelled", None, 0, &mut disk)
                 .unwrap();
             log.poll(1_000_000, true, &mut disk);
-            disk.inflight.clear();
+            disk.abandon_all();
             // SAFETY: the simulated device no longer retains any operation.
             unsafe { log.release_device_references() };
         }

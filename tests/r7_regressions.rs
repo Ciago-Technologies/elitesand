@@ -113,7 +113,7 @@ fn cold_load(bounds: lifecycle::RecoveryBounds) -> Vec<lifecycle::Event> {
     )
     .unwrap();
     let mut events = Vec::new();
-    while !disk.inflight.is_empty() {
+    while !disk.inflight().is_empty() {
         let (ud, res) = disk.complete(0, Outcome::Ok);
         /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
         unsafe { lc.on_cqe(ud, res, &mut disk, &mut events) };

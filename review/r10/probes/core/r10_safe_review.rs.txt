@@ -1,0 +1,43 @@
+//! R10 review probes that use no `unsafe` at all.
+#![forbid(unsafe_code)]
+use ciagomem_core::io::{Op, Outcome, SimIo, SimKind, SimOp, UserData};
+/// R10-2: `SimIo::complete` is safe but writes through a caller-supplied pointer.
+/// Under Miri this reports a use-after-free; the program contains no `unsafe`.
+#[test]
+fn defect_r10_2_safe_simio_writes_through_forged_pointer() {
+    let mut io = SimIo::new(1, 4096);
+    let freed = vec![0u8; 4096];
+    let p = freed.as_ptr() as *mut u8;
+    drop(freed);
+    io.inflight.push(SimOp { user_data: 0, file: 0, kind: SimKind::Read, buf: p, len: 4096, offset: 0 });
+    let _ = io.complete(0, Outcome::Ok); // writes 4096 bytes into freed memory
+}
+/// Native variant: writes into read-only data and is killed by SIGSEGV.
+#[test]
+#[ignore]
+fn defect_r10_2_native_segfault() {
+    static RO: [u8; 64] = [0; 64];
+    let mut io = SimIo::new(1, 4096);
+    io.inflight.push(SimOp { user_data: 0, file: 0, kind: SimKind::Read, buf: RO.as_ptr() as *mut u8, len: 64, offset: 0 });
+    let _ = io.complete(0, Outcome::Ok);
+}
+/// R10-4: `UringIo::post_wake` lets safe code inject a CQE whose user_data decodes as a
+/// LogWrite/Checkpoint/Load token into another ring. Skips if io_uring is unavailable.
+#[cfg(target_os = "linux")]
+#[test]
+fn defect_r10_4_post_wake_injects_a_storage_token() {
+    use ciagomem_core::uring::UringIo;
+    let (Ok(mut target), Ok(mut sender)) = (UringIo::new(8), UringIo::new(8)) else {
+        eprintln!("SKIPPED: io_uring unavailable");
+        return;
+    };
+    let forged = UserData { op: Op::LogWrite, object: 0, ticket: 1 }.encode();
+    sender.post_wake(target.ring_fd(), forged).unwrap();
+    sender.submit().unwrap();
+    target.submit_and_wait(1).unwrap();
+    let mut got = Vec::new();
+    target.reap(|ud, res| got.push((ud, res)));
+    assert_eq!(got.len(), 1);
+    assert_eq!(UserData::decode(got[0].0).unwrap().op, Op::LogWrite);
+    eprintln!("reaped forged LogWrite CQE: ud={:#x} res={}", got[0].0, got[0].1);
+}

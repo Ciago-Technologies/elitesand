@@ -1,0 +1,59 @@
+#[cfg(test)] mod tests {
+use ciagomem_core::{CoreControl, SlotArena, ExtentLoc};
+use ciagomem_core::slot::RouteTable;
+use ciagomem_core::lifecycle::{SlotLifecycle,LifecycleConfig,State};
+use ciagomem_core::io::{SimIo,Outcome};
+fn cfg()->LifecycleConfig {LifecycleConfig{low_free:1,high_free:1,max_flush_inflight:1,max_retries:2,epoch:2}}
+#[test]
+fn safe_arena_write_bypasses_dma_freeze() {
+ let arena=SlotArena::<512>::new_heap(0,1,CoreControl::shared(1));
+ let route=RouteTable::new(4);
+ let mut lc=SlotLifecycle::new(&arena,&route,0,0..1,cfg());
+ let mut events=Vec::new();let mut io=SimIo::new(1,8*4096);
+ let h=lc.admit_new(1,123,ExtentLoc::new(0,2,false),5,1,&mut events).unwrap();
+ assert!(lc.checkpoint(h,5,&mut io));
+ assert!(matches!(lc.state(0),State::Flushing{..}));
+ // All calls up to here and this write are safe APIs. No forged completion.
+ assert!(arena.write(h,6,|w|w.set(20,0xDEADBEEF)).is_ok());
+ assert_eq!(io.inflight().len(),1);
+ let (ud,res)=io.complete(0,Outcome::Ok);
+ // Genuine simulator completion, no remaining device references.
+ unsafe {lc.on_cqe(ud,res,&mut io,&mut events)};
+ assert_eq!(u64::from_le_bytes(io.files[0][3*4096+160..3*4096+168].try_into().unwrap()),0xDEADBEEF);
+ assert!(matches!(lc.state(0),State::Resident(r) if !r.dirty && r.last_lsn==5));
+ assert!(ciagomem_core::envelope::ExtentImage::validate(&io.files[0][3*4096..4*4096],1,123,2).is_none(),"checkpoint body no longer matches its checksum");
+}
+#[test]
+fn pins_wrap_then_live_slot_is_freed() {
+ let arena=SlotArena::<512>::new_heap(0,1,CoreControl::shared(1));
+ let route=RouteTable::new(4);let mut events=Vec::new();let mut io=SimIo::new(1,8*4096);
+ let mut lc=SlotLifecycle::new(&arena,&route,0,0..1,cfg());
+ let h=lc.admit_new(1,123,ExtentLoc::new(0,2,false),5,1,&mut events).unwrap();
+ assert!(lc.checkpoint(h,5,&mut io));let (ud,res)=io.complete(0,Outcome::Ok);
+ unsafe {lc.on_cqe(ud,res,&mut io,&mut events)};
+ for _ in 0..65536 { assert!(lc.pin(h)); }
+ lc.run_eviction(5,&mut io,&mut events);lc.run_eviction(5,&mut io,&mut events);
+ assert_eq!(lc.free_slots(),1,"all 65536 pins are still held");
+}
+#[test]
+fn stale_unpin_releases_new_generation() {
+ let arena=SlotArena::<512>::new_heap(0,1,CoreControl::shared(1));
+ let route=RouteTable::new(4);let mut events=Vec::new();let mut io=SimIo::new(1,8*4096);
+ let mut lc=SlotLifecycle::new(&arena,&route,0,0..1,cfg());
+ let old=lc.admit_new(1,123,ExtentLoc::new(0,2,false),5,1,&mut events).unwrap();
+ assert!(lc.checkpoint(old,5,&mut io));let (ud,res)=io.complete(0,Outcome::Ok);
+ unsafe {lc.on_cqe(ud,res,&mut io,&mut events)};
+ assert!(lc.pin(old));lc.unpin(old.index(),&mut events);
+ lc.run_eviction(5,&mut io,&mut events);lc.run_eviction(5,&mut io,&mut events);
+ assert_eq!(lc.free_slots(),1);
+ let new=lc.admit_new(2,456,ExtentLoc::new(0,4,false),6,1,&mut events).unwrap();
+ assert_ne!(old,new);assert_eq!(old.index(),new.index());
+ assert!(lc.checkpoint(new,6,&mut io));let (ud,res)=io.complete(0,Outcome::Ok);
+ unsafe {lc.on_cqe(ud,res,&mut io,&mut events)};
+ assert!(lc.pin(new));
+ lc.unpin(old.index(),&mut events); // duplicate old release consumes the new pin
+ lc.run_eviction(6,&mut io,&mut events);lc.run_eviction(6,&mut io,&mut events);
+ assert_eq!(lc.free_slots(),1);
+}
+
+}

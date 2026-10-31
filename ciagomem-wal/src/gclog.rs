@@ -772,21 +772,29 @@ impl GroupCommitLog {
         if self.binding.control().is_fenced() && self.fenced.is_none() {
             self.fence(libc::EIO, indeterminate);
         }
+        let matched = UserData::decode(user_data).and_then(|ud| {
+            let i = ud.object as usize;
+            (ud.op == Op::LogWrite
+                && i < self.bufs.len()
+                && self.bufs[i].state == BufState::InFlight
+                && self.bufs[i].ticket == ud.ticket)
+                .then_some(i)
+        });
         if let Some(errno) = self.fenced {
             self.binding.control().fence();
+            // R10-3: a genuine completion still ends the device's use of the buffer even
+            // though nothing is published; without this a fully reaped log stays
+            // non-quiescent and its drop retains every buffer.
+            match matched {
+                Some(i) => self.bufs[i].state = BufState::Sealed,
+                None => self.stats.stale_cqes += 1,
+            }
             return Err(LogError::Fenced(errno));
         }
-        let Some(ud) = UserData::decode(user_data) else {
-            return Ok(());
-        };
-        let i = ud.object as usize;
-        if i >= self.bufs.len()
-            || self.bufs[i].state != BufState::InFlight
-            || self.bufs[i].ticket != ud.ticket
-        {
+        let Some(i) = matched else {
             self.stats.stale_cqes += 1;
             return Ok(());
-        }
+        };
         let block = self.cfg.block;
         let b = &mut self.bufs[i];
         let want = b.submit_len - b.written;
@@ -802,6 +810,8 @@ impl GroupCommitLog {
             b.retries += 1;
             self.stats.retries += 1;
             if b.retries > self.cfg.max_retries {
+                // R10-3: this CQE ended the device's use of the buffer.
+                b.state = BufState::Sealed;
                 let errno = if res < 0 { res } else { -libc::EIO };
                 self.binding.control().fence();
                 self.fence(errno, indeterminate);
@@ -1082,11 +1092,11 @@ mod tests {
             }
             log.poll(*now, rng.below(3) == 0, io);
             for _ in 0..rng.below(3) {
-                if io.inflight.is_empty() {
+                if io.inflight().is_empty() {
                     break;
                 }
-                let i = rng.below(io.inflight.len() as u64) as usize;
-                let len = io.inflight[i].len;
+                let i = rng.below(io.inflight().len() as u64) as usize;
+                let len = io.inflight()[i].len;
                 let outcome = match rng.below(40) {
                     0 => Outcome::Err(libc::EIO),
                     1 | 2 => Outcome::Short(rng.below(len as u64) as u32),
@@ -1241,11 +1251,11 @@ mod tests {
             log.poll(1_000_000, true, &mut io); // idle + device idle only for the first
             log.poll(1_000_000, false, &mut io); // age >= max_delay seals the rest
         }
-        assert_eq!(io.inflight.len(), 3);
+        assert_eq!(io.inflight().len(), 3);
         let (mut acks, mut failed) = (Vec::new(), Vec::new());
         // Complete the last two first: nothing may be acknowledged.
         for _ in 0..2 {
-            let i = io.inflight.len() - 1;
+            let i = io.inflight().len() - 1;
             let (ud, res) = io.complete(i, Outcome::Ok);
             /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
             unsafe { log.on_cqe(ud, res, &mut io, &mut acks, &mut failed) }.unwrap();
@@ -1331,7 +1341,7 @@ mod tests {
                 }
             }
             log.poll(now, false, &mut io);
-            if !io.inflight.is_empty() {
+            if !io.inflight().is_empty() {
                 let (ud, res) = io.complete(0, Outcome::Ok);
                 /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
                 unsafe { log.on_cqe(ud, res, &mut io, &mut acks, &mut failed) }.unwrap();

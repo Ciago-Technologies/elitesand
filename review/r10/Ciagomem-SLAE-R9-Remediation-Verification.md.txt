@@ -1,0 +1,207 @@
+# Ciagomem-SLAE R9 Remediation Verification (R10)
+
+Input: `ciagomem-r9-fixed-review.zip` (five-crate `ciagomem-slae/` workspace, 654-line master specification, `docs/R9_REMEDIATION.md`, `docs/VERIFICATION.md`). Reviewed 31 October 2026 on Linux 6.1 x86_64 with rustc 1.99.1 and nightly Miri. All results below were produced in this review unless they are explicitly attributed to the authors.
+
+## 1. Verdict
+
+The R9 work is real and mostly correct. The authors also found and fixed three gaps in my own R9 patch: the release flag survived a resubmission, lifetime tracking was armed after submission, and the CQE handlers were safe. Their fixes for those three hold up.
+
+Four new defects remain, one of them Medium soundness:
+
+| ID | Severity | Class | One line |
+| --- | --- | --- | --- |
+| R10-1 | Low | Confirmed defect (durability/contract) | A checkpoint backend that queues and then unwinds leaves the slot mutable with an uncommitted ticket. Under `catch_unwind` continuation, the orphan CQE is accepted as a later checkpoint's completion. |
+| R10-2 | Medium | Confirmed soundness hole | `SimIo` is a public, safe API that writes through raw pointers held in a public field. 100% safe code corrupts the heap (glibc abort natively, use-after-free under Miri). |
+| R10-3 | Low | Confirmed defect (resource) | A fenced log ignores genuine completions, so it never becomes quiescent and its drop retains every buffer. This happens even when the reactor reaps everything. |
+| R10-4 | Low | Demonstrated injection, consequence conditional | Safe `UringIo::post_wake` posts an arbitrary `user_data` into another ring. I reaped a forged `LogWrite` token from a real ring. The R9 `unsafe on_cqe` proof cannot be discharged by "it came from my ring". |
+
+The focused patch fixes all four without new crates or format changes: 602 diff lines, 12 files. It passes 151 default and 179 all-features tests.
+
+Production readiness and million-user capacity remain unverified.
+
+## 2. What was executed
+
+| Check | Upload | Patched |
+| --- | --- | --- |
+| `cargo test --release --offline --workspace` | 141 passed, 0 failed (matches claim) | 151 passed, 0 failed |
+| `... --all-features` | 169 passed, 0 failed (matches claim) | 179 passed, 0 failed |
+| `scripts/validate_workspace.py` | PASS | PASS |
+| `scripts/check_mesh_progress.py` | PASS (1,000 + 25 bounded runs) | PASS |
+| `SOURCE_SHA256.json` | 1,879 / 1,879 match | n/a |
+| Defect probes (section 4) | All 4 reproduce; 5 tests incl. native SIGSEGV variant | R10-2/R10-4 probes no longer compile; R10-1/R10-3 assertions fail as intended |
+| Real `io_uring` retention (new) | Lifecycle read and log write queued, owner dropped, kernel completes into retained memory: pass | Same tests in acceptance suite: pass |
+| Miri on probes | R10-2: "alloc has been freed, so this pointer is dangling" (UB in safe code). R10-1, R10-3, R10-4: logic defects, no UB | n/a |
+| Miri, acceptance subsets (`-Zmiri-ignore-leaks`, io_uring tests skipped) | n/a | core r10 (3) + r9 (5); WAL r10 (3) + r9 (6) + r8 (3) + r7 (1): all pass, no UB |
+| Miri, full `ciagomem-core` lib, no leak suppression | n/a | 18 passed, no UB, no leak reports |
+| `cargo check --target aarch64-unknown-linux-gnu --all-targets --all-features` | n/a | exit 0 (compile only) |
+| Patch applies to fresh extraction | n/a | clean; 179 passed, 0 failed |
+
+Not run: rustfmt and Clippy (not installed here), loom/Shuttle, fuzzing, engine Miri, ARM execution, real NVMe/O_DIRECT, and power cuts. Details are in section 7.
+
+## 3. R9 claim verification
+
+| R9 claim | Result | Evidence |
+| --- | --- | --- |
+| Pending-I/O lifecycle drop fences the core; arena retains backing | Verified, now also on a real io_uring ring | Probe `r10_uring_lifecycle_drop_before_kernel_submission_reads_into_retained_arena`: the SQE is queued, the lifecycle, arena and route are dropped, and then the kernel completes a 4,096-byte read into the retained memory |
+| Non-quiescent log drop fences and retains buffers | Verified, real io_uring | `r10_uring_log_drop_before_kernel_submission_writes_from_retained_buffer`; durability stays 0 |
+| Release flag cleared by a new successful submission (`gclog.rs` 699–700, 718) | Verified | Read code; the authors' regression passes; the rejection path restores the old flag |
+| Tracking armed before submission, rolled back on rejection | Verified for lifecycle loads and for the WAL. Incomplete for checkpoints | R10-1 |
+| "An unwind conservatively retains/fences" | True only if the owner is then dropped | R10-1: under `catch_unwind` continuation there is no fence and the slot is mutable |
+| CQE handlers are unsafe; arbitrary tokens cannot release protection via a safe call | Handler signatures verified. The broader claim fails | R10-2 (safe simulator writes through forged pointers), R10-4 (safe CQE injection) |
+| Publisher exclusivity (`DurabilityPublisher`, crate-private raw methods) | Verified | compile_fail doctests pass; any `Arc<[CoreControl]>` holder can still claim an unbound core first (documented trade-off, see 5) |
+| No format change; CoreControl 256 B, SlotHeader 128 B | Verified | Layout tests pass |
+
+## 4. Findings
+
+### R10-1 Low — checkpoint submission unwind leaves the slot mutable and reuses its ticket
+
+Where (upload): `ciagomem-core/src/lifecycle.rs` 906 `start_flush`. Lines 948–949 arm `io_submitted()`/`io_inflight` before `write_at` at 950. But `m.ticket = ticket`, `State::Flushing` and `flushing += 1` are only committed at 966–975, after a successful return. The load path (`submit_load`) commits its ticket and `Loading` state first, so the two paths are inconsistent.
+
+Consequence when a backend queues the write and then panics, and the caller continues via `catch_unwind(AssertUnwindSafe(..))`:
+
+1. The slot stays `Resident` with a pending device write, and the core is not fenced. `mutate` (828) proceeds, so the CPU writes a payload that `IoBackend::write_at`'s contract says must stay unmodified until the CQE.
+2. The next `checkpoint` reuses the same ticket, so both device ops carry the same `user_data`.
+3. The orphan's CQE is accepted as the second write's completion. `Event::Checkpointed { lsn: 6 }` is emitted and the route moves while the lsn-6 write is still in flight. If the log is truncated on that event and power fails before the second write lands, records up to lsn 6 can be lost.
+4. The real second CQE is then discarded as stale. `io_pending` stays 1, the lifecycle never becomes quiescent, and teardown fences a core with no outstanding I/O.
+
+Reachability: low. It needs a backend that panics after queuing plus continuation after `catch_unwind`. This workspace's release profile sets `panic = "abort"`, but that does not bind library consumers. Cargo also ignores `panic` for tests ([Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html)). Rust documents `UnwindSafe` as advisory and `AssertUnwindSafe` as a safe opt-out, and notes that broken logical invariants may be witnessed after a caught panic ([UnwindSafe](https://doc.rust-lang.org/std/panic/trait.UnwindSafe.html)). The R9 ledger explicitly claims protection against this backend behavior, so the gap matters.
+
+Reproduction: `probes/core/r10_review.rs::defect_r10_1_checkpoint_unwind_leaves_slot_mutable_and_reuses_ticket`. This passes on the upload and asserts each of steps 1–4. Miri reports no UB: the simulator is single-threaded, so this is a contract and durability defect, not abstract-machine UB.
+
+Smallest fix (patched `lifecycle.rs` 946–990): save `prev = state`, then commit `ticket`, `State::Flushing` and `flushing += 1` together with the pending counters before `write_at`. On `Err`, restore `prev` and decrement `flushing` and the counters. This mirrors `gclog.rs` 699–719. The ticket stays monotonic on rejection, which is harmless because no CQE exists for a rejected submission.
+
+Acceptance:
+- `tests/r10_regressions.rs::r10_1_checkpoint_unwind_keeps_slot_frozen_and_its_completion_matching`: after the unwind, the slot is `Flushing`, `mutate` defers and a second checkpoint is refused. The orphan CQE yields `Checkpointed { lsn: 5 }`, with zero stale CQEs, a quiescent lifecycle and no fence.
+- `r10_1_rejected_checkpoint_restores_resident_state_and_can_retry`.
+
+### R10-2 Medium — `SimIo` lets safe code write through arbitrary pointers
+
+Where (upload): `ciagomem-core/src/io.rs` 104–108 (`pub struct SimOp { pub buf: *mut u8, .. }`), 130 (`pub inflight: Vec<SimOp>`), 148 (`pub fn complete`, safe, `copy_nonoverlapping` into `op.buf` for reads), 173 (`pub fn power_loss`, safe). `SimIo` is exported from the production crate, not `#[cfg(test)]` and not feature-gated.
+
+Reproduction (`probes/core/r10_safe_review.rs`, `#![forbid(unsafe_code)]`):
+- Push a `SimOp` whose `buf` points into a dropped `Vec`, then call `complete(0, Outcome::Ok)`. A native release run aborts with glibc "corrupted size vs. prev_size". Miri reports "memory access failed: alloc… has been freed, so this pointer is dangling".
+- The `#[ignore]` variant writes into a `static` and is killed by SIGSEGV.
+
+This is unsoundness in a safe public API: the safety of `complete` depends on an invariant that only unsafe `read_at`/`write_at` callers promise, but the vector is publicly writable. It is Medium rather than High because it is a simulator and production I/O does not go through it. Still, it is shipped and reachable from 100% safe code in any dependent crate.
+
+Smallest fix (patched `io.rs` 123–138, 197–205): make `inflight` private. Add `pub fn inflight(&self) -> &[SimOp]` (read-only) and `pub fn abandon_all(&mut self)`, which models ring destruction and touches no buffer. Entries can then only come from the unsafe `IoBackend` methods, whose contract covers the later `complete` and `power_loss`. In-tree callers change mechanically (`.inflight` → `.inflight()`, `.inflight.clear()` → `.abandon_all()`) in `lifecycle.rs`, `gclog.rs`, `r5_wal.rs`, `r9_recovery.rs`, `r6/r7/r9_regressions.rs`. A new `compile_fail` doctest guards the field.
+
+### R10-3 Low — a fenced log never becomes quiescent, so its buffers are retained even after a full reap
+
+Where (upload): `ciagomem-wal/src/gclog.rs` 764 `on_cqe`. At 775–778, `if let Some(errno) = self.fenced { …; return Err(..) }` returns before the token is matched (782). Genuine completions after a fence therefore never clear `BufState::InFlight`. Separately, at 804 the retry-exhaustion branch fences without leaving `InFlight` for the buffer whose error CQE it is handling. `quiescent()` (446) stays false, so `Drop` (306–316) `mem::forget`s every buffer.
+
+Consequences:
+- Any fence leaks up to `buffers × buf_bytes` per log, even when a correct reactor has reaped every CQE. Fences include EIO retry exhaustion and an external fence such as a lifecycle drop on the same core.
+- The only way to reclaim is the unsafe `release_device_references`, which turns an ordinary error path into an unsafe-proof obligation. Repeated device errors across log reopen cycles accumulate leaks.
+
+No memory-safety impact: retention is the safe direction.
+
+Reproduction: `probes/wal/r10_review.rs::defect_r10_3_fenced_log_never_becomes_quiescent_after_full_reap` (external fence, then a genuine CQE, then `d.inflight` is empty but `!log.quiescent()`).
+
+Smallest fix (patched `gclog.rs` 775–797, 813):
+- Match the token first (`op == LogWrite`, index, `InFlight`, ticket).
+- When fenced, move a matching buffer to `Sealed` (nothing is published and nothing resubmits, because `poll` and `append` are fence-guarded), then return `Err(Fenced)`.
+- In the retry-exhaustion branch, set the failed buffer to `Sealed` before fencing.
+
+Acceptance: `r10_3_externally_fenced_log_is_quiescent_after_full_reap` (normal drop, claim released, durability 0, no resubmission) and `r10_3_retry_exhaustion_leaves_the_failed_buffer_reclaimable`.
+
+### R10-4 Low — `post_wake` injects caller-chosen storage tokens into another ring
+
+Where (upload): `ciagomem-core/src/uring.rs` 149, `pub fn post_wake(&mut self, target_ring_fd: RawFd, user_data: u64)`. This is safe, and the target ring fd is public via `ring_fd()` (157). `IORING_OP_MSG_RING` posts a CQE whose `user_data` is the sender's data and whose `res` is the sender's `len` (0 here), on "any ring that the user has access to" ([io_uring_prep_msg_ring(3)](https://man7.org/linux/man-pages/man3/io_uring_prep_msg_ring.3.html)). The mesh design routes doorbell wakeups through this path (`mesh.rs` 37), so storage and wake CQEs share a ring.
+
+Reproduction on a real ring (`probes/core/r10_safe_review.rs::defect_r10_4_post_wake_injects_a_storage_token`, no `unsafe`): the reaped CQE is `ud=0x100000000000001 res=0` and decodes as `Op::LogWrite`.
+
+What a forged `res = 0` token would do if a reactor forwarded it (`probes/wal/r10_review.rs::defect_r10_4_forged_zero_result_resubmits_inflight_buffer`, which deliberately violates the unsafe contract): the log treats it as a failed write and resubmits the same buffer while the first write is still in flight. A forged `Checkpoint` or `Load` result would unfreeze or free a slot during DMA.
+
+Classification: R9 moved the proof obligation to the reactor (`unsafe on_cqe`), and no reactor exists yet. This is therefore a demonstrated injection primitive with a conditional consequence, not a demonstrated exploit. The fix keeps routing by `Op` sufficient.
+
+Smallest fix:
+- Patched `uring.rs` 151: `post_wake(&mut self, target_ring_fd, wake: u32)` always encodes `UserData { op: Op::Wake, object: 0, ticket: wake }`. There are no in-tree callers.
+- Defence in depth (patched `gclog.rs` 775–781): the log matches only `op == Op::LogWrite`. Before this change it ignored the op field. The lifecycle already checks the op.
+
+Acceptance: `r10_4_post_wake_only_posts_wake_tokens` (real ring) and `r10_4_log_rejects_non_logwrite_token_with_matching_bits`.
+
+The `r10_4` consequence probe still passes after the patch, as intended: it calls the unsafe handler with a forged `LogWrite` token. The patch removes the safe source of such tokens; it cannot make violating an unsafe contract safe.
+
+### Info notes (no patch)
+
+- I1: `GroupCommitLog::release_device_references` and `SlotLifecycle::release_device_references` leave abandoned entries in `InFlight`/`Flushing`/`Loading`. A log used after release is permanently stalled behind the abandoned FIFO head. Both are documented as teardown-only. Making release terminal (fence plus moving abandoned entries to `Sealed`/`Free`) would make misuse visible.
+- I2: `Meta::io_inflight` is `u8` and release builds disable overflow checks ([Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html)). After the R10-1 fix a slot can hold at most one op, so this is not reachable in-tree. A `debug_assert!` or a `u16` would document the bound.
+- I3: `UringIo` drop closes the ring. The kernel cancels and waits for requests asynchronously after close, so close is not a reap point. The R9 retention already covers this for tracked buffers. The production reactor must still reap before treating memory as free.
+
+## 5. Earlier guarantees re-checked
+
+- R8-1 single publisher: exclusive claim, compile_fail guards and stale-open refusal all pass. Trade-off, not a defect: any holder of the node's `Arc<[CoreControl]>` can claim an unbound core before the WAL does, and the open then fails closed. Node construction must own that array.
+- R8-2 export expiry/boot, R8-3 Engine `!Send`/`!Sync`, R8-4 layout: suites and layout tests pass. Export (`openat2`) remains outside Miri.
+- R7/R6/R5/v3.0 regression suites: all pass on the upload and on the patched tree.
+- Inspected and found no further defect: `submit_load` rollback (555–590), stale/duplicate lifecycle CQE handling, WAL rejection rollback including `was_released`, `DurabilityPublisher` claim and Drop, and the arena `Drop` retention. This conclusion is limited to the simulator, two real-ring tests, and single-threaded Miri. No concurrent schedule exploration was done.
+
+## 6. Missing production integration
+
+- No WAL-backed engine journal: `ciagomem-engine` does not call `SlotLifecycle`, `GroupCommitLog` or `IoBackend` at all, and `MemoryJournal` is non-durable.
+- No node/reactor constructor that allocates the control array, registers arenas (`validate_arena`), owns the ring, routes CQEs by `Op`, and performs cancel-and-reap shutdown.
+- No replay/repair driver, durable checkpoint catalog with image epoch, production identity anchor, or transport authentication.
+- No storage qualification: O_DIRECT/NVMe, FUA/flush semantics, power cuts ([ALICE, OSDI'14](https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai); [LWN on fsync errors](https://lwn.net/Articles/752063/)).
+
+## 7. Checks I could not run
+
+- rustfmt and Clippy: not installed. The authors' "fmt passed, Clippy warnings" is unconfirmed.
+- loom/Shuttle model checking ([loom](https://docs.rs/loom/latest/loom/), [Shuttle](https://github.com/awslabs/shuttle)) and cargo-fuzz campaigns ([cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html)).
+- Miri on the engine and on `openat2` export, plus any Miri run touching io_uring (syscalls unsupported) ([Miri](https://github.com/rust-lang/miri/)).
+- ARM execution: compile only. Atomic orderings were not exercised on a weak-memory machine ([Rust atomics](https://doc.rust-lang.org/std/sync/atomic/index.html)).
+- Real NVMe, O_DIRECT, power-loss, and benchmarks. The io_uring tests used a buffered file in the temp directory.
+
+## 8. Patch contents (`ciagomem-r10-fix-patch.zip`)
+
+- `patch/r10-fixes.diff`: 602 lines, 12 files. Apply with `patch -p1` from `ciagomem-slae/`.
+- `patched-files/`: full copies of the changed files.
+- `probes/`: the defect probes and their `Cargo.toml` entries.
+- `logs/`: upload and patched test logs, Miri logs, aarch64 check, fresh-apply run.
+
+API changes:
+- `SimIo::inflight` becomes private, with new `SimIo::inflight()` and `SimIo::abandon_all()`.
+- `UringIo::post_wake` takes `wake: u32` instead of `user_data: u64`.
+- `GroupCommitLog::on_cqe` now ignores non-`LogWrite` tokens, and a fenced log becomes quiescent once reaped.
+- Lifecycle checkpoint state is committed before submission.
+
+There are no dependency, layout or persistent-format changes.
+
+## 9. Full-library Miri and fresh-apply results
+
+- Full `ciagomem-core` library under Miri, without `-Zmiri-ignore-leaks`, on the patched tree: 18 passed, 0 failed, no undefined behavior, no leak reports, 759.9 s (`logs/r10_miri_corelib.log`). This covers the changed `start_flush` path through the lifecycle unit tests, including the randomized interleavings.
+- Leak suppression appears only in the acceptance subsets that deliberately drop owners mid-I/O. There, retention is the correct result; Miri still checks those runs for UB.
+- `patch -p1` on a fresh extraction of the upload applied cleanly. `cargo test --release --offline --workspace --all-features` then gave 179 passed, 0 failed (`logs/r10_apply.log`).
+
+## 10. Exact specification corrections
+
+Line 37, replace "Lifetime tracking is provisionally armed before backend submission, rolled back on rejection, and retained on unwind." with:
+
+> Lifetime tracking and the owning state transition (ticket, Flushing/Loading/InFlight) are committed before backend submission and rolled back on rejection, so a backend that queues and then unwinds leaves the buffer frozen and its eventual CQE matching, whether the owner is dropped or continues after `catch_unwind`.
+
+Line 37, replace "raw numeric tokens are not safe evidence that buffers can be released." with:
+
+> raw numeric tokens are not safe evidence that buffers can be released; the simulator's queue is private, and `UringIo::post_wake` can only post `Op::Wake` tokens, so safe code cannot fabricate a storage completion.
+
+Line 163, append:
+
+> The simulator is part of the public API; its queued operations can only be created by the unsafe `IoBackend` submissions, which is what makes its safe `complete`/`power_loss` sound.
+
+Line 176, replace "later CQEs cannot advance published durability." with:
+
+> later CQEs cannot advance published durability, but a genuine matching CQE still ends the device's use of its buffer, so a fully reaped fenced log is quiescent and reclaimable without `release_device_references`.
+
+Line 176, append:
+
+> `on_cqe` accepts only `Op::LogWrite` tokens.
+
+Line 628 (UB/concurrency row), replace the "Observed result" cell with:
+
+> R10 review: selected acceptance Miri subsets (deliberate-retention cases allow leaks) and full `ciagomem-core` library Miri without leak suppression on the R10-patched tree; aarch64 compile check; lifecycle and log retention exercised once against a real io_uring ring on a buffered file. Engine Miri, loom/Shuttle, ARM execution, real-device teardown and power-cut testing remain open.
+
+## 11. Acceptance checklist for the next revision
+
+1. `cargo test --release --offline --workspace --all-features` ≥ 179 passed (default ≥ 151).
+2. `r10_safe_review` probe fails to compile (private `inflight`, typed `post_wake`). R10-1 and R10-3 probe assertions fail.
+3. Miri: full core lib without leak suppression, plus core/WAL R7–R10 acceptance subsets.
+4. Real-ring tests run, not skipped, on at least one Linux host. Add a cancel-and-reap shutdown test once a reactor exists.
+5. Clippy and rustfmt logs attached, and ARM test execution (not only `cargo check`).

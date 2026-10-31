@@ -1,4 +1,4 @@
-//! Generational slot handles, the one-cache-line slot header, the slab arena and the
+//! Generational slot handles, the 128-byte slot header, the slab arena and the
 //! tenant route table.
 //!
 //! Spec defect: `TenantRouteEntry.slab_slot_index: u32` is a bare index. After eviction
@@ -18,13 +18,13 @@
 //!   `SlotHandle::NULL`, so a zero-filled route table means "everything cold".
 //!   2^40 reuses of one slot at 10k reuses/s per slot is 3.5 years of *continuous*
 //!   churn on that one slot; on exhaustion the slot is retired, never wrapped.
-//! * `class` selects one of 16 slab size classes (4 KiB .. 64 KiB extents).
+//! * `class` has 16 encodings; the target node profile admits 0..4 (4 KiB .. 64 KiB),
+//!   with 5..15 reserved. Generic packing still represents all encodings.
 //! * `index` addresses 2^20 slots per class.
 //!
-//! The slot header stores the exact `SlotHandle` of its current owner in the same
-//! 64-byte line as the sequence word, so validating "is this still my tenant's slot"
-//! costs one `cmp` on a line the reader already loaded for the SeqLock: zero extra
-//! cache misses, header still exactly one line.
+//! The slot header stores the exact `SlotHandle` of its current owner in the
+//! first 64-byte line as the sequence word. Full-incarnation validation also reads
+//! the second line; the current header occupies 128 bytes at 64-byte alignment.
 
 use crate::CachePadded;
 use crate::seqlock::{ReadError, SeqWord, WordView, WordsMut, WriterBusy, read_deadline};
@@ -191,7 +191,7 @@ impl ExtentLoc {
 }
 
 // ---------------------------------------------------------------------------------
-// Slot header (exactly one cache line) and per-core control line
+// Slot header (128 bytes at 64-byte alignment) and per-core control state
 // ---------------------------------------------------------------------------------
 
 #[derive(Debug, Default)]
@@ -214,7 +214,7 @@ pub struct SlotHeader {
     pub last_generation: AtomicU64, //           +48
     pub incarnation_lo: AtomicU64,
     pub incarnation_hi: AtomicU64,
-    pub reserved: AtomicU64, //                  +56
+    pub reserved: AtomicU64, //                  +72
 }
 const _: () = assert!(core::mem::size_of::<SlotHeader>() == 128);
 
@@ -336,7 +336,7 @@ impl Drop for DurabilityPublisher {
 
 /// One slot's payload. 4 KiB alignment makes it a valid O_DIRECT / `WRITE_FIXED`
 /// source and destination with no bounce buffer. Words 0..16 hold the on-disk extent
-/// image header (`envelope::ExtentImage`), application data starts at word 8.
+/// image header (`envelope::ExtentImage`), application data starts at word 16.
 #[derive(Debug)]
 #[repr(C, align(4096))]
 pub struct Payload<const W: usize>(pub [AtomicU64; W]);
@@ -386,6 +386,17 @@ pub struct Snapshot<R> {
     pub applied_lsn: u64,
 }
 
+// Process-local access state; never part of the persisted/header ABI.
+const CLAIMED: u64 = 1 << 63;
+const DEVICE: u64 = 1 << 62;
+const CPU_COUNT: u64 = DEVICE - 1;
+struct CpuAccess<'a>(&'a AtomicU64);
+impl Drop for CpuAccess<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Release);
+    }
+}
+
 enum Backing {
     Heap {
         layout: std::alloc::Layout,
@@ -401,6 +412,17 @@ enum Backing {
 /// Production backing is a `memfd_create(MFD_HUGETLB | MFD_HUGE_2MB)` mapping (see
 /// `SlotArena::new_hugetlb`). This backing is engine-private; agents receive
 /// separately authorized sealed projections, never this descriptor.
+/// Mutable atomics are private: safe clients cannot bypass lifecycle ownership.
+/// ```compile_fail
+/// use ciagomem_core::{CoreControl, SlotArena};
+/// let arena = SlotArena::<512>::new_heap(0, 1, CoreControl::shared(1));
+/// arena.payload(0)[0].store(1, std::sync::atomic::Ordering::Relaxed);
+/// ```
+/// ```compile_fail
+/// use ciagomem_core::{CoreControl, SlotArena};
+/// let arena = SlotArena::<512>::new_heap(0, 1, CoreControl::shared(1));
+/// arena.header(0).owner.store(0, std::sync::atomic::Ordering::Relaxed);
+/// ```
 pub struct SlotArena<const W: usize> {
     class: u8,
     n: u32,
@@ -411,6 +433,8 @@ pub struct SlotArena<const W: usize> {
     base: NonNull<u8>,
     /// Device operations that may still read or write this arena's payloads (R9-1).
     io_pending: AtomicU64,
+    pin_pending: AtomicU64,
+    access: Box<[AtomicU64]>,
 }
 
 impl<const W: usize> core::fmt::Debug for SlotArena<W> {
@@ -536,6 +560,8 @@ impl<const W: usize> SlotArena<W> {
             backing,
             base,
             io_pending: AtomicU64::new(0),
+            pin_pending: AtomicU64::new(0),
+            access: (0..n).map(|_| AtomicU64::new(0)).collect(),
         }
     }
 
@@ -559,13 +585,13 @@ impl<const W: usize> SlotArena<W> {
         &self.cores[core as usize]
     }
     #[inline(always)]
-    pub fn header(&self, idx: u32) -> &SlotHeader {
+    pub(crate) fn header(&self, idx: u32) -> &SlotHeader {
         assert!(idx < self.n);
         // SAFETY: idx < n and the header array has n entries.
         unsafe { &*self.headers.as_ptr().add(idx as usize) }
     }
     #[inline(always)]
-    pub fn payload(&self, idx: u32) -> &[AtomicU64; W] {
+    pub(crate) fn payload(&self, idx: u32) -> &[AtomicU64; W] {
         assert!(idx < self.n);
         // SAFETY: idx < n and the payload array has n entries.
         unsafe { &(*self.payloads.as_ptr().add(idx as usize)).0 }
@@ -585,8 +611,13 @@ impl<const W: usize> SlotArena<W> {
         (!h.is_null() && h.class() == self.class && h.index() < self.n).then_some(h.index())
     }
 
-    /// Generational, owner-validated optimistic read. This is the only read path; there is
-    /// no API that reads a slot without checking `(owner, tenant)` inside the section.
+    /// Generational, owner-validated optimistic read. CPU access is excluded during DMA.
+    /// The view cannot outlive this call or its access guard.
+    /// ```compile_fail
+    /// use ciagomem_core::{CoreControl, SlotArena, SlotHandle, Visibility};
+    /// let arena = SlotArena::<512>::new_heap(0, 1, CoreControl::shared(1));
+    /// let escaped = arena.read(SlotHandle::NULL, 1, 123, Visibility::Applied, |view| Some(view));
+    /// ```
     #[inline]
     pub fn read<R>(
         &self,
@@ -598,6 +629,13 @@ impl<const W: usize> SlotArena<W> {
     ) -> Result<Snapshot<R>, SlotReadError> {
         let idx = self.resolve(h).ok_or(SlotReadError::InvalidHandle)?;
         let hdr = self.header(idx);
+        let _access = self.cpu_access(idx, false).map_err(|_| {
+            if hdr.owner.load(Acquire) != h.raw() {
+                SlotReadError::Reassigned
+            } else {
+                SlotReadError::WriterActive
+            }
+        })?;
         let words = self.payload(idx);
         // Owner, identity and core checks are validated by the same seqlock snapshot.
         let r = read_deadline(
@@ -655,9 +693,26 @@ impl<const W: usize> SlotArena<W> {
     }
 
     /// Owner core only: mutate in place under the seqlock and stamp the record LSN.
-    /// `debug_assert` catches a stale handle on the writer side.
     #[inline]
+    /// Mutate an unmanaged slot. Lifecycle-owned slots require `SlotLifecycle::mutate`.
+    /// ```compile_fail
+    /// use ciagomem_core::{CoreControl, SlotArena, SlotHandle};
+    /// let arena = SlotArena::<512>::new_heap(0, 1, CoreControl::shared(1));
+    /// let escaped = arena.write(SlotHandle::NULL, 1, |words| words);
+    /// ```
     pub fn write<R>(
+        &self,
+        h: SlotHandle,
+        lsn: u64,
+        f: impl FnOnce(WordsMut<'_>) -> R,
+    ) -> Result<R, crate::WriteError> {
+        let idx = self.resolve(h).ok_or(crate::WriteError::Reassigned)?;
+        let _access = self
+            .cpu_access(idx, true)
+            .map_err(|_| crate::WriteError::WriterBusy)?;
+        self.write_owned(h, lsn, f)
+    }
+    pub(crate) fn write_owned<R>(
         &self,
         h: SlotHandle,
         lsn: u64,
@@ -713,7 +768,19 @@ impl<const W: usize> SlotArena<W> {
     /// Owner core only, slot currently unowned: issue the next generation, install the
     /// owner, and expose it. The *caller* publishes the handle in the route table after
     /// this returns (publication order: slot first, route second).
+    /// Install into an unmanaged slot; a lifecycle owns its complete claimed range.
     pub fn install(
+        &self,
+        idx: u32,
+        tw: TenantWord,
+        incarnation: u128,
+        applied_lsn: u64,
+        checkpoint_lsn: u64,
+    ) -> Result<Option<SlotHandle>, WriterBusy> {
+        let _access = self.cpu_access(idx, true)?;
+        self.install_owned(idx, tw, incarnation, applied_lsn, checkpoint_lsn)
+    }
+    pub(crate) fn install_owned(
         &self,
         idx: u32,
         tw: TenantWord,
@@ -753,10 +820,18 @@ impl<const W: usize> SlotArena<W> {
     /// (either the owner check fails, or a section that straddled this one fails the
     /// sequence check). The caller must have unpublished the route entry first.
     pub fn revoke(&self, h: SlotHandle) -> Result<(), WriterBusy> {
+        let idx = self.resolve(h).ok_or(WriterBusy)?;
+        let _access = self.cpu_access(idx, true)?;
+        self.revoke_owned(h)
+    }
+    pub(crate) fn revoke_owned(&self, h: SlotHandle) -> Result<(), WriterBusy> {
         let idx = self.resolve(h).expect("invalid handle on owner core");
         let hdr = self.header(idx);
         let g = hdr.seq.write_begin()?;
-        debug_assert_eq!(hdr.owner.load(Relaxed), h.raw());
+        if hdr.owner.load(Relaxed) != h.raw() {
+            g.commit();
+            return Err(WriterBusy);
+        }
         hdr.owner.store(0, Relaxed);
         hdr.tenant.store(0, Relaxed);
         hdr.incarnation_lo.store(0, Relaxed);
@@ -767,8 +842,21 @@ impl<const W: usize> SlotArena<W> {
 
     /// Owner core only: write a header-only section (e.g. checkpoint LSN after a CQE).
     pub fn set_checkpoint_lsn(&self, h: SlotHandle, lsn: u64) -> Result<(), WriterBusy> {
-        let hdr = self.header(self.resolve(h).expect("invalid handle"));
+        let idx = self.resolve(h).ok_or(WriterBusy)?;
+        let _access = self.cpu_access(idx, true)?;
+        self.set_checkpoint_lsn_owned(h, lsn)
+    }
+    pub(crate) fn set_checkpoint_lsn_owned(
+        &self,
+        h: SlotHandle,
+        lsn: u64,
+    ) -> Result<(), WriterBusy> {
+        let hdr = self.header(self.resolve(h).ok_or(WriterBusy)?);
         let g = hdr.seq.write_begin()?;
+        if hdr.owner.load(Relaxed) != h.raw() {
+            g.commit();
+            return Err(WriterBusy);
+        }
         hdr.checkpoint_lsn.store(lsn, Relaxed);
         g.commit();
         Ok(())
@@ -780,9 +868,20 @@ impl<const W: usize> SlotArena<W> {
         idx: u32,
         f: impl FnOnce(WordsMut<'_>) -> R,
     ) -> Result<R, WriterBusy> {
+        let _access = self.cpu_access(idx, true)?;
+        self.with_unowned_payload_owned(idx, f)
+    }
+    pub(crate) fn with_unowned_payload_owned<R>(
+        &self,
+        idx: u32,
+        f: impl FnOnce(WordsMut<'_>) -> R,
+    ) -> Result<R, WriterBusy> {
         let hdr = self.header(idx);
         let g = hdr.seq.write_begin()?;
-        debug_assert_eq!(hdr.owner.load(Relaxed), 0);
+        if hdr.owner.load(Relaxed) != 0 {
+            g.commit();
+            return Err(WriterBusy);
+        }
         let r = f(WordsMut::new(self.payload(idx)));
         g.commit();
         Ok(r)
@@ -790,11 +889,53 @@ impl<const W: usize> SlotArena<W> {
 }
 
 impl<const W: usize> SlotArena<W> {
-    pub(crate) fn io_submitted(&self) {
-        self.io_pending.fetch_add(1, AcqRel);
+    fn cpu_access(&self, idx: u32, mutation: bool) -> Result<CpuAccess<'_>, WriterBusy> {
+        let state = self.access.get(idx as usize).ok_or(WriterBusy)?;
+        state
+            .fetch_update(Acquire, Relaxed, |v| {
+                if v & DEVICE != 0 || (mutation && v & CLAIMED != 0) || v & CPU_COUNT == CPU_COUNT {
+                    None
+                } else {
+                    Some(v + 1)
+                }
+            })
+            .map_err(|_| WriterBusy)?;
+        Ok(CpuAccess(state))
     }
-    pub(crate) fn io_completed(&self) {
+    pub(crate) fn claim_range(&self, range: core::ops::Range<u32>) -> bool {
+        for idx in range.clone() {
+            if self.access[idx as usize]
+                .compare_exchange(0, CLAIMED, AcqRel, Relaxed)
+                .is_err()
+            {
+                for rollback in range.start..idx {
+                    self.release_claim(rollback);
+                }
+                return false;
+            }
+        }
+        true
+    }
+    pub(crate) fn release_claim(&self, idx: u32) {
+        self.access[idx as usize].fetch_and(!CLAIMED, Release);
+    }
+    pub(crate) fn io_submitted(&self, idx: u32) -> Result<(), crate::io::SqFull> {
+        // Existing CPU readers must leave before DMA can access non-atomic bytes.
+        self.access[idx as usize]
+            .compare_exchange(CLAIMED, CLAIMED | DEVICE, AcqRel, Relaxed)
+            .map_err(|_| crate::io::SqFull)?;
+        self.io_pending.fetch_add(1, AcqRel);
+        Ok(())
+    }
+    pub(crate) fn io_completed(&self, idx: u32) {
+        self.access[idx as usize].fetch_and(!DEVICE, Release);
         self.io_pending.fetch_sub(1, AcqRel);
+    }
+    pub(crate) fn pin_acquired(&self) {
+        self.pin_pending.fetch_add(1, Relaxed);
+    }
+    pub(crate) fn pin_released(&self) {
+        self.pin_pending.fetch_sub(1, Release);
     }
     /// Payload I/Os submitted by a lifecycle whose CQE has not been consumed.
     pub fn io_pending(&self) -> u64 {
@@ -806,7 +947,7 @@ impl<const W: usize> Drop for SlotArena<W> {
     fn drop(&mut self) {
         // shortcut: retain abandoned DMA backing until exit; replace with reactor-owned
         // cancel-and-reap reclamation when that driver exists.
-        if self.io_pending.load(Acquire) != 0 {
+        if self.io_pending.load(Acquire) != 0 || self.pin_pending.load(Acquire) != 0 {
             return;
         }
         match &self.backing {

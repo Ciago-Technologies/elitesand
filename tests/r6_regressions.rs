@@ -352,7 +352,7 @@ fn n5_n6_recovery_distinguishes_absence_corruption_and_covered_single_copy() {
         }
         admission.unwrap();
         let mut events = Vec::new();
-        while !disk.inflight.is_empty() {
+        while !disk.inflight().is_empty() {
             let (ud, res) = disk.complete(0, Outcome::Ok);
             /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
             unsafe { lc.on_cqe(ud, res, &mut disk, &mut events) };

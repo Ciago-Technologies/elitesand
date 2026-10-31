@@ -1,0 +1,32 @@
+//! R10: R9-1 log retention against a real io_uring ring (Linux only).
+#![cfg(target_os = "linux")]
+use ciagomem_core::CoreControl;
+use ciagomem_core::uring::UringIo;
+use ciagomem_wal::envelope::KIND_DATA;
+use ciagomem_wal::gclog::*;
+use std::os::fd::AsRawFd;
+#[test]
+fn r10_uring_log_drop_before_kernel_submission_writes_from_retained_buffer() {
+    let Ok(mut ring) = UringIo::new(8) else { eprintln!("SKIPPED: io_uring unavailable"); return };
+    let cfg = LogConfig { block: 4096, buf_bytes: 16384, buffers: 4, max_inflight: 3, min_batch_bytes: 8192,
+        max_delay_ns: 5000, capacity: 65536, file: 0, tail: TailMode::Pad, max_retries: 3 };
+    let p = std::env::temp_dir().join(format!("r10-wal-{}", std::process::id()));
+    let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&p).unwrap();
+    f.set_len(cfg.data_offset() + cfg.capacity).unwrap();
+    let _ = std::fs::remove_file(&p);
+    ring.register_files(&[f.as_raw_fd()]).unwrap();
+    let controls = CoreControl::shared(1);
+    let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh(), controls.clone(), 0);
+    log.superblock_durable(&sb);
+    log.append(1, KIND_DATA, b"through-the-kernel", Some(7), 0, &mut ring).unwrap();
+    log.poll(1_000_000, true, &mut ring);
+    assert!(!log.quiescent());
+    drop(log);
+    assert!(controls[0].is_fenced() && !controls[0].log_bound());
+    ring.submit_and_wait(1).unwrap();
+    let mut got = Vec::new();
+    ring.reap(|ud, res| got.push((ud, res)));
+    assert_eq!(got.len(), 1);
+    assert!(got[0].1 > 0, "kernel write completed from retained buffer: {got:?}");
+    assert_eq!(controls[0].durable(), 0, "nothing published after the drop");
+}

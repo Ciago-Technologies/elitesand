@@ -425,13 +425,14 @@ fn s9_slot_read_uses_a_deadline() {
         )
         .unwrap()
         .unwrap();
-    let guard = a.header(0).seq.write_begin().unwrap();
-    assert!(matches!(
-        a.read(h, 1, 11, Visibility::Optimistic, |v| v.word(0))
-            .err(),
-        Some(SlotReadError::WriterStalled | SlotReadError::DeadlineExhausted)
-    ));
-    guard.commit();
+    a.write(h, 1, |_| {
+        assert!(matches!(
+            a.read(h, 1, 11, Visibility::Optimistic, |v| v.word(0))
+                .err(),
+            Some(SlotReadError::WriterStalled | SlotReadError::DeadlineExhausted)
+        ));
+    })
+    .unwrap();
     assert!(
         a.read(h, 1, 11, Visibility::Optimistic, |v| v.word(0))
             .is_ok()

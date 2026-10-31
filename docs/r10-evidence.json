@@ -1,0 +1,189 @@
+{
+  "input_zip_sha256": "a23a04e8e64377ca2c46fecffc1787de88252286725cac47ee1e6b96f7320aa7",
+  "note": "Incoming evidence is naming-normalized only; original digests describe input bytes. Reviewer logs are attributed evidence, not local results.",
+  "files": {
+    "review/r10/README.md.txt": {
+      "original_sha256": "21ee8a131b44685b189d8a3a742b14fb91f12fd24e6aa503e9906db0a63e5e56",
+      "normalized_sha256": "3d59c6f28fc96dc8959adbf3ecdccd7c5fb3747d23a59f8401d53e542d7fdf0e"
+    },
+    "review/r10/Ciagomem-SLAE-R9-Remediation-Verification.md.txt": {
+      "original_sha256": "65011f19f4d06418f2acb486ad2e6add81e76f02cc0c2f8d40950a75888832a3",
+      "normalized_sha256": "1e4bfe021dff3a73a19c1f4638eddb382a5532ec53de5245e29885bb030e2856"
+    },
+    "review/r10/logs/r10_miri_core.log.txt": {
+      "original_sha256": "1b8204fcece811793b8371deb4ab72dc8b8b11c677ab2a0c05d4b483063f1ccd",
+      "normalized_sha256": "556b59b5b1bbc5bb33c5de712fe3520fa06236af96f6973b00309a21a2395d1c"
+    },
+    "review/r10/logs/r10_def.log.txt": {
+      "original_sha256": "fa7a2c85978e72355a388ee81e0ad50205c2bea9336317cf9952ea8d9380880b",
+      "normalized_sha256": "8fca73c25cca6930048ea24e330a482db3883fad8fbb4b3135d4cea246ab9222"
+    },
+    "review/r10/logs/r10_miri_corelib.log.txt": {
+      "original_sha256": "35d91b5b24ce169059896d5d84e752860bc2a4ac60f63feb9b80600b3683a61d",
+      "normalized_sha256": "23020b67dfefda5eeabe189524ae405eb1305c1ff420212833a79b9559df6537"
+    },
+    "review/r10/logs/r10_miri_probe_wal.log.txt": {
+      "original_sha256": "b0f95c160e973552d8a7870f0da3b26459b28181bf2241acaabcd7504d64c17d",
+      "normalized_sha256": "06d2e1a2c6510e6de7f06dd37a6d5ff8189ba3958773afea43e4ca06dca68301"
+    },
+    "review/r10/logs/r10_arm.log.txt": {
+      "original_sha256": "cfe7707e1d388cc069bd9f3d48b15d8e8916203d3e6e04150b38b656682a71f9",
+      "normalized_sha256": "4a3310f4145b332443668c4d6acd67a8eebf2dd1f1aa9b2c15ef1a3060d9c09f"
+    },
+    "review/r10/logs/r10_apply.log.txt": {
+      "original_sha256": "99610b83f31bd991efa3a57c4805887f09542445e94c033fe3d2b98fdd3619b4",
+      "normalized_sha256": "fff933e66b8961897f510bae086a8ca23c30ae967bc541b77230aa90340961de"
+    },
+    "review/r10/logs/r10_miri_wal.log.txt": {
+      "original_sha256": "81e8e8105e0116869a7a700abfbd360b21589ba04a3d5a274828bff4215872ab",
+      "normalized_sha256": "9f5e34ed28a38cfbe713459f3335fb3e1282b13895518a263da6feae07591e11"
+    },
+    "review/r10/logs/r10_miri_probe_simio.log.txt": {
+      "original_sha256": "2310e36221f412a78dfcc14379faff47111cf4bf608e65c93cd14359a177f9ed",
+      "normalized_sha256": "3b89bd01feb8980a507fd8672537c357fe65650ecb767ade96a409522c0a939d"
+    },
+    "review/r10/logs/r10_all.log.txt": {
+      "original_sha256": "a8896ceccafdae0f6a806bc9f42832bc5b02f91bfd4ba9d4df1058bd50dd470c",
+      "normalized_sha256": "58b8d1fa1f8c6f86755322ead299df7cd72f9787f58e9fe0a7ca69782cf3f32e"
+    },
+    "review/r10/logs/r10_miri_probe_lc.log.txt": {
+      "original_sha256": "b9428365117ed2941cdd62b610479fe42ac2ebe42a9d98c0bac8c166f90011f5",
+      "normalized_sha256": "3c7a3a2d041c6e16ed2c6ab572a9d51f62af0cde5c8409d909b6a59d931d660b"
+    },
+    "review/r10/logs/r10p_all.log.txt": {
+      "original_sha256": "6e70c0a5eaaaed75c724fcd28c662cb8147156900e24ed48536436ec9d7e3169",
+      "normalized_sha256": "3de52cd24ebdc35f291e91706b07ce71b0e24181a3c09cfdab2d5623f0308e8f"
+    },
+    "review/r10/logs/r10p_def.log.txt": {
+      "original_sha256": "ed0b61b3796e53544bc776415d13dbbc706d464b204c936ccf5cf43d8017dfad",
+      "normalized_sha256": "cf05e05cdffe4396e42139553151a79800ca780de5b2846a4b7c8b02deaddbfe"
+    },
+    "review/r10/patch/r10-fixes.diff.txt": {
+      "original_sha256": "5401ce35b7aca8240167a4f80d2db4726787065ce27558b76c9606a0a232f343",
+      "normalized_sha256": "8c182ad802ba9ede994c9a57ed077246c2250e2ac185a57ba1daf36bcd66337e"
+    },
+    "review/r10/probes/wal/r10_review.rs.txt": {
+      "original_sha256": "24de05df7f54daf4e5d45ccf5d176e85fccbbf84ef5b12d89b8fb9e070a92b9f",
+      "normalized_sha256": "f9c1ad9e43819452eb44cc6ec0a202a126b3eb348d5ba948da28f813f0b4a9ad"
+    },
+    "review/r10/probes/wal/r10_uring.rs.txt": {
+      "original_sha256": "cc5e46a2f64ec81df08dea9cf5327eb9b745ac1b4c110f5fd85cfb5db7f803ea",
+      "normalized_sha256": "e68ead9bdba9aa17cf5c78248bb2b3e1b860adc79b5be5bce91aaa0f36482b96"
+    },
+    "review/r10/probes/core/r10_review.rs.txt": {
+      "original_sha256": "a07bbc3e4200e3b345e5f0be7fb1d1ea00e60e4552c86987836d5301b6993ed5",
+      "normalized_sha256": "be310aa7c590a62f1cd44777cc105aafe0a2ab8350bc7beea1795ada3d605318"
+    },
+    "review/r10/probes/core/r10_safe_review.rs.txt": {
+      "original_sha256": "dcd91b06c0c245a77af3a2d18bb22155ee9ce9a8ec48266280d6def3b9b179f7",
+      "normalized_sha256": "53cc08fbb03c044195aef58aea503993cfb6745d37f5ed5977d32400e756e38a"
+    },
+    "review/r10/probes/core/r10_uring.rs.txt": {
+      "original_sha256": "01a7dba6fa78aad753ee2bf07a65932035296298c936d3b6ff84a8f1cb5188d9",
+      "normalized_sha256": "313c55d805fefb39d3cc4607b924707d8af0a7e13289b3123d2955bd3c0e2014"
+    },
+    "review/r10/patched-files/tests/r9_regressions.rs.txt": {
+      "original_sha256": "bb90f771209cc9c0d0b7fa4536f8364f67b5500091e57fbe1ef1a94a013a3c3e",
+      "normalized_sha256": "71b463a1d462b933682c7edc5a145de51b761d3223fdb06c27f9bffa6cf6db95"
+    },
+    "review/r10/patched-files/tests/r6_regressions.rs.txt": {
+      "original_sha256": "0202b5f248bc393841b9e331a7900cda929b195d4c7c7aa1f3dc6ec8e4d863be",
+      "normalized_sha256": "f8045fabfa8c7a38d1096535b9885c302a822ff0242cddbbc18417ddf264765d"
+    },
+    "review/r10/patched-files/tests/r10_regressions.rs.txt": {
+      "original_sha256": "edde149f29abb65ca4a44ded2bc713340396f05c7452b0bd9405ecb2b5f4e1b8",
+      "normalized_sha256": "b7d1feb8bdb85c7f3e9fa6c689b08bb16c002dd16bb35060c4995013a3661ce0"
+    },
+    "review/r10/patched-files/tests/r7_regressions.rs.txt": {
+      "original_sha256": "0062a5239190ae6fe91f216f6efb74d2f270cf4ee5d8fd00523df11d5d7319f4",
+      "normalized_sha256": "a8165af9681a361b90191648848379b78e8b9b98a7a2647ac48d6aa832f92b70"
+    },
+    "review/r10/patched-files/ciagomem-core/Cargo.toml.txt": {
+      "original_sha256": "cbba4937804f0f1fa4594db8d13bdd2b7d850de88d0c65be8bcf6937a048c2ee",
+      "normalized_sha256": "415f0d2aa70cf381a8d04689f93eca98343a780814f61c86916a435c8734231f"
+    },
+    "review/r10/patched-files/ciagomem-wal/src/gclog.rs.txt": {
+      "original_sha256": "2e2be5819fe128fd0bdeda1009a64b0d8178d1d2ecec4e82b5114c30869bff5b",
+      "normalized_sha256": "e8f296b353c68bd2437aea684737384b6e0e27f971067da50ff37b051972a85e"
+    },
+    "review/r10/patched-files/ciagomem-wal/tests/r10_recovery.rs.txt": {
+      "original_sha256": "63d1739750b4e21fc84b765cecfd3f4ae4c659feea22f8722ad81000d9516c99",
+      "normalized_sha256": "d31dc626ada4ceaae5f1452acd7275eecf0bfb9fb3c3d4adbf11fba79399fb51"
+    },
+    "review/r10/patched-files/ciagomem-wal/tests/r9_recovery.rs.txt": {
+      "original_sha256": "59088eccde6e1c448345a58d5db71b5603ed673f3d9efe2340a2fd8c6a050a20",
+      "normalized_sha256": "6db09feb6707dddabb66c64396030cb7b15b48528e338782691e5b448dd85508"
+    },
+    "review/r10/patched-files/ciagomem-wal/tests/r5_wal.rs.txt": {
+      "original_sha256": "fe6748bec193a9800e33f98b462a50bd4feef55d9063e8da0b805cc0618b965b",
+      "normalized_sha256": "7dd387185f8e156460eb602698aefe19c4979b332001919ac818dc5e18a4081d"
+    },
+    "review/r10/patched-files/ciagomem-core/src/lifecycle.rs.txt": {
+      "original_sha256": "4408c663c061cc16b55ba45329d31c1613f2e48e9fb8638e9fdf077ff8c6ea3e",
+      "normalized_sha256": "67045c76c99040ef97504338c5dbc9a0fdf3d7f817c9de282d445498f192bb0d"
+    },
+    "review/r10/patched-files/ciagomem-core/src/io.rs.txt": {
+      "original_sha256": "4de875d1280cb1f5e25097fb9c3ad0583dc07b87bd3597f336b8ec3d2ecc9a5c",
+      "normalized_sha256": "65954e945f9238bbab1d1e78b06dd8cfb195164691bcb2997709e4f407ba606b"
+    },
+    "review/r10/patched-files/ciagomem-core/src/uring.rs.txt": {
+      "original_sha256": "c96cbc1e9b1f1c0b512ec1d9349986a006b94a30426c09805e238318aaac986c",
+      "normalized_sha256": "c96cbc1e9b1f1c0b512ec1d9349986a006b94a30426c09805e238318aaac986c"
+    },
+    "review/r10/local/before-core.log.txt": {
+      "original_sha256": "9a957aeff5a79aa61b1b9c7968833a66a373502570885692541b3e417d5e2290",
+      "normalized_sha256": "9a957aeff5a79aa61b1b9c7968833a66a373502570885692541b3e417d5e2290",
+      "origin": "local validation on this revision"
+    },
+    "review/r10/local/before-wal.log.txt": {
+      "original_sha256": "13d785896abe8c8ea03f09551907619cd5f0cd1fbe0b018f5af74f29efe70983",
+      "normalized_sha256": "13d785896abe8c8ea03f09551907619cd5f0cd1fbe0b018f5af74f29efe70983",
+      "origin": "local validation on this revision"
+    },
+    "review/r10/local/safe-probe-compile.log.txt": {
+      "original_sha256": "0a2773fe679c63bd4612463dae2510a0d56ccd32e3d6e9dd60f99974a95312f0",
+      "normalized_sha256": "0a2773fe679c63bd4612463dae2510a0d56ccd32e3d6e9dd60f99974a95312f0",
+      "origin": "local validation on this revision"
+    },
+    "review/r10/local/default.log.txt": {
+      "original_sha256": "a73325da6fce8b7de5e7fd8495b1bafeafa070b2bf557541949d09192fd607e3",
+      "normalized_sha256": "a73325da6fce8b7de5e7fd8495b1bafeafa070b2bf557541949d09192fd607e3",
+      "origin": "local validation on this revision"
+    },
+    "review/r10/local/all.log.txt": {
+      "original_sha256": "41cd0ccb0a9856d94d6d899e970407e6806e3a2386e3d89b3bc88cb4d24d8ee9",
+      "normalized_sha256": "41cd0ccb0a9856d94d6d899e970407e6806e3a2386e3d89b3bc88cb4d24d8ee9",
+      "origin": "local validation on this revision"
+    },
+    "review/r10/local/core-visible.log.txt": {
+      "original_sha256": "4862e9d02a78933aebe73b9577ddb8d646d520c127de4c523d35c5d8ff3eebd1",
+      "normalized_sha256": "4862e9d02a78933aebe73b9577ddb8d646d520c127de4c523d35c5d8ff3eebd1",
+      "origin": "local validation on this revision"
+    },
+    "review/r10/local/wal-visible.log.txt": {
+      "original_sha256": "27c1a9debe61851818a10a39643c0a5e4e8828fc53a83ae242185403e8718dfa",
+      "normalized_sha256": "27c1a9debe61851818a10a39643c0a5e4e8828fc53a83ae242185403e8718dfa",
+      "origin": "local validation on this revision"
+    },
+    "review/r10/local/layout.log.txt": {
+      "original_sha256": "c57f034f2bf3ac5871398f1d2760dd9055a65406adf87dfd6001e80c8987abe6",
+      "normalized_sha256": "c57f034f2bf3ac5871398f1d2760dd9055a65406adf87dfd6001e80c8987abe6",
+      "origin": "local validation on this revision"
+    },
+    "review/r10/local/clippy.log.txt": {
+      "original_sha256": "973a204230f8eb1d389cc4966e482e5fb6887ad281770f280b3f8016662eec28",
+      "normalized_sha256": "973a204230f8eb1d389cc4966e482e5fb6887ad281770f280b3f8016662eec28",
+      "origin": "local validation on this revision"
+    },
+    "review/r10/local/mesh.log.txt": {
+      "original_sha256": "e2e437c2709f1929d3296bf94923744c343c3e16326981a4103f069314799af3",
+      "normalized_sha256": "e2e437c2709f1929d3296bf94923744c343c3e16326981a4103f069314799af3",
+      "origin": "local validation on this revision"
+    },
+    "review/r10/local/quickstart.log.txt": {
+      "original_sha256": "f562d938733c375cd68a0309641298fdb2bae290dfc384b8b1e81828db0599dd",
+      "normalized_sha256": "f562d938733c375cd68a0309641298fdb2bae290dfc384b8b1e81828db0599dd",
+      "origin": "local validation on this revision"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "ciagomem-core/src/slot.rs": "c729121a5fd723ef83e4735bc52fb11bde3c15d2d5dc71df14a04b7956f8a56c",
+  "ciagomem-core/src/lifecycle.rs": "67045c76c99040ef97504338c5dbc9a0fdf3d7f817c9de282d445498f192bb0d",
+  "ciagomem-core/src/io.rs": "65954e945f9238bbab1d1e78b06dd8cfb195164691bcb2997709e4f407ba606b",
+  "ciagomem-core/src/uring.rs": "c96cbc1e9b1f1c0b512ec1d9349986a006b94a30426c09805e238318aaac986c",
+  "ciagomem-wal/src/gclog.rs": "e8f296b353c68bd2437aea684737384b6e0e27f971067da50ff37b051972a85e",
+  ".github/workflows/rust.yml": "4315edb715499408c924f5f55169b2743721ee4033a146acc90e97a96af9f08c",
+  "Cargo.toml": "5501b92f76bf69c56c8edf09fb4bbd93afe62788e6aeb2460bf49d63c44eab2e",
+  "Cargo.lock": "61da93f55be661d0178a27ec755722b56978ac094ad7cf7449e0c827cd051831",
+  "MASTER_SPECIFICATION.md": "4f64e99b1b1561f865cf3857e7385e12e4d8107c226111fe1056dcbde9ae7158"
+}

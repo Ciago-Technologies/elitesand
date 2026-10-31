@@ -120,6 +120,12 @@ pub enum Outcome {
     Short(u32),
 }
 
+/// ```compile_fail
+/// use ciagomem_core::io::{SimIo, SimOp, SimKind};
+/// let mut io = SimIo::new(1, 4096);
+/// io.inflight.push(SimOp { user_data: 0, file: 0, kind: SimKind::Read,
+///     buf: core::ptr::null_mut(), len: 1, offset: 0 }); // private: R10-2
+/// ```
 /// In-memory device: a byte vector per file, a queue of in-flight ops, an optional SQ
 /// capacity. Data moves at *completion* time, which models DMA happening any time
 /// between submission and CQE: if the engine touched a buffer before its CQE, the
@@ -127,7 +133,9 @@ pub enum Outcome {
 #[derive(Debug)]
 pub struct SimIo {
     pub files: Vec<Vec<u8>>,
-    pub inflight: Vec<SimOp>,
+    /// Private (R10-2): `complete`/`power_loss` dereference these pointers, so only the
+    /// unsafe `IoBackend` submissions may create entries.
+    inflight: Vec<SimOp>,
     pub sq_capacity: usize,
     pub submitted: u64,
     pub dsync_writes: u64,
@@ -183,6 +191,17 @@ impl SimIo {
                 };
             }
         }
+    }
+
+    /// Queued operations, oldest first (read-only).
+    pub fn inflight(&self) -> &[SimOp] {
+        &self.inflight
+    }
+
+    /// The simulated ring is destroyed: every queued op is dropped without touching its
+    /// buffer and no CQE will be delivered for it.
+    pub fn abandon_all(&mut self) {
+        self.inflight.clear();
     }
 
     pub fn find(&self, pred: impl Fn(&SimOp) -> bool) -> Option<usize> {

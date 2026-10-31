@@ -11,7 +11,7 @@ Ciagomem stores application data as tenant-scoped actors and provides an embedde
 You need **Linux**, **Rust 1.89 or newer**, and **Cargo**. Python 3 is needed only for the workspace validation script. Dependencies are vendored, so build and run commands work offline after checkout and toolchain installation.
 
 ```sh
-git clone https://github.com/Ciago-Technologies/CiagoMem.git
+git clone https://github.com/Ciago-Technologies/CiagoMem.git Ciagomem
 cd Ciagomem
 cargo run --release --offline -p ciagomem-engine --example quickstart
 ```
@@ -108,7 +108,7 @@ The `legacy-audit` feature is for historical vulnerability reproductions. Keep i
 - [Actor-native engine guide](docs/ACTOR_NATIVE_QUERY_ENGINE.md)
 - [Technical whitepaper and engineering specification](MASTER_SPECIFICATION.md)
 - [Verification results](docs/VERIFICATION.md)
-- [Engineering status and open integration requirements](docs/R9_REMEDIATION.md)
+- [Engineering status and open integration requirements](docs/R11_REMEDIATION.md)
 
 ## License
 

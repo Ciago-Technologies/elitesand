@@ -1,0 +1,60 @@
+//! R10 review probes (lifecycle). They PASS on the R9-fixed upload when the defect is present.
+use ciagomem_core::io::{Outcome, SimIo, UserData};
+use ciagomem_core::lifecycle::*;
+use ciagomem_core::slot::RouteTable;
+use ciagomem_core::*;
+mod support;
+fn lc_cfg() -> LifecycleConfig {
+    LifecycleConfig { low_free: 0, high_free: 1, max_flush_inflight: 1, max_retries: 2, epoch: 2 }
+}
+/// R10-1: a backend that queues a checkpoint write and then unwinds leaves the slot
+/// `Resident` (mutable) with a pending device op and an uncommitted ticket.
+#[test]
+fn defect_r10_1_checkpoint_unwind_leaves_slot_mutable_and_reuses_ticket() {
+    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
+    let route = RouteTable::new(4);
+    let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..2, lc_cfg());
+    let mut ev = Vec::new();
+    let h = lc.admit_new(1, 123, ExtentLoc::new(0, 2, false), 5, 1, &mut ev).unwrap();
+    let mut disk = support::PanicAfterSubmit(SimIo::new(1, 8 * 4096));
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lc.checkpoint(h, 5, &mut disk);
+    }));
+    assert!(caught.is_err());
+    // The device holds a write of this payload, yet the slot is not Flushing.
+    assert_eq!(disk.0.inflight.len(), 1);
+    assert_eq!(arena.io_pending(), 1);
+    assert!(matches!(lc.state(h.index()), State::Resident(_)), "slot is not frozen");
+    assert_eq!(lc.flushing(), 0);
+    assert!(!arena.core(0).is_fenced(), "no fence: the owner keeps running");
+    // Safe code can now write the payload while the device op is queued (violates the
+    // `write_at` contract: no CPU writes until the CQE).
+    assert!(lc.mutate(h, 6, |w| w.set(20, 0xDEAD_BEEF)).is_ok());
+    // A second checkpoint reuses the uncommitted ticket.
+    let mut io = disk.0;
+    assert!(lc.checkpoint(h, 6, &mut io));
+    assert_eq!(io.inflight.len(), 2);
+    let (a, b) = (io.inflight[0].user_data, io.inflight[1].user_data);
+    assert_eq!(a, b, "orphan and new write carry the same token");
+    assert_eq!(UserData::decode(a).unwrap().op, io::Op::Checkpoint);
+    // The orphan completes first and is accepted as the new checkpoint's completion
+    // while the new write is still in flight.
+    let (ud, res) = io.complete(0, Outcome::Ok);
+    ev.clear();
+    // SAFETY: a genuine simulator completion (of the orphaned request).
+    unsafe { lc.on_cqe(ud, res, &mut io, &mut ev) };
+    assert!(ev.iter().any(|e| matches!(e, Event::Checkpointed { lsn: 6, .. })),
+        "Checkpointed(6) reported while the lsn-6 write is still in flight: {ev:?}");
+    assert_eq!(io.inflight.len(), 1);
+    // The real completion of the new write is then discarded as stale; the pending
+    // count never returns to zero although the device finished everything.
+    let (ud, res) = io.complete(0, Outcome::Ok);
+    // SAFETY: a genuine simulator completion.
+    unsafe { lc.on_cqe(ud, res, &mut io, &mut ev) };
+    assert!(io.inflight.is_empty());
+    assert_eq!(lc.stats.stale_cqes, 1);
+    assert!(!lc.quiescent());
+    assert_eq!(arena.io_pending(), 1);
+    drop(lc);
+    assert!(arena.core(0).is_fenced(), "teardown fences although no I/O is outstanding");
+}

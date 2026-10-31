@@ -68,6 +68,25 @@ for name in cleanup["removed_archives"]+cleanup["removed_directories"]:
 r9=(root / "docs/R9_REMEDIATION.md").read_text()
 assert {"R9-1","R9-2"} <= set(re.findall(r"R9-\d+",r9)), "R9 finding lacks disposition"
 assert all(f"pub(crate) fn {name}" in slot for name in ["publish_durable","bind_log","unbind_log"]), "raw publication must stay crate-private"
+r10 = (root / "docs/R10_REMEDIATION.md").read_text()
+assert {f"R10-{i}" for i in range(1, 5)} <= set(re.findall(r"R10-\d+", r10))
+evidence = json.loads((root / "docs/r10-evidence.json").read_text())
+for name, digests in evidence["files"].items():
+    assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digests["normalized_sha256"], name
+r11 = (root / "docs/R11_REMEDIATION.md").read_text()
+assert {f"R11-{i}" for i in range(1, 5)} <= set(re.findall(r"R11-\d+", r11))
+assert "pub(crate) fn header(" in slot and "pub(crate) fn payload(" in slot
+r11_evidence = json.loads((root / "docs/r11-evidence.json").read_text())
+for name, digest in r11_evidence["files"].items():
+    assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest, name
+workflow = (root / ".github/workflows/rust.yml").read_text()
+for command in ["cargo fmt --all -- --check", "python3 scripts/validate_workspace.py",
+                "cargo test --release --offline --workspace -- --nocapture",
+                "cargo test --release --offline --workspace --all-features -- --nocapture",
+                "cargo clippy --offline --workspace --all-targets --all-features",
+                "python3 scripts/check_mesh_progress.py"]:
+    assert command in workflow, ("missing CI gate", command)
+subprocess.run(["python3", str(root / "scripts/validate_spec_contract.py")], check=True)
 print("Validated crate DAG, parser/crypto boundaries, opt-in legacy API, source listing, links and vendor inventory.")
 policy = json.loads((root / "policy.json").read_text())
 for path in root.rglob("*"):

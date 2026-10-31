@@ -42,5 +42,13 @@ name = "r8_regressions"
 path = "../tests/r8_regressions.rs"
 
 [[test]]
+name = "r10_regressions"
+path = "../tests/r10_regressions.rs"
+
+[[test]]
 name = "r9_regressions"
 path = "../tests/r9_regressions.rs"
+
+[[test]]
+name = "r11_regressions"
+path = "../tests/r11_regressions.rs"

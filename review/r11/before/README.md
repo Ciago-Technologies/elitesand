@@ -1,0 +1,1 @@
+Historical R10 evidence before this correction. The three probes pass when bugs exist. Their old pin/header APIs intentionally no longer compile against R11. Current acceptance tests are in tests/r11_regressions.rs and the lifecycle unit/compile-fail tests.

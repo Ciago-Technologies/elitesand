@@ -12,7 +12,9 @@
     "slae-p0 (P0 fix crate).zip",
     "slae-patterns.zip",
     "ciagomem-r8-fixed-review.zip",
-    "New File/ciagomem-r8-fix-patch.zip"
+    "New File/ciagomem-r8-fix-patch.zip",
+    "ciagomem-r9-fixed-review.zip",
+    "New File/ciagomem-r9-fix-patch.zip"
   ],
   "removed_directories": [
     "New File/Old",
@@ -58,7 +60,16 @@
   ],
   "removed_archive_sha256": {
     "ciagomem-r8-fixed-review.zip": "aba201e0ba92555a4151d668414121d880a38ea3fe6f0abd1583ee1d3ef4ce31",
-    "New File/ciagomem-r8-fix-patch.zip": "3434d331763fa3d6961226439a1ba9dc269a442ab23ee2ef6a46ee932415849b"
+    "New File/ciagomem-r8-fix-patch.zip": "3434d331763fa3d6961226439a1ba9dc269a442ab23ee2ef6a46ee932415849b",
+    "ciagomem-r9-fixed-review.zip": "81b6c337e5730adf625ffa08fb3b96de65542eb2bdcdf365c1c43e3c42e34248",
+    "New File/ciagomem-r9-fix-patch.zip": "d45f4b4307164f7cd8a76d6b9d61e44eda019ea412f5358f7f6eab404eedec66"
   },
-  "naming_normalization": "Current source hashes cover naming-normalized copies; original review hashes and Git revision are in naming-migration.json."
+  "naming_normalization": "Current source hashes cover naming-normalized copies; original review hashes and Git revision are in naming-migration.json.",
+  "removed_file_sha256": {
+    "New File/CiagoMem-SLAE R8 Remediation Verification (R9).md": "278dd7d189b049de3d4fc561bea3c1d6244fcd96741db6320ebcf2c9c6d65cf9"
+  },
+  "cleanup_note": "R9 input contents verified against naming-normalized review/r9 copies before deletion. Regenerable target build cache removed; current R10 input originals and unrelated files retained.",
+  "removed_build_caches": [
+    "ciagomem-slae/target"
+  ]
 }

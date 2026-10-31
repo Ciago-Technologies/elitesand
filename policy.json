@@ -1,26 +1,32 @@
 {
-  "planning": "compact",
+  "planning": "deep",
   "context_depth": "dependency",
   "verification_depth": "impact",
   "delegation": "none",
   "reason_codes": [
-    "canonical-project-naming",
-    "user-facing-readme",
-    "runnable-onboarding-example"
+    "self-audit-buffer-ownership",
+    "checked-consumable-pins",
+    "release-ci-gates"
   ],
   "allowed_write_scope": [
     "ciagomem-slae/** (excluding vendor and .git)",
-    "master specification and generated review bundle"
+    "ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md",
+    "ciagomem-r10-fixed-review.zip",
+    "ciagomem-r9-fixed-review.zip",
+    "New File/ciagomem-r9-fix-patch.zip",
+    "New File/CiagoMem-SLAE R8 Remediation Verification (R9).md",
+    "Ciagomem-Self-Audit-R10.md",
+    "ciagomem-r11-fixed-review.zip"
   ],
   "acceptance": [
-    "README provides clone/build/run instructions",
-    "quickstart executes a real insert/update/read with assertions",
-    "public feature and persistence claims match implementation",
-    "formatting and documentation validator pass",
-    "no obsolete project identifiers in owned paths or content except explicit prohibition rules",
-    "default and all-feature release suites pass after renaming",
-    "quickstart and workspace validator pass",
-    "stage, commit and push without rewriting remote history"
+    "public arena access cannot bypass lifecycle or DMA ownership",
+    "overlapping lifecycle claims rejected; pending readers prevent DMA submission",
+    "pins cannot wrap; releases consume generation-bound lifecycle-specific tokens",
+    "default and all-feature release suites and compile-fail regressions pass",
+    "format, Clippy, mesh progress and workspace/spec validators run with limitations reported",
+    "update both specifications and remediation documentation without changing storage layouts",
+    "CI runs release/all-feature tests, formatting, Clippy and specification checks",
+    "fresh review ZIP includes current source, both specs and verification evidence"
   ],
   "project_invariants": [
     "five-crate acyclic workspace",

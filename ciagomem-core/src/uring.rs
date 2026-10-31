@@ -11,7 +11,7 @@
 //!   target core's ring: a parked reactor blocked in `submit_and_wait` wakes with no
 //!   eventfd and no syscall on its side.
 
-use crate::io::{IoBackend, SqFull};
+use crate::io::{IoBackend, Op, SqFull, UserData};
 use io_uring::{IoUring, opcode, squeue, types};
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
@@ -145,8 +145,16 @@ impl UringIo {
         n
     }
 
-    /// Post a CQE with `user_data` into another core's ring (doorbell wakeup).
-    pub fn post_wake(&mut self, target_ring_fd: RawFd, user_data: u64) -> Result<(), SqFull> {
+    /// Post a wake CQE into another core's ring (doorbell wakeup). The posted
+    /// `user_data` always decodes as `Op::Wake` (R10-4): safe code cannot inject a
+    /// LogWrite/Checkpoint/Load token that a reactor would route to an `on_cqe` handler.
+    pub fn post_wake(&mut self, target_ring_fd: RawFd, wake: u32) -> Result<(), SqFull> {
+        let user_data = UserData {
+            op: Op::Wake,
+            object: 0,
+            ticket: wake,
+        }
+        .encode();
         let e = opcode::MsgRingData::new(types::Fd(target_ring_fd), 0, user_data, None)
             .build()
             .flags(squeue::Flags::SKIP_SUCCESS)

@@ -57,7 +57,7 @@ fn r9_1_completed_io_returns_arena_to_zero_pending() {
     )
     .unwrap();
     let mut events = Vec::new();
-    while !disk.inflight.is_empty() {
+    while !disk.inflight().is_empty() {
         let (ud, res) = disk.complete(0, Outcome::Ok);
         /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
         unsafe { lc.on_cqe(ud, res, &mut disk, &mut events) };
@@ -86,7 +86,7 @@ fn r9_1_released_lifecycle_neither_fences_nor_leaks() {
         &mut disk,
     )
     .unwrap();
-    disk.inflight.clear(); // the device abandons the op (ring destroyed)
+    disk.abandon_all(); // the device abandons the op (ring destroyed)
     // SAFETY: no simulated op references the arena any more.
     unsafe { lc.release_device_references() };
     drop(lc);

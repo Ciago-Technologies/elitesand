@@ -1,0 +1,135 @@
+//! R10 acceptance: a fenced log becomes reclaimable once its CQEs are reaped, and the log
+//! accepts only LogWrite tokens.
+use ciagomem_core::CoreControl;
+use ciagomem_core::io::{Op, Outcome, SimIo, UserData};
+use ciagomem_wal::envelope::KIND_DATA;
+use ciagomem_wal::gclog::*;
+fn cfg() -> LogConfig {
+    LogConfig {
+        block: 4096,
+        buf_bytes: 16384,
+        buffers: 4,
+        max_inflight: 3,
+        min_batch_bytes: 8192,
+        max_delay_ns: 5000,
+        capacity: 65536,
+        file: 0,
+        tail: TailMode::Pad,
+        max_retries: 3,
+    }
+}
+fn io() -> SimIo {
+    SimIo::new(1, (cfg().data_offset() + cfg().capacity) as usize)
+}
+fn open(controls: &std::sync::Arc<[CoreControl]>) -> GroupCommitLog {
+    let (mut log, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    log.superblock_durable(&sb);
+    log
+}
+#[test]
+fn r10_3_externally_fenced_log_is_quiescent_after_full_reap() {
+    let controls = CoreControl::shared(1);
+    let mut d = io();
+    let mut log = open(&controls);
+    log.append(1, KIND_DATA, b"x", Some(1), 0, &mut d).unwrap();
+    log.poll(1_000_000, true, &mut d);
+    controls[0].fence();
+    let (ud, res) = d.complete(0, Outcome::Ok);
+    let (mut acks, mut ind) = (Vec::new(), Vec::new());
+    // SAFETY: a genuine simulator completion.
+    assert!(unsafe { log.on_cqe(ud, res, &mut d, &mut acks, &mut ind) }.is_err());
+    assert!(
+        acks.is_empty() && controls[0].durable() == 0,
+        "nothing published"
+    );
+    assert!(log.quiescent());
+    log.poll(2_000_000, true, &mut d);
+    assert!(d.inflight().is_empty(), "no resubmission after fence");
+    drop(log); // buffers are freed normally
+    assert!(!controls[0].log_bound());
+}
+#[test]
+fn r10_3_retry_exhaustion_leaves_the_failed_buffer_reclaimable() {
+    let controls = CoreControl::shared(1);
+    let mut d = io();
+    let mut log = open(&controls);
+    log.append(1, KIND_DATA, b"x", Some(1), 0, &mut d).unwrap();
+    log.poll(1_000_000, true, &mut d);
+    let (mut acks, mut ind) = (Vec::new(), Vec::new());
+    let mut fenced = false;
+    while !d.inflight().is_empty() {
+        let (ud, res) = d.complete(0, Outcome::Err(libc::EIO));
+        // SAFETY: a genuine simulator completion.
+        fenced |= unsafe { log.on_cqe(ud, res, &mut d, &mut acks, &mut ind) }.is_err();
+    }
+    assert!(fenced && controls[0].is_fenced());
+    assert!(
+        log.quiescent(),
+        "the error CQE ended the device's use of the buffer"
+    );
+}
+#[test]
+fn r10_4_log_rejects_non_logwrite_token_with_matching_bits() {
+    let controls = CoreControl::shared(1);
+    let mut d = io();
+    let mut log = open(&controls);
+    log.append(1, KIND_DATA, b"x", Some(1), 0, &mut d).unwrap();
+    log.poll(1_000_000, true, &mut d);
+    let real = UserData::decode(d.inflight()[0].user_data).unwrap();
+    let other = UserData {
+        op: Op::Wake,
+        ..real
+    }
+    .encode();
+    let (mut acks, mut ind) = (Vec::new(), Vec::new());
+    // SAFETY: the token's op differs, so it cannot match a pending LogWrite.
+    unsafe { log.on_cqe(other, 0, &mut d, &mut acks, &mut ind) }.unwrap();
+    assert_eq!(
+        d.inflight().len(),
+        1,
+        "no resubmission of the in-flight buffer"
+    );
+    assert_eq!(log.stats.stale_cqes, 1);
+    let (ud, res) = d.complete(0, Outcome::Ok);
+    // SAFETY: a genuine simulator completion.
+    unsafe { log.on_cqe(ud, res, &mut d, &mut acks, &mut ind) }.unwrap();
+    assert_eq!(acks, vec![1]);
+}
+#[cfg(target_os = "linux")]
+#[test]
+fn r10_uring_log_drop_before_kernel_submission_writes_from_retained_buffer() {
+    use ciagomem_core::uring::UringIo;
+    use std::os::fd::AsRawFd;
+    let Ok(mut ring) = UringIo::new(8) else {
+        eprintln!("SKIPPED: io_uring unavailable");
+        return;
+    };
+    let p = std::env::temp_dir().join(format!("r10w-{}", std::process::id()));
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&p)
+        .unwrap();
+    f.set_len(cfg().data_offset() + cfg().capacity).unwrap();
+    let _ = std::fs::remove_file(&p);
+    ring.register_files(&[f.as_raw_fd()]).unwrap();
+    let controls = CoreControl::shared(1);
+    let mut log = open(&controls);
+    log.append(1, KIND_DATA, b"through-the-kernel", Some(7), 0, &mut ring)
+        .unwrap();
+    log.poll(1_000_000, true, &mut ring);
+    assert!(!log.quiescent());
+    drop(log);
+    assert!(controls[0].is_fenced() && !controls[0].log_bound());
+    ring.submit_and_wait(1).unwrap();
+    let mut got = Vec::new();
+    ring.reap(|ud, res| got.push((ud, res)));
+    assert_eq!(got.len(), 1);
+    assert!(
+        got[0].1 > 0,
+        "kernel write completed from retained buffer: {got:?}"
+    );
+    assert_eq!(controls[0].durable(), 0);
+}

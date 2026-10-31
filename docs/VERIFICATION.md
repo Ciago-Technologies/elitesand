@@ -1,3 +1,47 @@
+# Verification of the R11 self-audit remediation
+
+Local Linux x86_64 checks on 31 October 2026:
+
+| Check | Observed result |
+| --- | --- |
+| Release workspace, offline | **165 default / 193 all-feature tests passed**, zero failures |
+| New acceptance coverage | Eight R11 integration tests, one stale-generation unit test, five new compile-fail API tests |
+| Real-ring visibility | R10 core/WAL tests rerun with `--nocapture`; three bodies explicitly skipped because io_uring is unavailable |
+| Formatting and diff whitespace | Passed |
+| Clippy, all targets and all features | Completed with warnings; not a warning-free gate |
+| Mesh progress | 1,000 cached-tail and 25 concurrent FIFO bounded runs passed |
+| Workspace/specification validator | Passed, including sections14–16 mirror comparison, native/wire layouts and required CI commands |
+| Extracted review package | **193 all-feature tests passed offline with an empty Cargo home**; extracted workspace/spec validator passed |
+| Hosted CI | Workflow updated; GitHub Actions was not executed locally |
+
+The pass totals include successful harness returns from the three skipped hardware bodies. Compile-fail tests require inaccessible raw atomics, non-escaping read/write views and single-use pin tokens to be rejected by Rust. Existing R9/R10 submission unwind, teardown and SQ rejection checks still pass.
+
+See [R11_REMEDIATION.md](R11_REMEDIATION.md) for API changes and costs. Raw local logs and the original pre-fix probe evidence are under `review/r11/`. Earlier sections below are historical results. No benchmarks were rerun: the access guards add per-slot memory and read-path work. Miri, Loom/Shuttle, fuzzing, ARM execution, real NVMe/power cuts and distributed operation remain unverified.
+
+---
+
+# Verification of the R10 remediation revision
+
+Local Linux x86_64 checks on 31 October 2026:
+
+| Check | Observed result |
+| --- | --- |
+| Pre-fix logical probes | Checkpoint-unwind and fenced-log non-quiescence defects reproduced on the current canonical-named tree |
+| Release tests, offline | 151 default / 179 all-features harness successes, no failures; see real-ring qualification below |
+| R10 tests with nocapture | Core 5 and WAL 4 harness successes; **three tests explicitly skipped real io_uring bodies** because io_uring is unavailable |
+| Formatting | Passed after patch normalization |
+| Safe exploit probe compile check | Original safe probe rejected: private queue and u64 storage token cannot be passed as typed u32 wake |
+| Clippy, all workspace targets offline | Completed with warnings; no warning-free gate claimed |
+| Mesh progress | 1,000 cached-tail + 25 concurrent-grid bounded runs passed |
+| Layout example | SlotHeader128/alignment64, actual offsets asserted; ExtentImage descriptor64/alignment16 on this host |
+| Specification validators | Target layouts, arithmetic, mirrors and current-example equality checked; no runtime implementation proof implied |
+
+Only stable x86_64 Rust is installed. Local Miri, loom/Shuttle, ARM execution, fuzz campaigns, real NVMe/O_DIRECT, power cuts, distributed failure tests and warm restart were not run. The incoming report attributes Miri/aarch64 compile-only and buffered-file real-ring results to its own R10 patch/host; those are preserved evidence, not local results. Full application/cluster durability and million-active-user claims remain unqualified.
+
+See [R10_REMEDIATION.md](R10_REMEDIATION.md) for corrections and boundaries. The prior R9 measurements below remain historical.
+
+---
+
 # Verification of the R9 remediation revision
 
 Executed locally on 31 October 2026 with rustc 1.99.1 stable on Linux x86_64. These are component/reference checks, not production qualification.

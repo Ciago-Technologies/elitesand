@@ -38,11 +38,11 @@ fn r5_w1_fence_is_indeterminate_and_late_completion_cannot_publish() {
     log.append(1, KIND_DATA, b"b", Some(11), 0, &mut io)
         .unwrap();
     log.poll(1_000_000, false, &mut io);
-    assert_eq!(io.inflight.len(), 2, "two batches in flight");
+    assert_eq!(io.inflight().len(), 2, "two batches in flight");
     let (mut acks, mut failed) = (Vec::new(), Vec::new());
     let mut fenced = false;
     for _ in 0..=cfg.max_retries {
-        let i = io.inflight.len() - 1; // batch B (retries are resubmitted at the end)
+        let i = io.inflight().len() - 1; // batch B (retries are resubmitted at the end)
         let (ud, res) = io.complete(i, Outcome::Err(libc::EIO));
         fenced |= /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */ unsafe {log
             .on_cqe(ud, res, &mut io, &mut acks, &mut failed)}

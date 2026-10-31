@@ -1,0 +1,31 @@
+{
+  "revision": "R11 self-audit remediation",
+  "default_passed": 165,
+  "all_features_passed": 193,
+  "hardware_bodies_skipped": 3,
+  "files": {
+    "ciagomem-core/src/slot.rs": "8cc7b48fa2cddfc26943254d4d011d7eab77745ae40310387c5ef5265c798279",
+    "ciagomem-core/src/lifecycle.rs": "38dcee96424a427a968e43a832d7cff19ba21289d09b66d7fbf44a75a5b4917f",
+    "tests/r11_regressions.rs": "936179da61448620b4accbe5eecbc222fdfe9bcbdb8bfcf0185ad53e090c622e",
+    "tests/v30_regressions.rs": "5456564458a6fae2d330ecd6ecd0b2c41ab108964c8690366e16e2cee6753434",
+    ".github/workflows/rust.yml": "5ba69059c87a552b7bde2f5cc8f058a766d4bcd30ca5ce86ed282a8e94b685ed",
+    "scripts/validate_workspace.py": "c3156233c23e8025713b6aa5177de5acc423b5049551592c1047ebe9372dac84",
+    "scripts/validate_spec_contract.py": "b4487a216cc6d827237f2fb7b89a1c29a663910752cfeef7ade2135263e49638",
+    "review/r11/before/README.md": "48a2638cfcd6b912927aa3a18d2b302113aeac6ee0d333b3442f0629e0b012fa",
+    "review/r11/before/audit.md": "12f5cab50bfaef68a7be9d0c470e7f2366833db1fa95d79ce78fba9e8668d62b",
+    "review/r11/before/probes.log.txt": "b10ab47a643c9adfd50f35399b8e9529a040a67ff94680af06fa6b7e71786370",
+    "review/r11/before/probes.rs.txt": "9577e9069e77935693ff0e58815fbb0b432161fbda49a9ad74d7967bbd746f24",
+    "review/r11/before/source-sha256.json": "83c54d141065d9d3e3ea7295269f698617723f5ed343181b9826dfa7372448f1",
+    "review/r11/local/all.log.txt": "6852ebc3fbf5c7fa691be600f6ca115f1b1365824b36f167cca54f1895e07445",
+    "review/r11/local/clippy.log.txt": "615b7f3b9d8fb8da52f4cfc304dfa26734f1db94633ab72928f5a69a611c4eb7",
+    "review/r11/local/core-visible.log.txt": "503a3642a2331c8de039c898b9aaa04721b5a525f4ceccaff974eaed13f5ffa5",
+    "review/r11/local/default.log.txt": "10df7ef3f96974aa6bd20c7a340f8ebd3bdf2435b7d2346ffbcb634c200891ba",
+    "review/r11/local/format.log.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "review/r11/local/mesh.log.txt": "e2e437c2709f1929d3296bf94923744c343c3e16326981a4103f069314799af3",
+    "review/r11/local/validation.log.txt": "4fc794f2fe044cfbda3439c4d49e18d1c2fa74059f7d21d55c657a54a8b437be",
+    "review/r11/local/wal-visible.log.txt": "98d629ff6b5e59ab8016ad1d0efef58d58b21b897b328733222920b37422c20c",
+    "review/r11/local/extracted-tests.log.txt": "924ab803f9f6700bbf3ede1bd3073300639845b747e4130487a29bbd1146ab12",
+    "review/r11/local/extracted-validation.log.txt": "4fc794f2fe044cfbda3439c4d49e18d1c2fa74059f7d21d55c657a54a8b437be"
+  },
+  "extracted_all_features_passed": 193
+}

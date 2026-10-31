@@ -40,6 +40,26 @@ use crate::envelope::{ExtentImage, ImageStatus};
 use crate::io::{IoBackend, Op, SqFull, UserData};
 use crate::slot::{ExtentLoc, IMAGE_HEADER_WORDS, RouteTable, SlotArena, SlotHandle, TenantWord};
 use core::ops::Range;
+use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+static NEXT_PIN_OWNER: AtomicU64 = AtomicU64::new(1);
+
+/// One successful pin acquisition. Not clonable or constructible by callers.
+/// Release only after the egress notification CQE; dropping it retains the pin.
+/// ```compile_fail
+/// use ciagomem_core::lifecycle::{PinToken, SlotLifecycle};
+/// fn duplicate(lc: &mut SlotLifecycle<'_, 512>, token: PinToken) {
+///     let mut events = Vec::new();
+///     lc.unpin(token, &mut events).unwrap();
+///     lc.unpin(token, &mut events).unwrap();
+/// }
+/// ```
+#[derive(Debug)]
+#[must_use = "retain until the notification CQE, then consume with unpin"]
+pub struct PinToken {
+    owner: u64,
+    handle: SlotHandle,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Residency {
@@ -249,6 +269,7 @@ pub struct SlotLifecycle<'a, const W: usize> {
     flushing: u32,
     cfg: LifecycleConfig,
     pub stats: Stats,
+    pin_owner: u64,
 }
 
 impl<const W: usize> core::fmt::Debug for SlotLifecycle<'_, W> {
@@ -264,11 +285,16 @@ impl<const W: usize> core::fmt::Debug for SlotLifecycle<'_, W> {
 const EXTENT_BYTES_MAX: usize = u32::MAX as usize;
 
 impl<const W: usize> Drop for SlotLifecycle<'_, W> {
-    /// R9-1: dropping with device I/O outstanding fences the core so a late DMA cannot be
-    /// served as valid data; the arena keeps its memory alive while `io_pending > 0`.
+    /// Abandoned I/O or egress pins fence the core and retain their range and backing.
+    /// A dropped owner cannot prove that a late device reference has gone away.
     fn drop(&mut self) {
-        if self.meta.iter().any(|m| m.io_inflight > 0) {
+        if self.meta.iter().any(|m| m.io_inflight > 0 || m.pins > 0) {
             self.arena.core(self.core).fence();
+        }
+        for (i, m) in self.meta.iter().enumerate() {
+            if m.io_inflight == 0 && m.pins == 0 {
+                self.arena.release_claim(self.range.start + i as u32);
+            }
         }
     }
 }
@@ -287,9 +313,10 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
     /// No submitted load or checkpoint may still read or write its payload.
     pub unsafe fn release_device_references(&mut self) {
         for i in 0..self.meta.len() {
+            let idx = self.range.start + i as u32;
             while self.meta[i].io_inflight > 0 {
                 self.meta[i].io_inflight -= 1;
-                self.arena.io_completed();
+                self.arena.io_completed(idx);
             }
         }
     }
@@ -305,6 +332,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
             range.end <= arena.len() && !range.is_empty() && Self::EXTENT_BYTES <= EXTENT_BYTES_MAX
         );
         assert!(cfg.low_free <= cfg.high_free && cfg.max_flush_inflight >= 1);
+        assert!((core as usize) < arena.controls().len());
         let n = range.len();
         let meta = vec![
             Meta {
@@ -326,6 +354,13 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         ]
         .into_boxed_slice();
         let free = range.clone().rev().collect();
+        let pin_owner = NEXT_PIN_OWNER
+            .fetch_update(Relaxed, Relaxed, |v| v.checked_add(1))
+            .expect("pin owner identity space exhausted");
+        assert!(
+            arena.claim_range(range.clone()),
+            "slot range already claimed or in use"
+        );
         SlotLifecycle {
             arena,
             route,
@@ -337,6 +372,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
             flushing: 0,
             cfg,
             stats: Stats::default(),
+            pin_owner,
         }
     }
 
@@ -419,7 +455,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         let unpublished = self.route.unpublish(r.tenant, r.handle);
         debug_assert!(unpublished, "route pointed elsewhere");
         self.arena
-            .revoke(r.handle)
+            .revoke_owned(r.handle)
             .expect("owner core is the only writer");
         self.m(idx).state = State::Quiescing { tenant: r.tenant };
         self.stats.evictions += 1;
@@ -441,7 +477,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
     ) -> Option<SlotHandle> {
         match self
             .arena
-            .install(
+            .install_owned(
                 idx,
                 self.tw(tenant, layout_version),
                 self.meta[(idx - self.range.start) as usize].incarnation,
@@ -478,7 +514,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
             })?;
             self.m(idx).incarnation = incarnation;
             self.arena
-                .with_unowned_payload(idx, |w| w.fill(0))
+                .with_unowned_payload_owned(idx, |w| w.fill(0))
                 .expect("owner core is the only writer");
             let Some(h) = self.install(idx, tenant, layout_version, lsn, 0, events) else {
                 continue;
@@ -568,7 +604,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         }
         .encode();
         // SAFETY: the slot is unowned and not on the free list until this CQE (I1/I2).
-        self.arena.io_submitted();
+        self.arena.io_submitted(idx)?;
         self.m(idx).io_inflight += 1;
         let result = unsafe {
             io.read_at(
@@ -581,7 +617,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         };
         if let Err(e) = result {
             self.m(idx).io_inflight -= 1;
-            self.arena.io_completed();
+            self.arena.io_completed(idx);
             return Err(e);
         }
         Ok(())
@@ -748,7 +784,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         match self.state(idx) {
             State::Replaying { res, through_lsn } if res.handle == h && lsn <= through_lsn => self
                 .arena
-                .write(h, lsn, f)
+                .write_owned(h, lsn, f)
                 .map_err(|_| Gate::InvalidMutation),
             _ => Err(Gate::Stale),
         }
@@ -761,7 +797,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         let State::Replaying { res, .. } = self.state(idx) else {
             return false;
         };
-        if res.handle != h || self.arena.revoke(h).is_err() {
+        if res.handle != h || self.arena.revoke_owned(h).is_err() {
             return false;
         }
         self.m(idx).state = State::Quiescing { tenant: res.tenant };
@@ -838,7 +874,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         let idx = h.index();
         let r = self
             .arena
-            .write(h, lsn, f)
+            .write_owned(h, lsn, f)
             .map_err(|_| Gate::InvalidMutation)?;
         let m = self.m(idx);
         if let State::Resident(res) = &mut m.state {
@@ -857,28 +893,33 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
 
     /// Pin for zero-copy egress (e.g. `IORING_OP_SEND_ZC` from slot memory). Release with
     /// `unpin` on the *notification* CQE (`IORING_CQE_F_NOTIF`), not the first CQE.
-    pub fn pin(&mut self, h: SlotHandle) -> bool {
-        match self.residency(h) {
-            Some((idx, _)) => {
-                self.m(idx).pins += 1;
-                true
-            }
-            None => false,
-        }
+    pub fn pin(&mut self, h: SlotHandle) -> Option<PinToken> {
+        let (idx, _) = self.residency(h)?;
+        let m = self.m(idx);
+        m.pins = m.pins.checked_add(1)?;
+        self.arena.pin_acquired();
+        Some(PinToken {
+            owner: self.pin_owner,
+            handle: h,
+        })
     }
 
-    pub fn unpin(&mut self, idx: u32, events: &mut Vec<Event>) {
-        if !self.range.contains(&idx) {
+    /// Consume exactly one acquisition. A wrong owner/generation returns the token
+    /// unchanged so its actual owner can still release it.
+    pub fn unpin(&mut self, token: PinToken, events: &mut Vec<Event>) -> Result<(), PinToken> {
+        let idx = token.handle.index();
+        if token.owner != self.pin_owner
+            || self.handle_idx(token.handle).is_none()
+            || self.arena.header(idx).last_generation.load(Relaxed) != token.handle.generation()
+            || self.m(idx).pins == 0
+        {
             self.stats.stale_cqes += 1;
-            return;
+            return Err(token);
         }
-        let m = self.m(idx);
-        if m.pins == 0 {
-            self.stats.stale_cqes += 1;
-            return;
-        }
-        m.pins -= 1;
+        self.m(idx).pins -= 1;
+        self.arena.pin_released();
         self.try_finish_quiesce(idx, events);
+        Ok(())
     }
 
     // ----------------------------------------------------------------- flush / evict
@@ -922,6 +963,32 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
             epoch: self.cfg.epoch,
             image_seq,
         };
+        let target = r.loc.flipped();
+        let m = self.m(idx);
+        let ticket = m.ticket.wrapping_add(1);
+        let ud = UserData {
+            op: Op::Checkpoint,
+            object: idx,
+            ticket,
+        }
+        .encode();
+        // R10-1: commit the ticket and the Flushing state before the backend can retain
+        // the buffer, so a backend that queues and then unwinds leaves the slot frozen
+        // and its eventual CQE matching. A rejected submission restores the old state.
+        let prev = self.m(idx).state;
+        self.arena.io_submitted(idx)?;
+        let m = self.m(idx);
+        m.io_inflight += 1;
+        m.ticket = ticket;
+        m.state = State::Flushing {
+            res: r,
+            target,
+            lsn,
+            image_seq,
+            evict,
+            deferred: 0,
+        };
+        self.flushing += 1;
         // Stamp the image header inside a write section (readers see it atomically).
         // SAFETY: we are the only writer; reading our own payload non-atomically is race-free.
         let body = unsafe {
@@ -934,19 +1001,9 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         self.arena
             .stamp_image_header(r.handle, &hw)
             .expect("owner core is the only writer");
-        let target = r.loc.flipped();
-        let m = self.m(idx);
-        let ticket = m.ticket.wrapping_add(1);
-        let ud = UserData {
-            op: Op::Checkpoint,
-            object: idx,
-            ticket,
-        }
-        .encode();
+
         // SAFETY: Flushing freezes CPU writes to this payload until the CQE (I2), and the
         // slot cannot be freed while io_inflight > 0 (I1).
-        self.arena.io_submitted();
-        self.m(idx).io_inflight += 1;
         let result = unsafe {
             io.write_at(
                 ud,
@@ -958,21 +1015,13 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
             )
         };
         if let Err(e) = result {
-            self.m(idx).io_inflight -= 1;
-            self.arena.io_completed();
+            let m = self.m(idx);
+            m.io_inflight -= 1;
+            m.state = prev;
+            self.flushing -= 1;
+            self.arena.io_completed(idx);
             return Err(e);
         }
-        let m = self.m(idx);
-        m.ticket = ticket;
-        m.state = State::Flushing {
-            res: r,
-            target,
-            lsn,
-            image_seq,
-            evict,
-            deferred: 0,
-        };
-        self.flushing += 1;
         self.stats.flushes += 1;
         Ok(())
     }
@@ -1066,7 +1115,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         }
         m.io_inflight -= 1;
         let state = m.state;
-        self.arena.io_completed();
+        self.arena.io_completed(idx);
         match (ud.op, state) {
             (Op::Load, State::Loading { .. }) if current => self.on_load_cqe(idx, res, io, events),
             (
@@ -1091,7 +1140,7 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
                     };
                     self.route.set_extent(r.tenant, target);
                     self.arena
-                        .set_checkpoint_lsn(r.handle, lsn)
+                        .set_checkpoint_lsn_owned(r.handle, lsn)
                         .expect("owner core is the only writer");
                     self.m(idx).retries = 0;
                     events.push(Event::Checkpointed {
@@ -1184,6 +1233,49 @@ mod tests {
     }
 
     #[test]
+    fn stale_generation_pin_cannot_release_reused_slot() {
+        let arena = SlotArena::<W>::new_heap(0, 1, CoreControl::shared(1));
+        let route = RouteTable::new(4);
+        let mut lc = SlotLifecycle::new(
+            &arena,
+            &route,
+            0,
+            0..1,
+            LifecycleConfig {
+                low_free: 1,
+                high_free: 1,
+                ..cfg()
+            },
+        );
+        let mut ev = Vec::new();
+        let mut io = SimIo::new(1, 16 * 4096);
+        let old = lc.admit_new(1, 123, loc(1), 5, 1, &mut ev).unwrap();
+        assert!(lc.checkpoint(old, 5, &mut io));
+        deliver(&mut lc, &mut io, 0, Outcome::Ok);
+        let pin = lc.pin(old).unwrap();
+        // Only crate-internal tests can manufacture a duplicate acquisition.
+        let stale = PinToken {
+            owner: pin.owner,
+            handle: pin.handle,
+        };
+        lc.unpin(pin, &mut ev).unwrap();
+        lc.run_eviction(5, &mut io, &mut ev);
+        lc.run_eviction(5, &mut io, &mut ev);
+        let new = lc.admit_new(2, 456, loc(2), 6, 1, &mut ev).unwrap();
+        assert_ne!(new, old);
+        assert!(lc.checkpoint(new, 6, &mut io));
+        deliver(&mut lc, &mut io, 0, Outcome::Ok);
+        let live = lc.pin(new).unwrap();
+        assert!(lc.unpin(stale, &mut ev).is_err());
+        lc.run_eviction(6, &mut io, &mut ev);
+        assert_eq!(lc.free_slots(), 0);
+        lc.unpin(live, &mut ev).unwrap();
+        lc.run_eviction(6, &mut io, &mut ev);
+        lc.run_eviction(6, &mut io, &mut ev);
+        assert_eq!(lc.free_slots(), 1);
+    }
+
+    #[test]
     fn r5_l2_stale_and_duplicate_cqes_do_not_decrement_or_abort() {
         let arena = SlotArena::<W>::new_heap(0, 4, CoreControl::shared(1));
         let route = RouteTable::new(16);
@@ -1215,7 +1307,11 @@ mod tests {
         unsafe { lc.on_cqe(ud, res, &mut io, &mut ev) };
         assert_eq!(lc.flushing(), 0);
         assert_eq!(lc.stats.stale_cqes, 2);
-        lc.unpin(u32::MAX, &mut ev);
+        let wrong = PinToken {
+            owner: lc.pin_owner,
+            handle: SlotHandle::pack(crate::slot::MAX_INDEX, 0, 1).unwrap(),
+        };
+        assert!(lc.unpin(wrong, &mut ev).is_err());
         assert_eq!(lc.stats.stale_cqes, 3);
     }
 
@@ -1243,12 +1339,12 @@ mod tests {
 
         // WAL rule (I3): nothing is durable yet, so nothing may be written back.
         assert_eq!(lc.run_eviction(0, &mut io, &mut ev), 0);
-        assert!(io.inflight.is_empty() && lc.stats.wal_blocked > 0);
+        assert!(io.inflight().is_empty() && lc.stats.wal_blocked > 0);
 
         // Durable: flushes start, but no slot is free until a CQE arrives.
         assert_eq!(lc.run_eviction(100, &mut io, &mut ev), 2);
         assert_eq!(
-            (io.inflight.len(), lc.free_slots(), lc.flushing()),
+            (io.inflight().len(), lc.free_slots(), lc.flushing()),
             (2, 0, 2)
         );
         assert_eq!(
@@ -1293,7 +1389,7 @@ mod tests {
         let ib = io
             .find(|op| UserData::decode(op.user_data).unwrap().object == fb)
             .unwrap();
-        let op = io.inflight[ib];
+        let op = io.inflight()[ib];
         assert_eq!(
             op.offset,
             loc(fb).flipped().current_offset(4096),
@@ -1455,7 +1551,7 @@ mod tests {
         assert!(events.contains(&Event::NeedsRepair { tenant: 3 }));
         assert!(events.iter().all(|e| !matches!(e, Event::Loaded { .. })));
         assert_eq!(route.lookup(3).unwrap().0, SlotHandle::NULL);
-        assert!(io.inflight.is_empty());
+        assert!(io.inflight().is_empty());
     }
 
     #[test]
@@ -1494,7 +1590,7 @@ mod tests {
         .unwrap();
         let mut e = Vec::new();
         for _ in 0..3 {
-            if io.inflight.is_empty() {
+            if io.inflight().is_empty() {
                 break;
             }
             e = deliver(&mut lc2, &mut io, 0, Outcome::Ok);
@@ -1595,10 +1691,10 @@ mod tests {
                     _ => {}
                 }
                 for _ in 0..rng.below(3) {
-                    if io.inflight.is_empty() {
+                    if io.inflight().is_empty() {
                         break;
                     }
-                    let i = rng.below(io.inflight.len() as u64) as usize;
+                    let i = rng.below(io.inflight().len() as u64) as usize;
                     let o = match rng.below(12) {
                         0 => Outcome::Err(libc::EIO),
                         1 => Outcome::Short(2048),

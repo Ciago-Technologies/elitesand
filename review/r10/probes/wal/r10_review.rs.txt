@@ -1,0 +1,52 @@
+//! R10 review probes (WAL). They PASS on the R9-fixed upload when the defect is present.
+use ciagomem_core::CoreControl;
+use ciagomem_core::io::{Outcome, SimIo};
+use ciagomem_wal::envelope::KIND_DATA;
+use ciagomem_wal::gclog::*;
+fn cfg() -> LogConfig {
+    LogConfig { block: 4096, buf_bytes: 16384, buffers: 4, max_inflight: 3, min_batch_bytes: 8192,
+        max_delay_ns: 5000, capacity: 65536, file: 0, tail: TailMode::Pad, max_retries: 3 }
+}
+fn io() -> SimIo { SimIo::new(1, (cfg().data_offset() + cfg().capacity) as usize) }
+/// R10-3: once fenced, `on_cqe` returns before matching the token, so genuine
+/// completions never clear `InFlight`; a fully reaped log is still non-quiescent and
+/// its drop retains every buffer.
+#[test]
+fn defect_r10_3_fenced_log_never_becomes_quiescent_after_full_reap() {
+    let controls = CoreControl::shared(1);
+    let mut d = io();
+    let (mut log, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    log.superblock_durable(&sb);
+    log.append(1, KIND_DATA, b"x", Some(1), 0, &mut d).unwrap();
+    log.poll(1_000_000, true, &mut d);
+    assert_eq!(d.inflight.len(), 1);
+    controls[0].fence(); // e.g. a lifecycle on this core was dropped mid-I/O
+    let (ud, res) = d.complete(0, Outcome::Ok);
+    let (mut acks, mut ind) = (Vec::new(), Vec::new());
+    // SAFETY: a genuine simulator completion; the device no longer touches the buffer.
+    let r = unsafe { log.on_cqe(ud, res, &mut d, &mut acks, &mut ind) };
+    assert!(r.is_err());
+    assert!(d.inflight.is_empty(), "every device op has completed and been reaped");
+    assert!(!log.quiescent(), "log still reports a write in flight");
+    drop(log); // retains its buffers (mem::forget) although nothing references them
+}
+/// R10-4 consequence: a res=0 CQE carrying a pending LogWrite token (what
+/// `UringIo::post_wake` can inject) makes the log resubmit a buffer that is still in flight.
+#[test]
+fn defect_r10_4_forged_zero_result_resubmits_inflight_buffer() {
+    let controls = CoreControl::shared(1);
+    let mut d = io();
+    let (mut log, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    log.superblock_durable(&sb);
+    log.append(1, KIND_DATA, b"x", Some(1), 0, &mut d).unwrap();
+    log.poll(1_000_000, true, &mut d);
+    let ud = d.inflight[0].user_data;
+    let (mut acks, mut ind) = (Vec::new(), Vec::new());
+    // SAFETY (deliberately violated to show what a reactor must filter): forged CQE.
+    unsafe { log.on_cqe(ud, 0, &mut d, &mut acks, &mut ind) }.unwrap();
+    assert_eq!(d.inflight.len(), 2);
+    assert_eq!(d.inflight[0].buf, d.inflight[1].buf, "same buffer submitted twice");
+    d.inflight.clear();
+    // SAFETY: simulator ops discarded.
+    unsafe { log.release_device_references() };
+}
