@@ -1,8 +1,8 @@
 //! Reviewer R9 probes. They PASS (or, under Miri, report UB) while the defects exist.
-use coagomem_core::io::{Outcome, SimIo};
-use coagomem_core::{CoreControl, SlotArena, TenantWord, Visibility};
-use coagomem_wal::envelope::KIND_DATA;
-use coagomem_wal::gclog::*;
+use ciagomem_core::io::{Outcome, SimIo};
+use ciagomem_core::{CoreControl, SlotArena, TenantWord, Visibility};
+use ciagomem_wal::envelope::KIND_DATA;
+use ciagomem_wal::gclog::*;
 fn cfg() -> LogConfig {
     LogConfig {
         block: 4096,

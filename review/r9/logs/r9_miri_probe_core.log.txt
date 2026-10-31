@@ -1257,38 +1257,38 @@ warning: use of deprecated associated function `core::num::<impl u8>::max_value`
    = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 warning: `sha2` (lib) generated 2 warnings
-   Compiling coagomem-core v0.3.0 (/home/user/workspace/r9/ciagomem-slae/coagomem-core)
+   Compiling ciagomem-core v0.3.0 (/home/user/workspace/r9/ciagomem-slae/ciagomem-core)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
-     Running ../tests/r9_review.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/coagomem-core/6adaa92e2154fec6/out/r9_review-6adaa92e2154fec6)
+     Running ../tests/r9_review.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/ciagomem-core/6adaa92e2154fec6/out/r9_review-6adaa92e2154fec6)
 
 running 1 test
 test defect_r9_1_lifecycle_drop_with_inflight_read ... error: Undefined Behavior: memory access failed: alloc39937 has been freed, so this pointer is dangling
- --> coagomem-core/src/io.rs:162:20
+ --> ciagomem-core/src/io.rs:162:20
   |
   = note: Undefined Behavior occurred here
   |
   = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
   = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
 help: alloc39937 was allocated here:
- --> coagomem-core/src/slot.rs:401:41
+ --> ciagomem-core/src/slot.rs:401:41
 help: alloc39937 was deallocated here:
- --> coagomem-core/src/slot.rs:739:49
+ --> ciagomem-core/src/slot.rs:739:49
   = note: this is on thread `defect_r9_1_lif`
   = note: stack backtrace:
-          0: coagomem_core::io::SimIo::complete
-              at coagomem-core/src/io.rs:162:21: 162:91
+          0: ciagomem_core::io::SimIo::complete
+              at ciagomem-core/src/io.rs:162:21: 162:91
           1: defect_r9_1_lifecycle_drop_with_inflight_read
-              at coagomem-core/../tests/r9_review.rs:25:13: 25:42
+              at ciagomem-core/../tests/r9_review.rs:25:13: 25:42
           2: defect_r9_1_lifecycle_drop_with_inflight_read::{closure#0}
-              at coagomem-core/../tests/r9_review.rs:4:51: 4:51
+              at ciagomem-core/../tests/r9_review.rs:4:51: 4:51
 
 note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
 
 error: aborting due to 1 previous error
 
-error: test failed, to rerun pass `-p coagomem-core --test r9_review`
+error: test failed, to rerun pass `-p ciagomem-core --test r9_review`
 
 Caused by:
-  process didn't exit successfully: `/home/user/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo-miri runner /home/user/workspace/r9/ciagomem-slae/target/miri/x86_64-unknown-linux-gnu/debug/build/coagomem-core/6adaa92e2154fec6/out/r9_review-6adaa92e2154fec6` (exit status: 1)
+  process didn't exit successfully: `/home/user/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo-miri runner /home/user/workspace/r9/ciagomem-slae/target/miri/x86_64-unknown-linux-gnu/debug/build/ciagomem-core/6adaa92e2154fec6/out/r9_review-6adaa92e2154fec6` (exit status: 1)
 note: test exited abnormally; to see the full output pass --no-capture to the harness.
 EXIT 1

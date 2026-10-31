@@ -1,9 +1,0 @@
-[package]
-name = "coagomem-wal"
-version = "0.3.0"
-edition = "2024"
-
-[dependencies]
-libc = "0.2"
-io-uring = "0.7"
-coagomem-core = { path = "../coagomem-core" }

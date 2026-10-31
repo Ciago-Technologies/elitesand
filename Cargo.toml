@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "coagomem-core",
-    "coagomem-wal",
-    "coagomem-ql",
+    "ciagomem-core",
+    "ciagomem-wal",
+    "ciagomem-ql",
     "ciagomem-crypto",
     "ciagomem-engine",
 ]

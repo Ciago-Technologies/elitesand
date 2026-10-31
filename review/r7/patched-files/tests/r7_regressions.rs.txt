@@ -1,6 +1,6 @@
 //! R7 acceptance tests: PASS when R7-1..R7-3 are fixed.
 mod support;
-use coagomem_core::*;
+use ciagomem_core::*;
 
 fn session(tenant: u128) -> VerifiedMacaroon {
     let k = KeyedPrf([9; 32]);

@@ -4,8 +4,8 @@ use crate::{
     schema::Schemas,
     *,
 };
-use coagomem_core::{AuthContext, Label, OP_READ, OP_WRITE, VerifiedMacaroon, validate_query};
-use coagomem_ql::{
+use ciagomem_core::{AuthContext, Label, OP_READ, OP_WRITE, VerifiedMacaroon, validate_query};
+use ciagomem_ql::{
     AggFunc, AggItem, AssignOp, BoolExpr, CompOp, FieldPath, Metric, Mutation, Query, Root, Source,
     Stage, Value,
 };
@@ -90,7 +90,7 @@ struct Shard {
 }
 pub struct Engine<J: Journal> {
     boot_epoch: u128,
-    clock: Arc<dyn coagomem_core::Clock + Send + Sync>,
+    clock: Arc<dyn ciagomem_core::Clock + Send + Sync>,
     last_now: std::sync::atomic::AtomicU64,
     shards: Vec<Shard>,
     limits: Limits,
@@ -204,7 +204,7 @@ impl<J: Journal> Engine<J> {
         limits: Limits,
         journal: J,
         boot_epoch: u128,
-        clock: Arc<dyn coagomem_core::Clock + Send + Sync>,
+        clock: Arc<dyn ciagomem_core::Clock + Send + Sync>,
     ) -> Result<Self> {
         if boot_epoch == 0
             || cores == 0
@@ -482,12 +482,12 @@ impl<J: Journal> Engine<J> {
     }
     pub fn execute_validated_with(
         &mut self,
-        validated: coagomem_core::ValidatedQuery<'_, '_>,
+        validated: ciagomem_core::ValidatedQuery<'_, '_>,
         token: &VerifiedMacaroon,
         options: Options,
     ) -> Result<QueryResult> {
         self.authorize(token)?;
-        if validated.scope() != coagomem_core::QueryScope::Tenant(token.tenant_incarnation())
+        if validated.scope() != ciagomem_core::QueryScope::Tenant(token.tenant_incarnation())
             || validated.session_id() != token.session_id()
             || validated.owner_version() != self.sequence
         {
@@ -757,7 +757,7 @@ impl<J: Journal> Engine<J> {
                     } else {
                         field.join(".")
                     };
-                    let query = coagomem_ql::unescape(query).map_err(|_| Error::Parse)?;
+                    let query = ciagomem_ql::unescape(query).map_err(|_| Error::Parse)?;
                     let terms = index::tokens(&query);
                     charge(
                         &mut stats,

@@ -1,5 +1,5 @@
 //! Reviewer R9 probe: lifecycle/arena drop with an in-flight read (Miri reports UB).
-use coagomem_core::*;
+use ciagomem_core::*;
 #[test]
 fn defect_r9_1_lifecycle_drop_with_inflight_read() {
     use io::{Outcome, SimIo};

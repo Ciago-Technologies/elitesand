@@ -13,8 +13,8 @@ metadata = json.loads(subprocess.check_output([
 packages = {p["name"]: p for p in metadata["packages"]}
 graph = {n: {d["name"] for d in p["dependencies"] if d["name"] in packages}
          for n, p in packages.items()}
-assert not packages["coagomem-ql"]["dependencies"], "parser reaches storage or crypto"
-assert graph["ciagomem-engine"] == {"coagomem-core", "coagomem-ql"}
+assert not packages["ciagomem-ql"]["dependencies"], "parser reaches storage or crypto"
+assert graph["ciagomem-engine"] == {"ciagomem-core", "ciagomem-ql"}
 engine_deps = {d["name"] for d in packages["ciagomem-engine"]["dependencies"]}
 assert {"roaring", "flatbuffers", "wide"} <= engine_deps
 assert all("ciagomem-engine" not in deps for n,deps in graph.items() if n != "ciagomem-engine")
@@ -29,9 +29,9 @@ def visit(node, stack):
 
 for node in graph:
     visit(node, [])
-core = (root / "coagomem-core/src/lib.rs").read_text()
+core = (root / "ciagomem-core/src/lib.rs").read_text()
 assert '#[cfg(feature = "legacy-audit")]\npub mod legacy;' in core
-assert "legacy-audit" not in packages["coagomem-core"]["features"].get("default", [])
+assert "legacy-audit" not in packages["ciagomem-core"]["features"].get("default", [])
 spec = root / "MASTER_SPECIFICATION.md"
 text = spec.read_text()
 match = re.search(r"<!-- BEGIN REVIEWED CORE SOURCE -->\s*```rust\n(.*?)\n```\s*<!-- END REVIEWED CORE SOURCE -->", text, re.S)
@@ -52,7 +52,7 @@ required={"M1","D1","W1","I1","L1","T1","T2","T3","F1","F2","F3","F4","F5","P1",
 assert required <= set(re.findall(r"R5-([A-Z]\d+)",ledger)), "R5 finding lacks disposition"
 r6=(root / "docs/R6_REMEDIATION.md").read_text()
 assert {f"R6-N{i}" for i in range(1,8)} <= set(re.findall(r"R6-N\d+",r6)), "R6 finding lacks disposition"
-slot=(root / "coagomem-core/src/slot.rs").read_text()
+slot=(root / "ciagomem-core/src/slot.rs").read_text()
 assert "pub durable_lsn:" not in slot and "pub fenced:" not in slot
 r7=(root / "docs/R7_REMEDIATION.md").read_text()
 assert {f"R7-{i}" for i in range(1,7)} <= set(re.findall(r"R7-\d+",r7)), "R7 finding lacks disposition"
@@ -69,4 +69,18 @@ r9=(root / "docs/R9_REMEDIATION.md").read_text()
 assert {"R9-1","R9-2"} <= set(re.findall(r"R9-\d+",r9)), "R9 finding lacks disposition"
 assert all(f"pub(crate) fn {name}" in slot for name in ["publish_durable","bind_log","unbind_log"]), "raw publication must stay crate-private"
 print("Validated crate DAG, parser/crypto boundaries, opt-in legacy API, source listing, links and vendor inventory.")
+policy = json.loads((root / "policy.json").read_text())
+for path in root.rglob("*"):
+    relative = path.relative_to(root)
+    if any(part in {".git", "target", "vendor"} for part in relative.parts):
+        continue
+    assert not any(old in str(relative).lower() for old in policy["naming"]["forbidden_identifiers"]), relative
+    if not path.is_file() or relative == Path("policy.json"):
+        continue
+    try:
+        content = path.read_bytes().decode("utf-8").lower()
+    except UnicodeDecodeError:
+        continue
+    assert not any(old in content for old in policy["naming"]["forbidden_identifiers"]), relative
+print("Validated canonical Ciagomem/CiaQL names in owned paths and content.")
 print("VERDICT: PASS")

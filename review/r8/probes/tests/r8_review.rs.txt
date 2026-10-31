@@ -1,5 +1,5 @@
 //! Reviewer R8 probe: PASSES while the defect exists.
-use coagomem_core::*;
+use ciagomem_core::*;
 fn session(boot: u128) -> VerifiedMacaroon {
     let k = KeyedPrf([9; 32]);
     Macaroon::issue(

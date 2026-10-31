@@ -1,0 +1,9 @@
+[package]
+name = "ciagomem-wal"
+version = "0.3.0"
+edition = "2024"
+
+[dependencies]
+libc = "0.2"
+io-uring = "0.7"
+ciagomem-core = { path = "../ciagomem-core" }

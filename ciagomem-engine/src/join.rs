@@ -97,7 +97,7 @@ impl Fanout {
 pub struct Joined {
     pub left: Snapshot,
     pub right: Snapshot,
-    pub label: coagomem_core::Label,
+    pub label: ciagomem_core::Label,
 }
 /// Bounded read-only equijoin for relationships without direct ActorRef fields.
 /// Keys use explicit Scalar types, like grouping; this API does not promise SQL coercions.
@@ -106,12 +106,12 @@ pub fn equi_join(
     right: &[Snapshot],
     left_field: &str,
     right_field: &str,
-    session: &coagomem_core::VerifiedMacaroon,
+    session: &ciagomem_core::VerifiedMacaroon,
     limits: &crate::Limits,
 ) -> Result<Vec<Joined>> {
     use crate::Key;
     use std::collections::BTreeMap;
-    if !session.allows(coagomem_core::OP_READ) {
+    if !session.allows(ciagomem_core::OP_READ) {
         return Err(Error::Permission);
     }
     if left.len().saturating_add(right.len()) > limits.query_work {

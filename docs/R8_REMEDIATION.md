@@ -3,7 +3,7 @@
 > Historical ledger. The [R9 ledger](R9_REMEDIATION.md) supersedes publisher access and pending-device-I/O teardown contracts.
 
 
-Input: the latest **CiagoMem-SLAE R7 Remediation Verification (R8).md** and `ciagomem-r8-fix-patch.zip` under New File/. All three supplied runtime probes passed before changes: two reproduced false Durable visibility and one reproduced stale export authorization. Their originals, patch, full files and external logs are retained as text under [review/r8](../review/r8). The supplied patch applied cleanly; local formatting and one additional initialization-failure guard were then applied.
+Input: the latest **Ciagomem-SLAE R7 Remediation Verification (R8).md** and `ciagomem-r8-fix-patch.zip` under New File/. All three supplied runtime probes passed before changes: two reproduced false Durable visibility and one reproduced stale export authorization. Their originals, patch, full files and external logs are retained as text under [review/r8](../review/r8). The supplied patch applied cleanly; local formatting and one additional initialization-failure guard were then applied.
 
 | Finding | Correction and evidence | Boundary |
 | --- | --- | --- |

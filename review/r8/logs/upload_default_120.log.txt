@@ -766,7 +766,7 @@ warning: `sha2` (lib) generated 2 warnings
    Compiling io-uring v0.7.15 (/tmp/r8pristine_src/vendor/io-uring-0.7.15)
 warning: `syn` (lib) generated 67 warnings (45 duplicates) (run `cargo fix --lib -p syn` to apply 19 suggestions)
    Compiling curve25519-dalek-derive v0.1.1 (/tmp/r8pristine_src/vendor/curve25519-dalek-derive-0.1.1)
-   Compiling coagomem-ql v0.3.0 (/tmp/r8pristine_src/coagomem-ql)
+   Compiling ciagomem-ql v0.3.0 (/tmp/r8pristine_src/ciagomem-ql)
 warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
   --> vendor/curve25519-dalek-4.1.3/src/backend/mod.rs:67:9
    |
@@ -2049,7 +2049,7 @@ warning: unnecessary `unsafe` block
     |     ^^^^^^ unnecessary `unsafe` block
 
 warning: `safe_arch` (lib) generated 87 warnings (run `cargo fix --lib -p safe_arch` to apply 85 suggestions)
-   Compiling coagomem-core v0.3.0 (/tmp/r8pristine_src/coagomem-core)
+   Compiling ciagomem-core v0.3.0 (/tmp/r8pristine_src/ciagomem-core)
    Compiling byteorder v1.5.0 (/tmp/r8pristine_src/vendor/byteorder-1.5.0)
    Compiling roaring v0.10.12 (/tmp/r8pristine_src/vendor/roaring-0.10.12)
 warning: hiding a lifetime that's elided elsewhere is confusing
@@ -5414,7 +5414,7 @@ warning: unexpected `cfg` condition name: `nightly`
    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
 
 warning: `flatbuffers` (lib) generated 3 warnings
-   Compiling coagomem-wal v0.3.0 (/tmp/r8pristine_src/coagomem-wal)
+   Compiling ciagomem-wal v0.3.0 (/tmp/r8pristine_src/ciagomem-wal)
 warning: `roaring` (lib) generated 6 warnings (run `cargo fix --lib -p roaring` to apply 6 suggestions)
    Compiling ciagomem-engine v0.3.0 (/tmp/r8pristine_src/ciagomem-engine)
     Finished `release` profile [optimized] target(s) in 25.21s
@@ -5465,7 +5465,7 @@ test bitmap_point_filter_visits_only_candidates ... ok
 
 test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
 
-     Running unittests src/lib.rs (/tmp/r8tgt/release/deps/coagomem_core-e748f11426ce7c1d)
+     Running unittests src/lib.rs (/tmp/r8tgt/release/deps/ciagomem_core-e748f11426ce7c1d)
 
 running 18 tests
 test envelope::tests::extent_image_validation ... ok
@@ -5573,21 +5573,21 @@ test s9_slot_read_uses_a_deadline ... ok
 
 test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 
-     Running unittests src/lib.rs (/tmp/r8tgt/release/deps/coagomem_ql-3358de26c52d33a9)
+     Running unittests src/lib.rs (/tmp/r8tgt/release/deps/ciagomem_ql-3358de26c52d33a9)
 
 running 8 tests
-test coagoql::tests::example_2_tx_actors_with_qualified_paths ... ok
-test coagoql::tests::example_1_keeps_mutate_and_project ... ok
-test coagoql::tests::example_3_group_by_and_aggregate ... ok
-test coagoql::tests::example_4_similarity ... ok
-test coagoql::tests::literal_and_identifier_safety ... ok
-test coagoql::tests::limits_are_enforced ... ok
-test coagoql::tests::precedence_and_parentheses ... ok
-test coagoql::tests::rejections ... ok
+test ciaql::tests::example_2_tx_actors_with_qualified_paths ... ok
+test ciaql::tests::example_1_keeps_mutate_and_project ... ok
+test ciaql::tests::example_3_group_by_and_aggregate ... ok
+test ciaql::tests::example_4_similarity ... ok
+test ciaql::tests::literal_and_identifier_safety ... ok
+test ciaql::tests::limits_are_enforced ... ok
+test ciaql::tests::precedence_and_parentheses ... ok
+test ciaql::tests::rejections ... ok
 
 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running unittests src/lib.rs (/tmp/r8tgt/release/deps/coagomem_wal-14b21f2f9b902267)
+     Running unittests src/lib.rs (/tmp/r8tgt/release/deps/ciagomem_wal-14b21f2f9b902267)
 
 running 5 tests
 test gclog::tests::crash_recovery_keeps_every_ack_pad_mode ... ok
@@ -5631,22 +5631,22 @@ running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-   Doc-tests coagomem_core
+   Doc-tests ciagomem_core
 
 running 3 tests
-test coagomem-core/src/security.rs - security::Label (line 87) - compile fail ... ok
-test coagomem-core/src/security.rs - security::Label (line 83) - compile fail ... ok
-test coagomem-core/src/slot.rs - slot::CoreControl (line 222) - compile fail ... ok
+test ciagomem-core/src/security.rs - security::Label (line 87) - compile fail ... ok
+test ciagomem-core/src/security.rs - security::Label (line 83) - compile fail ... ok
+test ciagomem-core/src/slot.rs - slot::CoreControl (line 222) - compile fail ... ok
 
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
 
-   Doc-tests coagomem_ql
+   Doc-tests ciagomem_ql
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-   Doc-tests coagomem_wal
+   Doc-tests ciagomem_wal
 
 running 0 tests
 

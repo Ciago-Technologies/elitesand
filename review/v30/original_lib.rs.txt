@@ -1,4 +1,4 @@
-//! CiagoMem - SLAE ("The Store") & CiaQL — v3.0 Final Audit-Hardened Reference Kernel.
+//! Ciagomem - SLAE ("The Store") & CiaQL — v3.0 Final Audit-Hardened Reference Kernel.
 //! Resolves all P0 (1a..4b) and v2.5 Adversarial Audit (C1..C6, H1..H8, M1..M8) findings.
 
 #![allow(clippy::too_many_arguments)]

@@ -327,7 +327,7 @@ impl<const W: usize> SlotArena<W> {
         use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
         Self::check(class, n, cores);
         let len = Self::region_bytes(n as usize).next_multiple_of(2 * 1024 * 1024);
-        let name = c"coagomem-slab";
+        let name = c"ciagomem-slab";
         // MFD_HUGE_2MB = 21 << MFD_HUGE_SHIFT(26)
         let flags = libc::MFD_CLOEXEC | libc::MFD_HUGETLB | (21 << 26) | libc::MFD_ALLOW_SEALING;
         // SAFETY: plain syscalls with checked results.

@@ -1,0 +1,27 @@
+//! Reviewer R6 probe: PASSES while the defect exists.
+// ---------------------------------------------------------------------------
+// R6-N5: image validation requires an exact epoch match while the log epoch is
+// +1 per open. Without the (absent) trusted per-tenant epoch metadata, a
+// caller passing the current epoch rejects every pre-restart image.
+// ---------------------------------------------------------------------------
+#[test]
+fn defect_n5_image_epoch_exact_match_rejects_previous_open() {
+    use ciagomem_wal::envelope::ExtentImage;
+    let img = ExtentImage {
+        tenant: 7,
+        incarnation: 8,
+        tombstone: false,
+        layout_version: 1,
+        checkpoint_lsn: 10,
+        epoch: 1,
+        image_seq: 1,
+    };
+    let mut buf = vec![0u8; 4096];
+    let w = img.header_words(&buf[128..]);
+    for (i, x) in w.iter().enumerate() {
+        buf[i * 8..i * 8 + 8].copy_from_slice(&x.to_le_bytes());
+    }
+    assert!(ExtentImage::validate(&buf, 7, 8, 1).is_some());
+    assert!(ExtentImage::validate(&buf, 7, 8, 2).is_none(), "epoch 2 = next open");
+}
+

@@ -26,3 +26,7 @@ Only stable Rust is installed locally. The reviewer reports Miri on its supplied
 Cleanup removed the superseded R8 input/output ZIPs and archived the R8 report; no additional obsolete directories were found. One policy.json and one current review prompt remain. A node/reactor, cancel-and-reap shutdown, durable engine Journal/replay/repair, production identity anchor and storage qualification are still open; no production or million-user claim is made.
 
 See [R9_REMEDIATION.md](R9_REMEDIATION.md) for current contracts and limitations.
+
+Project naming was subsequently normalized to Ciagomem and CiaQL, including archived review text and paths. Historical measurements remain measurements of the recorded revisions. Original review hashes and the pre-normalization Git revision are recorded in [naming-migration.json](naming-migration.json); current preserved-source hashes are in [cleanup-manifest.json](cleanup-manifest.json). Vendored sources were unchanged.
+
+After the naming migration: 141 default and 169 all-feature release tests passed offline; formatting, the runnable quickstart, 1,025 bounded mesh runs and the workspace validator passed. A temporary obsolete-name fixture confirmed the naming guard rejects regressions and was removed.

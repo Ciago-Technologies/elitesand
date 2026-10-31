@@ -3,7 +3,7 @@ name = "slae-p0"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
-description = "P0 fixes for CoagoMem-SLAE: sound seqlock, SPSC core mesh, generational slots, CQE-gated eviction, group-commit log, Calvin votes, CoagoQL parser"
+description = "P0 fixes for Ciagomem-SLAE: sound seqlock, SPSC core mesh, generational slots, CQE-gated eviction, group-commit log, Calvin votes, CiaQL parser"
 license = "Apache-2.0"
 
 [dependencies]

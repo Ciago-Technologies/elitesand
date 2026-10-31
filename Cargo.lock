@@ -30,6 +30,16 @@ name = "cfg-if"
 version = "1.0.5"
 
 [[package]]
+name = "ciagomem-core"
+version = "0.3.0"
+dependencies = [
+ "ciagomem-crypto",
+ "ciagomem-ql",
+ "io-uring",
+ "libc",
+]
+
+[[package]]
 name = "ciagomem-crypto"
 version = "0.3.0"
 dependencies = [
@@ -43,32 +53,22 @@ dependencies = [
 name = "ciagomem-engine"
 version = "0.3.0"
 dependencies = [
- "coagomem-core",
- "coagomem-ql",
+ "ciagomem-core",
+ "ciagomem-ql",
  "flatbuffers",
  "roaring",
  "wide",
 ]
 
 [[package]]
-name = "coagomem-core"
-version = "0.3.0"
-dependencies = [
- "ciagomem-crypto",
- "coagomem-ql",
- "io-uring",
- "libc",
-]
-
-[[package]]
-name = "coagomem-ql"
+name = "ciagomem-ql"
 version = "0.3.0"
 
 [[package]]
-name = "coagomem-wal"
+name = "ciagomem-wal"
 version = "0.3.0"
 dependencies = [
- "coagomem-core",
+ "ciagomem-core",
  "io-uring",
  "libc",
 ]

@@ -2,7 +2,7 @@
 //!
 //! PASS now means the reviewed defect is prevented; originals remain under review/r6.
 mod support;
-use coagomem_core::*;
+use ciagomem_core::*;
 use std::{
     collections::HashMap,
     fs,

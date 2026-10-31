@@ -1,0 +1,84 @@
+//! Reviewer R8 probes for the R7-4/R7-6 control binding. PASS while the defect exists.
+use ciagomem_core::io::{Outcome, SimIo};
+use ciagomem_core::{CoreControl, SlotArena, TenantWord, Visibility};
+use ciagomem_wal::envelope::KIND_DATA;
+use ciagomem_wal::gclog::*;
+
+fn cfg() -> LogConfig {
+    LogConfig {
+        block: 4096,
+        buf_bytes: 16384,
+        buffers: 4,
+        max_inflight: 3,
+        min_batch_bytes: 8192,
+        max_delay_ns: 5000,
+        capacity: 65536,
+        file: 0,
+        tail: TailMode::Pad,
+        max_retries: 3,
+    }
+}
+fn commit_one(log: &mut GroupCommitLog, io: &mut SimIo) -> u64 {
+    let lsn = log.append(1, KIND_DATA, b"a", Some(lsn_tag()), 0, io).unwrap();
+    log.poll(1_000_000, true, io);
+    let (ud, res) = io.complete(0, Outcome::Ok);
+    log.on_cqe(ud, res, io, &mut Vec::new(), &mut Vec::new()).unwrap();
+    lsn
+}
+fn lsn_tag() -> u64 {
+    1
+}
+fn slot_at(arena: &SlotArena<512>, applied: u64) -> ciagomem_core::SlotHandle {
+    arena
+        .install(0, TenantWord { tenant: 1, core: 0, layout_version: 1, flags: 0 }, 9, applied, 0)
+        .unwrap()
+        .unwrap()
+}
+
+/// R8-1a: a second log may bind the same core; its unflushed LSN is "Durable".
+#[test]
+fn defect_r8_1_two_logs_share_one_core_watermark() {
+    let controls = CoreControl::shared(1);
+    let arena = SlotArena::<512>::new(0, 1, controls.clone());
+    let mut io_a = SimIo::new(1, (cfg().data_offset() + cfg().capacity) as usize);
+    let (mut a, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    a.superblock_durable(&sb);
+    commit_one(&mut a, &mut io_a);
+    commit_one(&mut a, &mut io_a);
+    let published = controls[0].durable();
+    assert!(published >= 2);
+    let mut io_b = SimIo::new(1, (cfg().data_offset() + cfg().capacity) as usize);
+    let (mut b, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    b.superblock_durable(&sb);
+    assert_eq!(b.validate_arena(&arena), Ok(()));
+    let lsn = b.append(1, KIND_DATA, b"x", Some(7), 0, &mut io_b).unwrap();
+    assert_eq!(b.durable_lsn(), 0); // B has written nothing
+    assert!(lsn <= published);
+    let h = slot_at(&arena, lsn);
+    assert!(arena.read(h, 1, 9, Visibility::Durable, |_| Some(())).is_ok());
+}
+
+/// R8-1b: reopening with a shorter recovered prefix keeps the old watermark (fetch_max).
+#[test]
+fn defect_r8_1_reopen_with_shorter_recovery_keeps_stale_watermark() {
+    let controls = CoreControl::shared(1);
+    let arena = SlotArena::<512>::new(0, 1, controls.clone());
+    let mut io = SimIo::new(1, (cfg().data_offset() + cfg().capacity) as usize);
+    let (mut a, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    a.superblock_durable(&sb);
+    for _ in 0..3 {
+        commit_one(&mut a, &mut io);
+    }
+    let published = controls[0].durable();
+    assert!(published >= 3);
+    drop(a);
+    // Recovery stopped at LSN 1 (e.g. a later block failed its CRC).
+    let rec = Recovery { next_lsn: 2, ..Recovery::fresh() };
+    let (mut b, sb) = GroupCommitLog::open(cfg(), &rec, controls.clone(), 0);
+    b.superblock_durable(&sb);
+    assert_eq!(b.durable_lsn(), 1);
+    let lsn = b.append(1, KIND_DATA, b"x", Some(7), 0, &mut io).unwrap();
+    assert!(lsn >= 2 && lsn <= published && b.durable_lsn() < lsn);
+    let h = slot_at(&arena, lsn);
+    assert!(arena.read(h, 1, 9, Visibility::Durable, |_| Some(())).is_ok());
+}

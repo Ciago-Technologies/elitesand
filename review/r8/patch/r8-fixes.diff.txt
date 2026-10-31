@@ -5,9 +5,9 @@ diff -ruN -x target -x vendor -x '*.log' a/ciagomem-engine/src/runtime.rs b/ciag
  }
  pub struct Engine<J: Journal> {
      boot_epoch: u128,
--    clock: Arc<dyn coagomem_core::Clock>,
+-    clock: Arc<dyn ciagomem_core::Clock>,
 -    last_now: std::cell::Cell<u64>,
-+    clock: Arc<dyn coagomem_core::Clock + Send + Sync>,
++    clock: Arc<dyn ciagomem_core::Clock + Send + Sync>,
 +    last_now: std::sync::atomic::AtomicU64,
      shards: Vec<Shard>,
      limits: Limits,
@@ -16,8 +16,8 @@ diff -ruN -x target -x vendor -x '*.log' a/ciagomem-engine/src/runtime.rs b/ciag
          limits: Limits,
          journal: J,
          boot_epoch: u128,
--        clock: Arc<dyn coagomem_core::Clock>,
-+        clock: Arc<dyn coagomem_core::Clock + Send + Sync>,
+-        clock: Arc<dyn ciagomem_core::Clock>,
++        clock: Arc<dyn ciagomem_core::Clock + Send + Sync>,
      ) -> Result<Self> {
          if boot_epoch == 0
              || cores == 0
@@ -55,9 +55,9 @@ diff -ruN -x target -x vendor -x '*.log' a/ciagomem-engine/tests/r8_engine.rs b/
 +fn r8_3_engine_is_send_and_sync() {
 +    send_sync::<ciagomem_engine::Engine<ciagomem_engine::MemoryJournal>>();
 +}
-diff -ruN -x target -x vendor -x '*.log' a/coagomem-core/Cargo.toml b/coagomem-core/Cargo.toml
---- a/coagomem-core/Cargo.toml	2026-10-31 04:57:57.703481377 +0000
-+++ b/coagomem-core/Cargo.toml	2026-10-31 05:01:28.719481377 +0000
+diff -ruN -x target -x vendor -x '*.log' a/ciagomem-core/Cargo.toml b/ciagomem-core/Cargo.toml
+--- a/ciagomem-core/Cargo.toml	2026-10-31 04:57:57.703481377 +0000
++++ b/ciagomem-core/Cargo.toml	2026-10-31 05:01:28.719481377 +0000
 @@ -36,3 +36,7 @@
  [[test]]
  name = "r7_regressions"
@@ -66,9 +66,9 @@ diff -ruN -x target -x vendor -x '*.log' a/coagomem-core/Cargo.toml b/coagomem-c
 +[[test]]
 +name = "r8_regressions"
 +path = "../tests/r8_regressions.rs"
-diff -ruN -x target -x vendor -x '*.log' a/coagomem-core/src/destination.rs b/coagomem-core/src/destination.rs
---- a/coagomem-core/src/destination.rs	2026-10-31 04:57:57.707481377 +0000
-+++ b/coagomem-core/src/destination.rs	2026-10-31 05:00:08.495481377 +0000
+diff -ruN -x target -x vendor -x '*.log' a/ciagomem-core/src/destination.rs b/ciagomem-core/src/destination.rs
+--- a/ciagomem-core/src/destination.rs	2026-10-31 04:57:57.707481377 +0000
++++ b/ciagomem-core/src/destination.rs	2026-10-31 05:00:08.495481377 +0000
 @@ -11,18 +11,32 @@
  pub struct LocalExportRoot {
      directory: File,
@@ -106,9 +106,9 @@ diff -ruN -x target -x vendor -x '*.log' a/coagomem-core/src/destination.rs b/co
              || !session.allows(OP_OPERATOR | OP_READ)
              || relative.is_empty()
              || Path::new(relative).is_absolute()
-diff -ruN -x target -x vendor -x '*.log' a/coagomem-core/src/slot.rs b/coagomem-core/src/slot.rs
---- a/coagomem-core/src/slot.rs	2026-10-31 04:57:57.707481377 +0000
-+++ b/coagomem-core/src/slot.rs	2026-10-31 05:00:32.447481377 +0000
+diff -ruN -x target -x vendor -x '*.log' a/ciagomem-core/src/slot.rs b/ciagomem-core/src/slot.rs
+--- a/ciagomem-core/src/slot.rs	2026-10-31 04:57:57.707481377 +0000
++++ b/ciagomem-core/src/slot.rs	2026-10-31 05:00:32.447481377 +0000
 @@ -31,7 +31,7 @@
  use core::ptr::NonNull;
  use core::sync::atomic::{
@@ -156,9 +156,9 @@ diff -ruN -x target -x vendor -x '*.log' a/coagomem-core/src/slot.rs b/coagomem-
      pub fn core(&self, core: u8) -> &CoreControl {
          &self.cores[core as usize]
      }
-diff -ruN -x target -x vendor -x '*.log' a/coagomem-wal/src/gclog.rs b/coagomem-wal/src/gclog.rs
---- a/coagomem-wal/src/gclog.rs	2026-10-31 04:57:57.707481377 +0000
-+++ b/coagomem-wal/src/gclog.rs	2026-10-31 05:00:26.435481377 +0000
+diff -ruN -x target -x vendor -x '*.log' a/ciagomem-wal/src/gclog.rs b/ciagomem-wal/src/gclog.rs
+--- a/ciagomem-wal/src/gclog.rs	2026-10-31 04:57:57.707481377 +0000
++++ b/ciagomem-wal/src/gclog.rs	2026-10-31 05:00:26.435481377 +0000
 @@ -302,6 +302,12 @@
      }
  }
@@ -191,15 +191,15 @@ diff -ruN -x target -x vendor -x '*.log' a/coagomem-wal/src/gclog.rs b/coagomem-
          let epoch = rec.max_epoch.max(rec.sb.epoch) + 1;
          let sb = Superblock {
              seq: rec.sb.seq + 1,
-diff -ruN -x target -x vendor -x '*.log' a/coagomem-wal/tests/r8_recovery.rs b/coagomem-wal/tests/r8_recovery.rs
---- a/coagomem-wal/tests/r8_recovery.rs	1970-01-01 00:00:00.000000000 +0000
-+++ b/coagomem-wal/tests/r8_recovery.rs	2026-10-31 05:01:28.719481377 +0000
+diff -ruN -x target -x vendor -x '*.log' a/ciagomem-wal/tests/r8_recovery.rs b/ciagomem-wal/tests/r8_recovery.rs
+--- a/ciagomem-wal/tests/r8_recovery.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/ciagomem-wal/tests/r8_recovery.rs	2026-10-31 05:01:28.719481377 +0000
 @@ -0,0 +1,63 @@
 +//! R8-1 acceptance: one log per core, and no stale watermark above the recovered end.
-+use coagomem_core::io::{Outcome, SimIo};
-+use coagomem_core::CoreControl;
-+use coagomem_wal::envelope::KIND_DATA;
-+use coagomem_wal::gclog::*;
++use ciagomem_core::io::{Outcome, SimIo};
++use ciagomem_core::CoreControl;
++use ciagomem_wal::envelope::KIND_DATA;
++use ciagomem_wal::gclog::*;
 +fn cfg() -> LogConfig {
 +    LogConfig {
 +        block: 4096,
@@ -287,7 +287,7 @@ diff -ruN -x target -x vendor -x '*.log' a/tests/r8_regressions.rs b/tests/r8_re
 +++ b/tests/r8_regressions.rs	2026-10-31 05:01:28.715481377 +0000
 @@ -0,0 +1,60 @@
 +//! R8 acceptance tests: assert corrected behavior.
-+use coagomem_core::*;
++use ciagomem_core::*;
 +fn session(boot: u128, expires: u64) -> VerifiedMacaroon {
 +    let k = KeyedPrf([9; 32]);
 +    Macaroon::issue(

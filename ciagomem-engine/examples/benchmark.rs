@@ -1,9 +1,9 @@
 //! Reproducible local measurements, not a SQL comparison or production SLO claim.
-use ciagomem_engine::*;
-use coagomem_core::{
+use ciagomem_core::{
     Caveat, Integrity, KeyedPrf, Label, Macaroon, OP_OPERATOR, OP_READ, OP_WRITE, RequestCtx,
 };
-use coagomem_ql::parse;
+use ciagomem_engine::*;
+use ciagomem_ql::parse;
 use std::{hint::black_box, time::Instant};
 fn main() -> Result<()> {
     let key = KeyedPrf([7; 32]);
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
         Limits::default(),
         MemoryJournal::new(256 << 20),
         1,
-        std::sync::Arc::new(coagomem_core::MonotonicClock),
+        std::sync::Arc::new(ciagomem_core::MonotonicClock),
     )?;
     for id in 1..=10_000 {
         engine.put(
@@ -107,16 +107,16 @@ fn test_label(
     if integrity == Integrity::External {
         return Label::external(sources, readers);
     }
-    let issuer = coagomem_core::AttestationSigner::from_seed([3; 32]);
+    let issuer = ciagomem_core::AttestationSigner::from_seed([3; 32]);
     let tenant = readers.first().copied().unwrap_or(11);
-    let proof = issuer.provenance(coagomem_core::Provenance {
+    let proof = issuer.provenance(ciagomem_core::Provenance {
         tenant,
         session: 1,
         boot_epoch: 1,
         integrity: integrity as u8,
         sources,
         readers,
-        digest: coagomem_core::content_digest(b"value"),
+        digest: ciagomem_core::content_digest(b"value"),
         expires_at: 1000,
     });
     Label::attested(&proof, &issuer.verifier(), tenant, 1, 1, b"value", 1)

@@ -25,13 +25,13 @@ or a stale watermark. No dependency, persistent-format or struct-size change
 (`CoreControl` stays 256 B).
 
 Probes (`probes/`, pass while defects exist on the upload): copy
-`coagomem-wal/tests/r8_review.rs` (auto-discovered) and `tests/r8_review.rs` plus
+`ciagomem-wal/tests/r8_review.rs` (auto-discovered) and `tests/r8_review.rs` plus
 
     [[test]]
     name = "r8_review"
     path = "../tests/r8_review.rs"
 
-in `coagomem-core/Cargo.toml`. On the patched tree the WAL probes panic at `open`
+in `ciagomem-core/Cargo.toml`. On the patched tree the WAL probes panic at `open`
 (fixed); the export probe no longer compiles against the new signature and is replaced
 by `r8_2_export_root_rejects_expired_and_prior_boot_capabilities`.
 

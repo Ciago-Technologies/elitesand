@@ -4,7 +4,7 @@
 //! (it documents current behaviour). A test named `guard_*` PASSES when the
 //! claimed protection holds. Invert `defect_*` assertions once fixed.
 mod support;
-use coagomem_core::*;
+use ciagomem_core::*;
 use std::{
     collections::HashMap,
     fs,

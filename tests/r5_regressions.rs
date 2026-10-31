@@ -1,6 +1,6 @@
 //! Corrected guards: passing means the R5 defect is prevented.
 mod support;
-use coagomem_core::*;
+use ciagomem_core::*;
 use std::{collections::VecDeque, fs, io::Write};
 fn session(tenant: u128) -> VerifiedMacaroon {
     let k = KeyedPrf([9; 32]);
@@ -144,7 +144,7 @@ fn q4_public_deep_ast_validation_and_destruction_are_bounded() {
     std::thread::Builder::new()
         .stack_size(128 * 1024)
         .spawn(|| {
-            use coagomem_ql::*;
+            use ciagomem_ql::*;
             let mut tree = BoolExpr::And(vec![]);
             for _ in 0..50_000 {
                 tree = BoolExpr::And(vec![tree]);

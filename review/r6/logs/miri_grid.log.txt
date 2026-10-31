@@ -1258,7 +1258,7 @@ warning: use of deprecated associated function `core::num::<impl u8>::max_value`
 
 warning: `sha2` (lib) generated 2 warnings
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
-     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/coagomem-core/2f108ba5e11e6073/out/coagomem_core-2f108ba5e11e6073)
+     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/ciagomem-core/2f108ba5e11e6073/out/ciagomem_core-2f108ba5e11e6073)
 
 running 1 test
 test mesh::tests::grid_delivers_fifo_per_lane_without_loss_under_concurrency ... ok

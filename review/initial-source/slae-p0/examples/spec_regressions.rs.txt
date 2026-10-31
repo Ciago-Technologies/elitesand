@@ -6,7 +6,7 @@
 //! Calvin mask), so the failures are reproduced, not paraphrased.
 
 use slae_p0::calvin::{Participants, Vote, VoteTable, full_mask};
-use slae_p0::coagoql::{self, spec_examples::*};
+use slae_p0::ciaql::{self, spec_examples::*};
 
 #[allow(dead_code, clippy::all)]
 mod spec {
@@ -79,9 +79,9 @@ mod spec {
         pub source: CoagoSource,
         pub stages: Vec<CoagoStage<'a>>,
     }
-    pub fn parse_coagoql<'a>(query: &'a str) -> Result<CoagoQueryPlan<'a>, &'static str> {
+    pub fn parse_ciaql<'a>(query: &'a str) -> Result<CoagoQueryPlan<'a>, &'static str> {
         let mut pipeline = query.split("|>").map(str::trim);
-        let source_raw = pipeline.next().ok_or("Empty CoagoQL pipeline")?;
+        let source_raw = pipeline.next().ok_or("Empty CiaQL pipeline")?;
         let source = if let Some(id_str) = source_raw.strip_prefix("ACTOR(").and_then(|s| s.strip_suffix(')')) {
             CoagoSource::SingleActor(parse_u64_id(id_str)?)
         } else if let Some(range_str) = source_raw.strip_prefix("SCAN ACTORS[").and_then(|s| s.strip_suffix(']')) {
@@ -92,7 +92,7 @@ mod spec {
                 CoagoSource::ScanRange { start: parse_u64_id(s)?, end: parse_u64_id(e)? }
             }
         } else {
-            return Err("Unrecognized CoagoQL source clause");
+            return Err("Unrecognized CiaQL source clause");
         };
         let mut stages = Vec::new();
         for raw_stage in pipeline {
@@ -145,7 +145,7 @@ fn spec_stage_name(s: &spec::CoagoStage<'_>) -> &'static str {
 }
 
 fn main() {
-    println!("== CoagoQL: spec parser vs fixed parser ==");
+    println!("== CiaQL: spec parser vs fixed parser ==");
     let queries = [
         ("Example 1", EXAMPLE_1),
         ("Example 2", EXAMPLE_2),
@@ -155,11 +155,11 @@ fn main() {
         ("typo", "ACTOR(1) |> MUTTATE { state.x = 1 }"),
     ];
     for (name, q) in queries {
-        let old = match spec::parse_coagoql(q) {
+        let old = match spec::parse_ciaql(q) {
             Ok(p) => format!("Ok {:?}", p.stages.iter().map(spec_stage_name).collect::<Vec<_>>()),
             Err(e) => format!("Err({e:?})"),
         };
-        let new = match coagoql::parse(q) {
+        let new = match ciaql::parse(q) {
             Ok(p) => format!("Ok {:?}", p.stages.iter().map(|s| s.name()).collect::<Vec<_>>()),
             Err(e) => {
                 let (l, c) = e.line_col(q);

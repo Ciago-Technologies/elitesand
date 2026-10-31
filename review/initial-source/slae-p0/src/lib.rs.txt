@@ -1,4 +1,4 @@
-//! CoagoMem-SLAE P0 kernel fixes.
+//! Ciagomem-SLAE P0 kernel fixes.
 //!
 //! | Module      | Fixes                                                                 |
 //! |-------------|-----------------------------------------------------------------------|
@@ -10,12 +10,12 @@
 //! | `gclog`     | Per-tenant O_DIRECT writes -> per-core group-commit pipeline          |
 //! | `uring`     | io_uring backend (fixed buffers, MSG_RING wakeups)                    |
 //! | `calvin`    | `1 << 64` commit-mask overflow + bit-63 collision -> tagged vote slots |
-//! | `coagoql`   | Parser silently dropping MUTATE / PROJECT / GROUP_BY -> full grammar  |
+//! | `ciaql`   | Parser silently dropping MUTATE / PROJECT / GROUP_BY -> full grammar  |
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]
 
 pub mod calvin;
-pub mod coagoql;
+pub mod ciaql;
 pub mod envelope;
 pub mod gclog;
 pub mod io;

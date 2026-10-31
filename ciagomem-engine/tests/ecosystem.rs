@@ -1,10 +1,10 @@
-use ciagomem_engine::*;
-use ciagomem_engine::{index::Sq8, links::OnDelete};
-use coagomem_core::{
+use ciagomem_core::{
     Caveat, Integrity, KeyedPrf, Label, Macaroon, OP_OPERATOR, OP_READ, OP_WRITE, RequestCtx,
     VerifiedMacaroon,
 };
-use coagomem_ql::parse;
+use ciagomem_engine::*;
+use ciagomem_engine::{index::Sq8, links::OnDelete};
+use ciagomem_ql::parse;
 fn session(tenant: u128) -> VerifiedMacaroon {
     let k = KeyedPrf([7; 32]);
     Macaroon::issue(
@@ -551,7 +551,7 @@ fn all_resource_failures_are_explicit_and_do_not_commit() {
 }
 #[test]
 fn join_requests_and_arc_snapshots_travel_real_spsc_lanes() {
-    use coagomem_core::mesh::Mesh;
+    use ciagomem_core::mesh::Mesh;
     let t = session(11);
     let mut e = engine();
     e.put(record(2, 11, &[("name", Scalar::Text("org".into()))]), &t)
@@ -884,30 +884,30 @@ fn test_label(
     if integrity == Integrity::External {
         return Label::external(sources, readers);
     }
-    let issuer = coagomem_core::AttestationSigner::from_seed([3; 32]);
+    let issuer = ciagomem_core::AttestationSigner::from_seed([3; 32]);
     let tenant = readers.first().copied().unwrap_or(11);
-    let proof = issuer.provenance(coagomem_core::Provenance {
+    let proof = issuer.provenance(ciagomem_core::Provenance {
         tenant,
         session: 1,
         boot_epoch: 1,
         integrity: integrity as u8,
         sources,
         readers,
-        digest: coagomem_core::content_digest(b"value"),
+        digest: ciagomem_core::content_digest(b"value"),
         expires_at: 1000,
     });
     Label::attested(&proof, &issuer.verifier(), tenant, 1, 1, b"value", 1)
 }
 
 struct TestClock;
-impl coagomem_core::Clock for TestClock {
+impl ciagomem_core::Clock for TestClock {
     fn now_ns(&self) -> u64 {
         1
     }
 }
 
 struct RequestClock(std::sync::atomic::AtomicU64);
-impl coagomem_core::Clock for RequestClock {
+impl ciagomem_core::Clock for RequestClock {
     fn now_ns(&self) -> u64 {
         self.0.load(std::sync::atomic::Ordering::Relaxed)
     }

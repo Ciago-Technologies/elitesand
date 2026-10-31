@@ -1,5 +1,5 @@
---- a/coagomem-core/src/dirty.rs
-+++ b/coagomem-core/src/dirty.rs
+--- a/ciagomem-core/src/dirty.rs
++++ b/ciagomem-core/src/dirty.rs
 @@ -42,9 +42,9 @@
          if i >= self.lsn.len() {
              return Err(DirtyError::InvalidTenant);
@@ -37,8 +37,8 @@
              return Err(DirtyError::StaleCheckpoint);
          }
          self.checkpointing[i] = false;
---- a/coagomem-core/src/lifecycle.rs
-+++ b/coagomem-core/src/lifecycle.rs
+--- a/ciagomem-core/src/lifecycle.rs
++++ b/ciagomem-core/src/lifecycle.rs
 @@ -111,6 +111,18 @@
              && self.wal_start_lsn - 1 <= checkpoint
              && checkpoint <= self.wal_end_lsn
@@ -58,8 +58,8 @@
  }
  #[derive(Debug, Clone, Copy)]
  struct Meta {
---- a/coagomem-core/src/security.rs
-+++ b/coagomem-core/src/security.rs
+--- a/ciagomem-core/src/security.rs
++++ b/ciagomem-core/src/security.rs
 @@ -209,6 +209,8 @@
      per_tenant: usize,
      max_tenants: usize,
@@ -86,8 +86,8 @@
          if expires <= now || expires - now > MAX_APPROVAL_TTL_NS {
              return Err(FlowDenied::InvalidEndorsement);
          }
---- a/coagomem-core/Cargo.toml
-+++ b/coagomem-core/Cargo.toml
+--- a/ciagomem-core/Cargo.toml
++++ b/ciagomem-core/Cargo.toml
 @@ -32,3 +32,7 @@
  [[test]]
  name = "r6_regressions"
@@ -121,7 +121,7 @@
 @@ -0,0 +1,168 @@
 +//! R7 acceptance tests: PASS when R7-1..R7-3 are fixed.
 +mod support;
-+use coagomem_core::*;
++use ciagomem_core::*;
 +
 +fn session(tenant: u128) -> VerifiedMacaroon {
 +    let k = KeyedPrf([9; 32]);

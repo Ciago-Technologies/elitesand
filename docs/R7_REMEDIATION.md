@@ -6,7 +6,7 @@
 > Historical ledger. The [R8 ledger](R8_REMEDIATION.md) supersedes durability binding, local export freshness, Engine thread traits and current cleanup/policy layout.
 
 
-Input: `New File/CiagoMem-SLAE R6 Remediation Verification (R7).md` and `ciagomem-r7-fix-patch.zip`. All seven supplied reviewer probes passed before changes, reproducing the four described defect cases and three guards. The supplied patch applied cleanly; its full source, diff, probes and external logs are retained as text under [review/r7](../review/r7). Active acceptance tests assert corrected behavior, not the continued existence of defects.
+Input: `New File/Ciagomem-SLAE R6 Remediation Verification (R7).md` and `ciagomem-r7-fix-patch.zip`. All seven supplied reviewer probes passed before changes, reproducing the four described defect cases and three guards. The supplied patch applied cleanly; its full source, diff, probes and external logs are retained as text under [review/r7](../review/r7). Active acceptance tests assert corrected behavior, not the continued existence of defects.
 
 | Finding | Implementation and evidence | Remaining boundary |
 | --- | --- | --- |
@@ -21,6 +21,6 @@ Input: `New File/CiagoMem-SLAE R6 Remediation Verification (R7).md` and `ciagome
 
 The three supplied fixes add no dependency or persistent-format change. Additional boundary fixes change WAL open/on_cqe and Engine::new signatures; all in-tree callers and benchmark fixtures were updated. Dirty arrays remain 33 bytes per slot. The replay tracker adds one u64 clock. New clock/control references are engine-private; no production memory/RSS claim follows.
 
-Current acceptance sources: [R7 core tests](../tests/r7_regressions.rs), [engine security tests](../ciagomem-engine/tests/ecosystem.rs), [WAL recovery/control test](../coagomem-wal/tests/r7_recovery.rs), plus the existing cross-class WAL fence regression and simulated crash cycles. The engine benchmark now uses a real monotonic clock for validity checks rather than an unchecked cached token; its latency is still only a local smoke result.
+Current acceptance sources: [R7 core tests](../tests/r7_regressions.rs), [engine security tests](../ciagomem-engine/tests/ecosystem.rs), [WAL recovery/control test](../ciagomem-wal/tests/r7_recovery.rs), plus the existing cross-class WAL fence regression and simulated crash cycles. The engine benchmark now uses a real monotonic clock for validity checks rather than an unchecked cached token; its latency is still only a local smoke result.
 
 The external R7 reviewer reports Miri on the preceding R6 core library and on its supplied patch's selected R6/R7 tests, plus a patched aarch64 compile check. These logs are preserved and attributed to that reviewer. They do not verify our additional engine/control-boundary changes. Locally executed checks are in [VERIFICATION.md](VERIFICATION.md). A production anchor, replay/repair service, node/reactor wiring, model checking, ARM execution and hardware power-loss qualification remain open.

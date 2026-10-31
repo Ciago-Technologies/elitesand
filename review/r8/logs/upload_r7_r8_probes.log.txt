@@ -2207,7 +2207,7 @@ failures:
 
 ---- defect_r7_1_logged_lsn_rejected_by_barrier_is_never_pinned stdout ----
 
-thread 'defect_r7_1_logged_lsn_rejected_by_barrier_is_never_pinned' (4534) panicked at coagomem-core/../tests/r7_review.rs:54:5:
+thread 'defect_r7_1_logged_lsn_rejected_by_barrier_is_never_pinned' (4534) panicked at ciagomem-core/../tests/r7_review.rs:54:5:
 assertion `left == right` failed
   left: Ok(())
  right: Err(CheckpointInProgress)
@@ -2215,7 +2215,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 ---- defect_r7_3_non_monotonic_now_reopens_replay_window stdout ----
 
-thread 'defect_r7_3_non_monotonic_now_reopens_replay_window' (4537) panicked at coagomem-core/../tests/r7_review.rs:198:5:
+thread 'defect_r7_3_non_monotonic_now_reopens_replay_window' (4537) panicked at ciagomem-core/../tests/r7_review.rs:198:5:
 replay accepted
 
 
@@ -2225,7 +2225,7 @@ failures:
 
 test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 
-error: test failed, to rerun pass `-p coagomem-core --test r7_review`
+error: test failed, to rerun pass `-p ciagomem-core --test r7_review`
 warning: use of deprecated constant `std::i64::MAX`: replaced by the `MAX` associated constant on this type
    --> vendor/typenum-1.17.0/build/main.rs:185:29
     |

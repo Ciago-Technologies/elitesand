@@ -1,5 +1,5 @@
 //! R8 acceptance tests: assert corrected behavior.
-use coagomem_core::*;
+use ciagomem_core::*;
 fn session(boot: u128, expires: u64) -> VerifiedMacaroon {
     let k = KeyedPrf([9; 32]);
     Macaroon::issue(

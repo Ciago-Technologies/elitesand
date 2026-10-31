@@ -896,7 +896,7 @@ help: use `'_` for type paths
 
    Compiling hmac v0.12.1 (/home/user/workspace/r6/ciagomem-slae/vendor/hmac-0.12.1)
    Compiling bitflags v2.13.2 (/home/user/workspace/r6/ciagomem-slae/vendor/bitflags-2.13.2)
-   Compiling coagomem-ql v0.3.0 (/home/user/workspace/r6/ciagomem-slae/coagomem-ql)
+   Compiling ciagomem-ql v0.3.0 (/home/user/workspace/r6/ciagomem-slae/ciagomem-ql)
 warning: `syn` (lib) generated 67 warnings (45 duplicates) (run `cargo fix --lib -p syn` to apply 19 suggestions)
    Compiling curve25519-dalek-derive v0.1.1 (/home/user/workspace/r6/ciagomem-slae/vendor/curve25519-dalek-derive-0.1.1)
 warning: the feature `avx512_target_feature` has been stable since 1.89.0 and no longer requires an attribute to enable
@@ -1285,9 +1285,9 @@ warning: unnecessary `unsafe` block
    Compiling ed25519-dalek v2.1.1 (/home/user/workspace/r6/ciagomem-slae/vendor/ed25519-dalek-2.1.1)
 warning: `curve25519-dalek` (lib) generated 33 warnings
    Compiling ciagomem-crypto v0.3.0 (/home/user/workspace/r6/ciagomem-slae/ciagomem-crypto)
-   Compiling coagomem-core v0.3.0 (/home/user/workspace/r6/ciagomem-slae/coagomem-core)
+   Compiling ciagomem-core v0.3.0 (/home/user/workspace/r6/ciagomem-slae/ciagomem-core)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 8.07s
-     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/coagomem-core/2f108ba5e11e6073/out/coagomem_core-2f108ba5e11e6073)
+     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/ciagomem-core/2f108ba5e11e6073/out/ciagomem_core-2f108ba5e11e6073)
 
 running 9 tests
 test lifecycle::tests::slot_is_freed_only_after_its_checkpoint_cqe ... ok

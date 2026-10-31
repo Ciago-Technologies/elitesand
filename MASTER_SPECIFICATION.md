@@ -1,12 +1,12 @@
-# CiagoMem — SLAE: Technical Whitepaper and Master Engineering Specification
+# Ciagomem — SLAE: Technical Whitepaper and Master Engineering Specification
 
 **Version:** 3.0, R9 remediation revision — 31 October 2026\
-**Product:** CiagoMem — SLAE, the Unified State-Log Actor Engine (“The Store”)\
-**Language:** CiaQL — CiagoMem Query and Cognitive Language\
+**Product:** Ciagomem — SLAE, the Unified State-Log Actor Engine (“The Store”)\
+**Language:** CiaQL — Ciagomem Query and Cognitive Language\
 **Status:** Architecture and component implementation; **not signed off for production**\
 **Workspace:** [`ciagomem-slae`](README.md), package version `0.3.0`
 
-This revision incorporates the [R9 verification report](review/r9/CiagoMem-SLAE-R8-Remediation-Verification.md.txt) and current R9 patch ZIP. Earlier reports are retained in [review/reports](review/reports), with patch/probe/log evidence under review and original extracted source evidence under review/initial-source. Superseded ZIPs and extracted workspaces were removed after preservation; see the [cleanup manifest](docs/cleanup-manifest.json). The current workspace is authoritative; historical evidence is not source to copy over it.
+This revision incorporates the [R9 verification report](review/r9/Ciagomem-SLAE-R8-Remediation-Verification.md.txt) and current R9 patch ZIP. Earlier reports are retained in [review/reports](review/reports), with patch/probe/log evidence under review and original extracted source evidence under review/initial-source. Superseded ZIPs and extracted workspaces were removed after preservation; see the [cleanup manifest](docs/cleanup-manifest.json). The current workspace is authoritative; historical evidence is not source to copy over it.
 
 “Must” describes a design requirement. “Implemented” identifies code present in the workspace. Targets and proposed deployment settings are not measurements or production guarantees. No Miri, cross-architecture, power-cut, or performance result from the supplied review is represented as a result obtained for this revision.
 
@@ -114,7 +114,7 @@ The 10,432 MiB arena provides about 10.68 KiB per tenant if all one million are 
 
 Within the nominal 154 MiB log/export portion, an example split assigns 64 MiB to at most **16,384 concurrent 4 KiB windows** and 90 MiB to other buffers. These are deployment choices, not automatically active defaults. `ExportBudget` must be shared across all sessions. Count at least two engine file descriptors per window, plus mappings and receiving-process descriptors, against host limits. Larger windows reduce the session count proportionally.
 
-Labels have variable representation and metadata overhead. On the tested x86_64 build, `Label` is 176 bytes before up to 64 bytes of reader storage and allocator overhead; `CoreControl` is 256 bytes. The wire image header is 128 bytes, distinct from the 64-byte Rust ExtentImage value. Reproduce with `cargo run --release --offline -p coagomem-core --example layout`. Budget actual `Label`, reader-set allocations, persisted provenance, frames, and WAL expansion. Do not assume the old 17-byte bitmap label cost applies to the new explicit-reader representation.
+Labels have variable representation and metadata overhead. On the tested x86_64 build, `Label` is 176 bytes before up to 64 bytes of reader storage and allocator overhead; `CoreControl` is 256 bytes. The wire image header is 128 bytes, distinct from the 64-byte Rust ExtentImage value. Reproduce with `cargo run --release --offline -p ciagomem-core --example layout`. Budget actual `Label`, reader-set allocations, persisted provenance, frames, and WAL expansion. Do not assume the old 17-byte bitmap label cost applies to the new explicit-reader representation.
 
 ## 4. Concurrency and progress
 
@@ -255,7 +255,7 @@ Parsing does not execute queries or authorize them. Policy validates the resulti
 
 The `ciagomem-engine` reference crate now executes typed reference joins, programmatic bounded equijoins, registered referential links, strict and chunked cascades, projected/schema upgrades, hybrid search, and grouped aggregates. It uses explicit bounded selection rules rather than a general cost-based join optimizer. Tenant-name aliases and unsupported administration syntax remain errors. The following sections specify these capabilities and distinguish the reference implementation from production reactor/WAL integration.
 
-This document specifies the five database capabilities in the CiagoMem ecosystem and records their implementation boundaries. The accompanying `ciagomem-engine` crate is an executable, owner-local reference engine. It composes typed CiaQL, verified sessions, per-tenant indexes, immutable snapshots, and journal-gated writes. It does not start a network server or pin operating-system threads.
+This document specifies the five database capabilities in the Ciagomem ecosystem and records their implementation boundaries. The accompanying `ciagomem-engine` crate is an executable, owner-local reference engine. It composes typed CiaQL, verified sessions, per-tenant indexes, immutable snapshots, and journal-gated writes. It does not start a network server or pin operating-system threads.
 
 ### 10.1. Architecture and invariants
 
@@ -486,18 +486,18 @@ The future boot path must validate memory/FD budgets, page availability, clockso
 The current dependency DAG is:
 
 ```text
-coagomem-ql ──────────┐
-                     ├── coagomem-core ── coagomem-wal
+ciagomem-ql ──────────┐
+                     ├── ciagomem-core ── ciagomem-wal
 ciagomem-crypto ──────┘          │
                                └── ciagomem-engine ← roaring / flatbuffers / wide
-                                    (also depends directly on coagomem-ql)
+                                    (also depends directly on ciagomem-ql)
 ```
 
-The parser has no storage, cryptography or I/O dependency. Only the crypto crate directly names hash/MAC dependencies. Existing `coagomem-*` crate names are retained for compatibility; the fuller `ciagomem-types/sync/arena/io-api/sim/txn/reactor/server` split proposed by the review remains a staged refactor, not a completed migration.
+The parser has no storage, cryptography or I/O dependency. Only the crypto crate directly names hash/MAC dependencies. Workspace crates use the canonical `ciagomem-*` names, Rust imports use `ciagomem_*`, and the CiaQL parser module is `ciaql` (`ciaql.rs`). Consumers of older revisions must update their dependency names and imports.
 
 Core compiles the dependency-free envelope source physically located in the WAL source directory, and WAL re-exports it. The Cargo graph is acyclic, but this source-layout coupling must be removed in the future types/format crate extraction. P0 arena/I/O code still contains `libc` operations; the final syscall and unsafe-code partition is not yet achieved.
 
-The vulnerable v2.5 API is under `coagomem_core::legacy` and is compiled only with the nondefault `legacy-audit` feature. Its tests intentionally reproduce defects. It is not the default authorization path. Original ZIP code and adversarial assertions are preserved as text in `review/v30` for provenance.
+The vulnerable v2.5 API is under `ciagomem_core::legacy` and is compiled only with the nondefault `legacy-audit` feature. Its tests intentionally reproduce defects. It is not the default authorization path. Original ZIP code and adversarial assertions are preserved as text in `review/v30` for provenance.
 
 Build from `ciagomem-slae/` with Rust **1.89 or newer** (standard-library file locking is required; the available 1.99.1 toolchain is the tested toolchain):
 
@@ -513,20 +513,20 @@ Cryptographic and query-engine dependencies are vendored from unmodified upstrea
 
 The crate manifests, modules and tests in the workspace are authoritative:
 
-- [Core manifest](coagomem-core/Cargo.toml), [security](coagomem-core/src/security.rs), [policy](coagomem-core/src/policy.rs), [dirty list](coagomem-core/src/dirty.rs), [votes](coagomem-core/src/calvin.rs).
-- [Typed parser](coagomem-ql/src/coagoql.rs), [cryptographic capabilities](ciagomem-crypto/src/lib.rs).
-- [Lifecycle](coagomem-core/src/lifecycle.rs), [group commit](coagomem-wal/src/gclog.rs), [envelopes](coagomem-wal/src/envelope.rs).
+- [Core manifest](ciagomem-core/Cargo.toml), [security](ciagomem-core/src/security.rs), [policy](ciagomem-core/src/policy.rs), [dirty list](ciagomem-core/src/dirty.rs), [votes](ciagomem-core/src/calvin.rs).
+- [Typed parser](ciagomem-ql/src/ciaql.rs), [cryptographic capabilities](ciagomem-crypto/src/lib.rs).
+- [Lifecycle](ciagomem-core/src/lifecycle.rs), [group commit](ciagomem-wal/src/gclog.rs), [envelopes](ciagomem-wal/src/envelope.rs).
 - [Corrected review regressions](tests/v30_regressions.rs).
 - [Actor-native runtime](ciagomem-engine/src/runtime.rs), [execution tests](ciagomem-engine/tests/ecosystem.rs), and [detailed ecosystem design](docs/ACTOR_NATIVE_QUERY_ENGINE.md).
 
 ### 12.2 Core library listing
 
-This listing is synchronized from `coagomem-core/src/lib.rs`. It is a **workspace module**, not a self-contained crate: companion modules and Cargo dependencies above are required. The validator checks exact source equality so prose and implementation cannot silently diverge.
+This listing is synchronized from `ciagomem-core/src/lib.rs`. It is a **workspace module**, not a self-contained crate: companion modules and Cargo dependencies above are required. The validator checks exact source equality so prose and implementation cannot silently diverge.
 
 <!-- BEGIN REVIEWED CORE SOURCE -->
 
 ```rust
-//! CiagoMem component kernel. Canonical storage types are the persistence-wired P0 family.
+//! Ciagomem component kernel. Canonical storage types are the persistence-wired P0 family.
 #![allow(clippy::too_many_arguments)]
 pub use calvin::{Participants, Vote, VoteTable};
 pub use seqlock::{
@@ -578,10 +578,10 @@ pub mod security;
 pub use ciagomem_crypto::*;
 pub use security::*;
 pub mod policy;
-pub use coagomem_ql::{ParseError, Query as CiaQuery, Source, Stage, parse as parse_ciaql};
+pub use ciagomem_ql::{ParseError, Query as CiaQuery, Source, Stage, parse as parse_ciaql};
 pub use policy::*;
 pub mod calvin;
-#[path = "../../coagomem-wal/src/envelope.rs"]
+#[path = "../../ciagomem-wal/src/envelope.rs"]
 pub mod envelope;
 #[cfg(target_os = "linux")]
 pub mod export_window;

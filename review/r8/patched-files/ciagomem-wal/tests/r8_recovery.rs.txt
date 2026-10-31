@@ -1,0 +1,63 @@
+//! R8-1 acceptance: one log per core, and no stale watermark above the recovered end.
+use ciagomem_core::io::{Outcome, SimIo};
+use ciagomem_core::CoreControl;
+use ciagomem_wal::envelope::KIND_DATA;
+use ciagomem_wal::gclog::*;
+fn cfg() -> LogConfig {
+    LogConfig {
+        block: 4096,
+        buf_bytes: 16384,
+        buffers: 4,
+        max_inflight: 3,
+        min_batch_bytes: 8192,
+        max_delay_ns: 5000,
+        capacity: 65536,
+        file: 0,
+        tail: TailMode::Pad,
+        max_retries: 3,
+    }
+}
+fn io() -> SimIo {
+    SimIo::new(1, (cfg().data_offset() + cfg().capacity) as usize)
+}
+fn commit(log: &mut GroupCommitLog, io: &mut SimIo) {
+    log.append(1, KIND_DATA, b"a", Some(1), 0, io).unwrap();
+    log.poll(1_000_000, true, io);
+    let (ud, res) = io.complete(0, Outcome::Ok);
+    log.on_cqe(ud, res, io, &mut Vec::new(), &mut Vec::new()).unwrap();
+}
+#[test]
+fn r8_1_second_log_on_same_core_is_rejected_until_first_is_dropped() {
+    let controls = CoreControl::shared(1);
+    let (a, _) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    let c2 = controls.clone();
+    let second = std::panic::catch_unwind(move || {
+        GroupCommitLog::open(cfg(), &Recovery::fresh(), c2, 0);
+    });
+    assert!(second.is_err());
+    drop(a);
+    let (_b, _) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls, 0);
+}
+#[test]
+fn r8_1_reopen_rejects_watermark_beyond_recovered_end_and_accepts_exact_prefix() {
+    let controls = CoreControl::shared(1);
+    let mut d = io();
+    let (mut a, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    a.superblock_durable(&sb);
+    for _ in 0..3 {
+        commit(&mut a, &mut d);
+    }
+    let published = controls[0].durable();
+    drop(a);
+    let c2 = controls.clone();
+    let short = std::panic::catch_unwind(move || {
+        let rec = Recovery { next_lsn: 2, ..Recovery::fresh() };
+        GroupCommitLog::open(cfg(), &rec, c2, 0);
+    });
+    assert!(short.is_err());
+    // The failed open released its claim; an exact recovered prefix reopens normally.
+    let rec = Recovery { next_lsn: published + 1, ..Recovery::fresh() };
+    let (mut b, sb) = GroupCommitLog::open(cfg(), &rec, controls.clone(), 0);
+    b.superblock_durable(&sb);
+    assert_eq!(controls[0].durable(), published);
+}

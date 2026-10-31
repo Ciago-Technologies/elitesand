@@ -1,4 +1,4 @@
-use coagomem_core::legacy::*;
+use ciagomem_core::legacy::*;
 
 fn names(q: &CiaQuery) -> Vec<String> {
     q.stages

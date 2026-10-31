@@ -20,6 +20,6 @@ Reported actor/index byte estimate: **10,260,000 bytes**, excluding independent 
 
 See [raw measurements and source hashes](ecosystem-benchmark.json) and [benchmark source](../ciagomem-engine/examples/benchmark.rs).
 
-The indexed/scalar difference demonstrates selective candidate elimination inside CiagoMem. It does **not** establish a speedup against an indexed SQL database, Redis, a vector database or an AI-memory service. Snapshot timing does not include parsing, network transport, payload projection, durable I/O, remote joins or LLM execution. No universal sub-200 ns query claim follows from it.
+The indexed/scalar difference demonstrates selective candidate elimination inside Ciagomem. It does **not** establish a speedup against an indexed SQL database, Redis, a vector database or an AI-memory service. Snapshot timing does not include parsing, network transport, payload projection, durable I/O, remote joins or LLM execution. No universal sub-200 ns query claim follows from it.
 
 A fair external comparison still needs equivalent schemas/indexes, datasets, selectivity, query semantics, durability, concurrency, memory/RSS accounting, warm/cold conditions and latency distributions over a sustained run.

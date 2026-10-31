@@ -4,9 +4,9 @@
 //! is still present. When a fix lands, the test must FAIL; then invert its assertion and
 //! move it to `v30_regressions.rs` as a guard. `r5_ok_*` tests check properties that hold.
 //!
-//! Run: cargo test --release --offline -p coagomem-core --test r5_review
-use coagomem_core::*;
-use coagomem_ql::{BoolExpr, CompOp, FieldPath, Literal, Predicate, Query, Root, Value};
+//! Run: cargo test --release --offline -p ciagomem-core --test r5_review
+use ciagomem_core::*;
+use ciagomem_ql::{BoolExpr, CompOp, FieldPath, Literal, Predicate, Query, Root, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn session(tenant: u128, ops: u64) -> VerifiedMacaroon {
@@ -79,7 +79,7 @@ fn r5_defect_q2_unknown_function_call_accepted_by_parser_and_policy() {
 fn r5_defect_q3_ref_literal_has_no_mac() {
     let q = parse_ciaql(r#"ACTOR(1) |> MUTATE { state.r = $ref:0x99A4F012 }"#).unwrap();
     let Stage::Mutate(m) = &q.stages[0] else { panic!() };
-    let coagomem_ql::Mutation::Assign { value, .. } = &m[0] else { panic!() };
+    let ciagomem_ql::Mutation::Assign { value, .. } = &m[0] else { panic!() };
     assert_eq!(*value, Value::Ref(0x99A4_F012)); // u64 only: no MAC field exists
 }
 
@@ -127,7 +127,7 @@ fn r5_child_deep_ast() {
                 source: Source::Actor(1),
                 stages: vec![Stage::Filter(e)],
             };
-            let r = coagomem_ql::validate_query_ast(&q);
+            let r = ciagomem_ql::validate_query_ast(&q);
             eprintln!("validate returned {r:?}");
             std::mem::forget(q); // drop is also recursive; isolate the validator
         })
@@ -306,7 +306,7 @@ fn r5_defect_d1_checkpoint_forgets_mid_checkpoint_mutation() {
 /// and the higher image_seq wins A/B selection.
 #[test]
 fn r5_defect_i1_stale_incarnation_image_validates() {
-    use coagomem_core::envelope::ExtentImage;
+    use ciagomem_core::envelope::ExtentImage;
     let body = vec![0xAAu8; 4096 - 64];
     let old = ExtentImage {
         tenant: 5,

@@ -1,7 +1,7 @@
 //! Corrected regression guards derived from New File/ciagomem-v30-review-harness.zip.
 //! PASS means the reviewed defect is rejected, unlike the archived reproduction tests.
 mod support;
-use coagomem_core::*;
+use ciagomem_core::*;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -106,7 +106,7 @@ fn s3b_vector_and_metric_retained() {
         panic!()
     };
     assert_eq!(vector, &[0.1, 0.2]);
-    assert_eq!(*metric, coagomem_ql::Metric::Cosine);
+    assert_eq!(*metric, ciagomem_ql::Metric::Cosine);
     assert_eq!(*threshold, 0.8);
     // Runtime variable binding is not implemented; reject instead of discarding the vector.
     assert!(parse_ciaql("@1 similarity(vector: $q, metric: cosine, threshold: 0.8)").is_err());
@@ -576,7 +576,7 @@ fn checked_primitives_reject_regression_before_mutating() {
 }
 #[test]
 fn p0_slot_regressions_are_also_rejected_in_release() {
-    use coagomem_core::slot as p0;
+    use ciagomem_core::slot as p0;
     let a = p0::SlotArena::<512>::new_heap(0, 1, CoreControl::shared(1));
     let h = a
         .install(
@@ -624,7 +624,7 @@ fn shorthand_and_pipeline_produce_same_ast() {
 #[cfg(target_os = "linux")]
 #[test]
 fn sealed_export_windows_enforce_and_release_global_budget() {
-    use coagomem_core::export_window::{ExportBudget, SealedExportWindow};
+    use ciagomem_core::export_window::{ExportBudget, SealedExportWindow};
     let budget = ExportBudget::new(4096, 1);
     let window = SealedExportWindow::create_and_selftest(4096, &budget).unwrap();
     assert_eq!(budget.usage(), (4096, 1));

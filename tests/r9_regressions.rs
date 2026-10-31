@@ -1,5 +1,5 @@
 //! R9 acceptance: lifecycle/arena teardown with outstanding device I/O stays sound.
-use coagomem_core::*;
+use ciagomem_core::*;
 fn lc_cfg() -> lifecycle::LifecycleConfig {
     lifecycle::LifecycleConfig {
         low_free: 0,

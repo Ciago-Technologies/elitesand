@@ -1,28 +1,26 @@
 {
-  "planning": "deep",
+  "planning": "compact",
   "context_depth": "dependency",
   "verification_depth": "impact",
   "delegation": "none",
   "reason_codes": [
-    "R9-device-buffer-lifetime",
-    "exclusive-publication-capability",
-    "authorized-cleanup"
+    "canonical-project-naming",
+    "user-facing-readme",
+    "runnable-onboarding-example"
   ],
   "allowed_write_scope": [
-    "ciagomem-slae",
-    "ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md",
-    "ciagomem-r9-fixed-review.zip",
-    "ciagomem-r8-fixed-review.zip",
-    "New File/ciagomem-r8-fix-patch.zip",
-    "New File/CiagoMem-SLAE R7 Remediation Verification (R8).md"
+    "ciagomem-slae/** (excluding vendor and .git)",
+    "master specification and generated review bundle"
   ],
   "acceptance": [
-    "supplied R9 probes evaluated in bounded child processes",
-    "R9 fixes and callers verified",
-    "teardown/new-submission lifetime regressions covered",
-    "single project policy JSON",
-    "obsolete uploads removed after preserving evidence",
-    "specification synchronized and fresh review ZIP validated"
+    "README provides clone/build/run instructions",
+    "quickstart executes a real insert/update/read with assertions",
+    "public feature and persistence claims match implementation",
+    "formatting and documentation validator pass",
+    "no obsolete project identifiers in owned paths or content except explicit prohibition rules",
+    "default and all-feature release suites pass after renaming",
+    "quickstart and workspace validator pass",
+    "stage, commit and push without rewriting remote history"
   ],
   "project_invariants": [
     "five-crate acyclic workspace",
@@ -57,5 +55,19 @@
     "ciagomem-r8-fixed-review.zip",
     "New File/ciagomem-r8-fix-patch.zip"
   ],
-  "maintenance": "Update policy.json in place; do not create revision-specific policy files."
+  "maintenance": "Update policy.json in place; do not create revision-specific policy files.",
+  "naming": {
+    "product": "Ciagomem",
+    "query_language": "CiaQL",
+    "crate_prefix": "ciagomem-",
+    "rust_crate_prefix": "ciagomem_",
+    "parser_module": "ciaql",
+    "parser_filename": "ciaql.rs",
+    "forbidden_identifiers": [
+      "coagomem",
+      "coagoql",
+      "ciagoql"
+    ],
+    "external_identifiers": "Keep real upstream URLs, Git history and vendored sources unchanged."
+  }
 }

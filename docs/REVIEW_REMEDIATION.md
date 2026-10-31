@@ -14,13 +14,13 @@
 
 > Historical first-review ledger. The [R5 ledger](R5_REMEDIATION.md) supersedes identity, image-format, label, endorsement, scope and flow-control contracts described below.
 
-Source material: `New File/CiagoMem-SLAE v3.0 Production-Readiness Sign-Off Review.md` and `New File/ciagomem-v30-review-harness.zip`, supplied alongside this workspace. Original reference source and defect assertions are preserved as text under `review/v30`; they are not compiled as passing security regressions.
+Source material: `New File/Ciagomem-SLAE v3.0 Production-Readiness Sign-Off Review.md` and `New File/ciagomem-v30-review-harness.zip`, supplied alongside this workspace. Original reference source and defect assertions are preserved as text under `review/v30`; they are not compiled as passing security regressions.
 
 ## Changes delivered
 
 | Finding                           | Implementation                                                                          | Regression evidence                                            |
 | --------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Compile errors in ZIP parser      | Replace raw parser with `coagomem-ql` typed parser; core re-exports it                  | All workspace builds                                           |
+| Compile errors in ZIP parser      | Replace raw parser with `ciagomem-ql` typed parser; core re-exports it                  | All workspace builds                                           |
 | S1 tenant reads/scans             | `policy.rs`: verified tenant, owner resolver, operator and operation scopes             | `s1_cross_tenant_and_scan_denied`                              |
 | S2 hidden actor references        | Parser AST and qualified-field validation, policy traverses referenced actors           | `s2_actor_references_are_validated_nodes`                      |
 | S3 named argument smuggling       | Parser consumes tokens; malformed/duplicate arguments rejected; `top_k` 1–1,000         | `s3_named_args_are_literal_aware_and_bounded`                  |

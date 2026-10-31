@@ -1,0 +1,7 @@
+[package]
+name = "ciagomem-ql"
+version = "0.3.0"
+edition = "2024"
+
+[dependencies]
+

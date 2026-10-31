@@ -896,7 +896,7 @@ help: use `'_` for type paths
 
    Compiling hmac v0.12.1 (/home/user/workspace/r9patched/ciagomem-slae/vendor/hmac-0.12.1)
    Compiling bitflags v2.13.2 (/home/user/workspace/r9patched/ciagomem-slae/vendor/bitflags-2.13.2)
-   Compiling coagomem-ql v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/coagomem-ql)
+   Compiling ciagomem-ql v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/ciagomem-ql)
 warning: `syn` (lib) generated 67 warnings (45 duplicates) (run `cargo fix --lib -p syn` to apply 19 suggestions)
    Compiling curve25519-dalek-derive v0.1.1 (/home/user/workspace/r9patched/ciagomem-slae/vendor/curve25519-dalek-derive-0.1.1)
 warning: the feature `avx512_target_feature` has been stable since 1.89.0 and no longer requires an attribute to enable
@@ -1285,17 +1285,17 @@ warning: unnecessary `unsafe` block
    Compiling ed25519-dalek v2.1.1 (/home/user/workspace/r9patched/ciagomem-slae/vendor/ed25519-dalek-2.1.1)
 warning: `curve25519-dalek` (lib) generated 33 warnings
    Compiling ciagomem-crypto v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/ciagomem-crypto)
-   Compiling coagomem-core v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/coagomem-core)
-   Compiling coagomem-wal v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/coagomem-wal)
+   Compiling ciagomem-core v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/ciagomem-core)
+   Compiling ciagomem-wal v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/ciagomem-wal)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 8.97s
-     Running tests/r7_recovery.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/coagomem-wal/f1b5cc6d52f87ba2/out/r7_recovery-f1b5cc6d52f87ba2)
+     Running tests/r7_recovery.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/ciagomem-wal/f1b5cc6d52f87ba2/out/r7_recovery-f1b5cc6d52f87ba2)
 
 running 1 test
 test r7_4_r7_6_validate_controls_and_publish_recovered_prefix_after_superblock ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
 
-     Running tests/r8_recovery.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/coagomem-wal/6985dd2c7fc5c7ca/out/r8_recovery-6985dd2c7fc5c7ca)
+     Running tests/r8_recovery.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/ciagomem-wal/6985dd2c7fc5c7ca/out/r8_recovery-6985dd2c7fc5c7ca)
 
 running 3 tests
 test r8_1_failed_initialization_releases_the_claim_without_publishing ... ok
@@ -1304,7 +1304,7 @@ test r8_1_second_log_on_same_core_is_rejected_until_first_is_dropped ... ok
 
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s
 
-     Running tests/r9_recovery.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/coagomem-wal/c86397a020137b47/out/r9_recovery-c86397a020137b47)
+     Running tests/r9_recovery.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/ciagomem-wal/c86397a020137b47/out/r9_recovery-c86397a020137b47)
 
 running 3 tests
 test r9_1_dropping_log_with_inflight_write_fences_and_keeps_buffer_live ... ok

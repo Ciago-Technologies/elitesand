@@ -1,6 +1,6 @@
-diff -ruN -x target -x vendor a/coagomem-core/Cargo.toml b/coagomem-core/Cargo.toml
---- a/coagomem-core/Cargo.toml	2026-10-31 05:29:23.679440521 +0000
-+++ b/coagomem-core/Cargo.toml	2026-10-31 05:38:12.031440521 +0000
+diff -ruN -x target -x vendor a/ciagomem-core/Cargo.toml b/ciagomem-core/Cargo.toml
+--- a/ciagomem-core/Cargo.toml	2026-10-31 05:29:23.679440521 +0000
++++ b/ciagomem-core/Cargo.toml	2026-10-31 05:38:12.031440521 +0000
 @@ -40,3 +40,7 @@
  [[test]]
  name = "r8_regressions"
@@ -9,9 +9,9 @@ diff -ruN -x target -x vendor a/coagomem-core/Cargo.toml b/coagomem-core/Cargo.t
 +[[test]]
 +name = "r9_regressions"
 +path = "../tests/r9_regressions.rs"
-diff -ruN -x target -x vendor a/coagomem-core/src/lifecycle.rs b/coagomem-core/src/lifecycle.rs
---- a/coagomem-core/src/lifecycle.rs	2026-10-31 05:29:23.679440521 +0000
-+++ b/coagomem-core/src/lifecycle.rs	2026-10-31 05:57:59.487440521 +0000
+diff -ruN -x target -x vendor a/ciagomem-core/src/lifecycle.rs b/ciagomem-core/src/lifecycle.rs
+--- a/ciagomem-core/src/lifecycle.rs	2026-10-31 05:29:23.679440521 +0000
++++ b/ciagomem-core/src/lifecycle.rs	2026-10-31 05:57:59.487440521 +0000
 @@ -263,8 +263,36 @@
  
  const EXTENT_BYTES_MAX: usize = u32::MAX as usize;
@@ -95,9 +95,9 @@ diff -ruN -x target -x vendor a/coagomem-core/src/lifecycle.rs b/coagomem-core/s
          }
      }
  }
-diff -ruN -x target -x vendor a/coagomem-core/src/slot.rs b/coagomem-core/src/slot.rs
---- a/coagomem-core/src/slot.rs	2026-10-31 05:29:23.679440521 +0000
-+++ b/coagomem-core/src/slot.rs	2026-10-31 05:36:50.775440521 +0000
+diff -ruN -x target -x vendor a/ciagomem-core/src/slot.rs b/ciagomem-core/src/slot.rs
+--- a/ciagomem-core/src/slot.rs	2026-10-31 05:29:23.679440521 +0000
++++ b/ciagomem-core/src/slot.rs	2026-10-31 05:36:50.775440521 +0000
 @@ -249,9 +249,10 @@
          fence(Acquire);
          d
@@ -133,15 +133,15 @@ diff -ruN -x target -x vendor a/coagomem-core/src/slot.rs b/coagomem-core/src/sl
 +    }
 +}
 +
-+/// R9-2: the only way outside `coagomem-core` to advance a core's durable watermark.
++/// R9-2: the only way outside `ciagomem-core` to advance a core's durable watermark.
 +/// At most one exists per core; dropping it releases the claim.
 +///
 +/// ```compile_fail
-+/// let arena = coagomem_core::SlotArena::<512>::new(0, 1, coagomem_core::CoreControl::shared(1));
++/// let arena = ciagomem_core::SlotArena::<512>::new(0, 1, ciagomem_core::CoreControl::shared(1));
 +/// arena.core(0).publish_durable(u64::MAX); // private: needs a DurabilityPublisher
 +/// ```
 +/// ```compile_fail
-+/// let c = coagomem_core::CoreControl::shared(1);
++/// let c = ciagomem_core::CoreControl::shared(1);
 +/// c[0].unbind_log(); // private: only the publisher's Drop releases the claim
 +/// ```
 +#[derive(Debug)]
@@ -227,15 +227,15 @@ diff -ruN -x target -x vendor a/coagomem-core/src/slot.rs b/coagomem-core/src/sl
          match &self.backing {
              // SAFETY: allocated in `new_heap` with exactly this layout.
              Backing::Heap { layout } => unsafe { std::alloc::dealloc(self.base.as_ptr(), *layout) },
-diff -ruN -x target -x vendor a/coagomem-wal/src/gclog.rs b/coagomem-wal/src/gclog.rs
---- a/coagomem-wal/src/gclog.rs	2026-10-31 05:29:23.679440521 +0000
-+++ b/coagomem-wal/src/gclog.rs	2026-10-31 05:37:38.319440521 +0000
+diff -ruN -x target -x vendor a/ciagomem-wal/src/gclog.rs b/ciagomem-wal/src/gclog.rs
+--- a/ciagomem-wal/src/gclog.rs	2026-10-31 05:29:23.679440521 +0000
++++ b/ciagomem-wal/src/gclog.rs	2026-10-31 05:37:38.319440521 +0000
 @@ -34,7 +34,7 @@
      record_size,
  };
- use coagomem_core::io::{IoBackend, Op, UserData};
--use coagomem_core::slot::{CoreControl, SlotArena};
-+use coagomem_core::slot::{CoreControl, DurabilityPublisher, SlotArena};
+ use ciagomem_core::io::{IoBackend, Op, UserData};
+-use ciagomem_core::slot::{CoreControl, SlotArena};
++use ciagomem_core::slot::{CoreControl, DurabilityPublisher, SlotArena};
  use core::ptr::NonNull;
  use std::collections::VecDeque;
  use std::sync::Arc;
@@ -382,17 +382,17 @@ diff -ruN -x target -x vendor a/coagomem-wal/src/gclog.rs b/coagomem-wal/src/gcl
          }
          assert!(
              m.acked.len() > 2500,
-diff -ruN -x target -x vendor a/coagomem-wal/tests/r9_recovery.rs b/coagomem-wal/tests/r9_recovery.rs
---- a/coagomem-wal/tests/r9_recovery.rs	1970-01-01 00:00:00.000000000 +0000
-+++ b/coagomem-wal/tests/r9_recovery.rs	2026-10-31 05:36:50.787440521 +0000
+diff -ruN -x target -x vendor a/ciagomem-wal/tests/r9_recovery.rs b/ciagomem-wal/tests/r9_recovery.rs
+--- a/ciagomem-wal/tests/r9_recovery.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/ciagomem-wal/tests/r9_recovery.rs	2026-10-31 05:36:50.787440521 +0000
 @@ -0,0 +1,75 @@
 +//! R9 acceptance: dropping a log never frees a buffer the device still references, and
 +//! the durable watermark has exactly one publisher.
-+use coagomem_core::io::{Outcome, SimIo};
-+use coagomem_core::slot::DurabilityPublisher;
-+use coagomem_core::CoreControl;
-+use coagomem_wal::envelope::KIND_DATA;
-+use coagomem_wal::gclog::*;
++use ciagomem_core::io::{Outcome, SimIo};
++use ciagomem_core::slot::DurabilityPublisher;
++use ciagomem_core::CoreControl;
++use ciagomem_wal::envelope::KIND_DATA;
++use ciagomem_wal::gclog::*;
 +fn cfg() -> LogConfig {
 +    LogConfig {
 +        block: 4096,
@@ -512,7 +512,7 @@ diff -ruN -x target -x vendor a/tests/r9_regressions.rs b/tests/r9_regressions.r
 +++ b/tests/r9_regressions.rs	2026-10-31 05:57:59.495440521 +0000
 @@ -0,0 +1,64 @@
 +//! R9 acceptance: lifecycle/arena teardown with outstanding device I/O stays sound.
-+use coagomem_core::*;
++use ciagomem_core::*;
 +fn lc_cfg() -> lifecycle::LifecycleConfig {
 +    lifecycle::LifecycleConfig { low_free: 0, high_free: 1, max_flush_inflight: 1, max_retries: 2, epoch: 2 }
 +}

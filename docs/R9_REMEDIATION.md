@@ -1,6 +1,6 @@
 # R9 remediation — 31 October 2026
 
-Input: **CiagoMem-SLAE R8 Remediation Verification (R9).md** and `ciagomem-r9-fix-patch.zip` under New File/. Original patch/probes/full files and external logs are preserved under [review/r9](../review/r9). Before editing, the lifecycle probe reproduced SIGSEGV in a bounded child process with core dumps disabled; the two WAL probes reproduced dropped-buffer/rebinding and direct publisher bypass behavior. No real device was used.
+Input: **Ciagomem-SLAE R8 Remediation Verification (R9).md** and `ciagomem-r9-fix-patch.zip` under New File/. Original patch/probes/full files and external logs are preserved under [review/r9](../review/r9). Before editing, the lifecycle probe reproduced SIGSEGV in a bounded child process with core dumps disabled; the two WAL probes reproduced dropped-buffer/rebinding and direct publisher bypass behavior. No real device was used.
 
 The supplied patch applied cleanly and passed 134 default / 162 all-feature tests. Three additional regressions failed on that patch (release/resubmit and lifecycle/log submission unwind). Those were fixed, with rejection-path and completion-boundary checks added; current totals are in [VERIFICATION.md](VERIFICATION.md).
 

@@ -1,6 +1,6 @@
 # slae-p0
 
-P0 fixes for CoagoMem-SLAE. Design rationale: `CoagoMem-SLAE-P0-Fix-Specification.md`.
+P0 fixes for Ciagomem-SLAE. Design rationale: `Ciagomem-SLAE-P0-Fix-Specification.md`.
 
 | Module | Content |
 |---|---|
@@ -13,11 +13,11 @@ P0 fixes for CoagoMem-SLAE. Design rationale: `CoagoMem-SLAE-P0-Fix-Specificatio
 | `envelope` | CRC32C (SSE4.2/ARMv8), record and extent image formats |
 | `io` | `IoBackend` trait, `user_data` encoding, deterministic fault-injecting simulator |
 | `calvin` | `full_mask`, tagged vote table with unique decider |
-| `coagoql` | Lexer, parser, validator; spec examples verbatim |
+| `ciaql` | Lexer, parser, validator; spec examples verbatim |
 
 ```
 cargo test --release
 cargo run --release --example spec_regressions
 cargo run --release --example wa_model
-MIRIFLAGS="-Zmiri-seed=1" cargo +nightly miri test --lib -- seqlock mesh calvin slot coagoql envelope
+MIRIFLAGS="-Zmiri-seed=1" cargo +nightly miri test --lib -- seqlock mesh calvin slot ciaql envelope
 ```

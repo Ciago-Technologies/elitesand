@@ -1,5 +1,5 @@
 --- /tmp/mesh.orig	2026-10-30 18:08:40.053742466 +0000
-+++ coagomem-core/src/mesh.rs	2026-10-30 18:08:40.065742466 +0000
++++ ciagomem-core/src/mesh.rs	2026-10-30 18:08:40.065742466 +0000
 @@ -276,7 +276,11 @@
              ring.head.store(h, Release);
          }

@@ -3,7 +3,7 @@
 //! `defect_*` tests PASS while the defect exists; invert them when fixed.
 //! `guard_*` tests PASS when the claimed protection holds.
 mod support;
-use coagomem_core::*;
+use ciagomem_core::*;
 
 fn session(tenant: u128) -> VerifiedMacaroon {
     let k = KeyedPrf([9; 32]);

@@ -290,7 +290,7 @@ warning: `zeroize` (lib) generated 3 warnings (run `cargo fix --lib -p zeroize` 
    Compiling io-uring v0.7.15 (/home/user/workspace/r9patched/ciagomem-slae/vendor/io-uring-0.7.15)
     Checking bitflags v2.13.2 (/home/user/workspace/r9patched/ciagomem-slae/vendor/bitflags-2.13.2)
     Checking ciagomem-crypto v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/ciagomem-crypto)
-    Checking coagomem-ql v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/coagomem-ql)
+    Checking ciagomem-ql v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/ciagomem-ql)
     Checking bytemuck v1.21.0 (/home/user/workspace/r9patched/ciagomem-slae/vendor/bytemuck-1.21.0)
 warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
    --> vendor/bytemuck-1.21.0/src/contiguous.rs:186:23
@@ -440,7 +440,7 @@ warning: use of deprecated associated function `core::num::<impl usize>::max_val
 
 warning: `bytemuck` (lib) generated 24 warnings
    Compiling flatbuffers v25.2.10 (/home/user/workspace/r9patched/ciagomem-slae/vendor/flatbuffers-25.2.10)
-    Checking coagomem-core v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/coagomem-core)
+    Checking ciagomem-core v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/ciagomem-core)
     Checking safe_arch v0.7.4 (/home/user/workspace/r9patched/ciagomem-slae/vendor/safe_arch-0.7.4)
 warning: unused macro definition: `submodule`
    --> vendor/safe_arch-0.7.4/src/lib.rs:172:14
@@ -453,7 +453,7 @@ warning: unused macro definition: `submodule`
 warning: `safe_arch` (lib) generated 1 warning
     Checking byteorder v1.5.0 (/home/user/workspace/r9patched/ciagomem-slae/vendor/byteorder-1.5.0)
     Checking roaring v0.10.12 (/home/user/workspace/r9patched/ciagomem-slae/vendor/roaring-0.10.12)
-    Checking coagomem-wal v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/coagomem-wal)
+    Checking ciagomem-wal v0.3.0 (/home/user/workspace/r9patched/ciagomem-slae/ciagomem-wal)
 warning: hiding a lifetime that's elided elsewhere is confusing
    --> vendor/roaring-0.10.12/src/bitmap/store/array_store/mod.rs:262:17
     |

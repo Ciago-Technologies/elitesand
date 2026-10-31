@@ -1091,8 +1091,8 @@ warning: use of deprecated associated function `core::num::<impl u8>::max_value`
 
 warning: `sha2` (lib) generated 2 warnings
    Compiling ciagomem-crypto v0.3.0 (/tmp/applyr9/ciagomem-slae/ciagomem-crypto)
-   Compiling coagomem-ql v0.3.0 (/tmp/applyr9/ciagomem-slae/coagomem-ql)
-   Compiling coagomem-core v0.3.0 (/tmp/applyr9/ciagomem-slae/coagomem-core)
+   Compiling ciagomem-ql v0.3.0 (/tmp/applyr9/ciagomem-slae/ciagomem-ql)
+   Compiling ciagomem-core v0.3.0 (/tmp/applyr9/ciagomem-slae/ciagomem-core)
 warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
    --> vendor/bytemuck-1.21.0/src/contiguous.rs:186:23
     |
@@ -5383,7 +5383,7 @@ warning: unexpected `cfg` condition name: `nightly`
    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
 
 warning: `flatbuffers` (lib) generated 3 warnings
-   Compiling coagomem-wal v0.3.0 (/tmp/applyr9/ciagomem-slae/coagomem-wal)
+   Compiling ciagomem-wal v0.3.0 (/tmp/applyr9/ciagomem-slae/ciagomem-wal)
    Compiling ciagomem-engine v0.3.0 (/tmp/applyr9/ciagomem-slae/ciagomem-engine)
     Finished `release` profile [optimized] target(s) in 18.47s
      Running unittests src/lib.rs (/tmp/r9apply_tgt/release/deps/ciagomem_crypto-62859a0039396c32)
@@ -5440,7 +5440,7 @@ test r8_3_engine_is_send_and_sync ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running unittests src/lib.rs (/tmp/r9apply_tgt/release/deps/coagomem_core-18327aef26da863f)
+     Running unittests src/lib.rs (/tmp/r9apply_tgt/release/deps/ciagomem_core-18327aef26da863f)
 
 running 33 tests
 test envelope::tests::extent_image_validation ... ok
@@ -5599,21 +5599,21 @@ test s5_restart_does_not_reuse_incarnations ... ok
 
 test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 
-     Running unittests src/lib.rs (/tmp/r9apply_tgt/release/deps/coagomem_ql-3358de26c52d33a9)
+     Running unittests src/lib.rs (/tmp/r9apply_tgt/release/deps/ciagomem_ql-3358de26c52d33a9)
 
 running 8 tests
-test coagoql::tests::example_2_tx_actors_with_qualified_paths ... ok
-test coagoql::tests::example_1_keeps_mutate_and_project ... ok
-test coagoql::tests::example_3_group_by_and_aggregate ... ok
-test coagoql::tests::example_4_similarity ... ok
-test coagoql::tests::limits_are_enforced ... ok
-test coagoql::tests::literal_and_identifier_safety ... ok
-test coagoql::tests::precedence_and_parentheses ... ok
-test coagoql::tests::rejections ... ok
+test ciaql::tests::example_2_tx_actors_with_qualified_paths ... ok
+test ciaql::tests::example_1_keeps_mutate_and_project ... ok
+test ciaql::tests::example_3_group_by_and_aggregate ... ok
+test ciaql::tests::example_4_similarity ... ok
+test ciaql::tests::limits_are_enforced ... ok
+test ciaql::tests::literal_and_identifier_safety ... ok
+test ciaql::tests::precedence_and_parentheses ... ok
+test ciaql::tests::rejections ... ok
 
 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running unittests src/lib.rs (/tmp/r9apply_tgt/release/deps/coagomem_wal-e8dfe5cc1789035b)
+     Running unittests src/lib.rs (/tmp/r9apply_tgt/release/deps/ciagomem_wal-e8dfe5cc1789035b)
 
 running 5 tests
 test gclog::tests::crash_recovery_keeps_every_ack_rewrite_mode ... ok
@@ -5675,24 +5675,24 @@ running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-   Doc-tests coagomem_core
+   Doc-tests ciagomem_core
 
 running 5 tests
-test coagomem-core/src/security.rs - security::Label (line 87) - compile fail ... ok
-test coagomem-core/src/security.rs - security::Label (line 83) - compile fail ... ok
-test coagomem-core/src/slot.rs - slot::CoreControl (line 222) - compile fail ... ok
-test coagomem-core/src/slot.rs - slot::DurabilityPublisher (line 287) - compile fail ... ok
-test coagomem-core/src/slot.rs - slot::DurabilityPublisher (line 291) - compile fail ... ok
+test ciagomem-core/src/security.rs - security::Label (line 87) - compile fail ... ok
+test ciagomem-core/src/security.rs - security::Label (line 83) - compile fail ... ok
+test ciagomem-core/src/slot.rs - slot::CoreControl (line 222) - compile fail ... ok
+test ciagomem-core/src/slot.rs - slot::DurabilityPublisher (line 287) - compile fail ... ok
+test ciagomem-core/src/slot.rs - slot::DurabilityPublisher (line 291) - compile fail ... ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
 
-   Doc-tests coagomem_ql
+   Doc-tests ciagomem_ql
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-   Doc-tests coagomem_wal
+   Doc-tests ciagomem_wal
 
 running 0 tests
 

@@ -1,5 +1,5 @@
 use crate::{Error, Result};
-use coagomem_core::Label;
+use ciagomem_core::Label;
 use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ActorRef {

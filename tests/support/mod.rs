@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use coagomem_core::*;
+use ciagomem_core::*;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -64,8 +64,8 @@ pub fn label(
 }
 
 /// Simulates a backend unwinding after it has accepted a buffer reference.
-pub struct PanicAfterSubmit(pub coagomem_core::io::SimIo);
-impl coagomem_core::io::IoBackend for PanicAfterSubmit {
+pub struct PanicAfterSubmit(pub ciagomem_core::io::SimIo);
+impl ciagomem_core::io::IoBackend for PanicAfterSubmit {
     unsafe fn write_at(
         &mut self,
         ud: u64,
@@ -74,7 +74,7 @@ impl coagomem_core::io::IoBackend for PanicAfterSubmit {
         len: u32,
         offset: u64,
         dsync: bool,
-    ) -> Result<(), coagomem_core::io::SqFull> {
+    ) -> Result<(), ciagomem_core::io::SqFull> {
         // SAFETY: the caller supplies the same live buffer required by this trait.
         unsafe { self.0.write_at(ud, file, buf, len, offset, dsync)? };
         panic!("simulated unwind after write submission");
@@ -86,7 +86,7 @@ impl coagomem_core::io::IoBackend for PanicAfterSubmit {
         buf: *mut u8,
         len: u32,
         offset: u64,
-    ) -> Result<(), coagomem_core::io::SqFull> {
+    ) -> Result<(), ciagomem_core::io::SqFull> {
         // SAFETY: the caller supplies the same live buffer required by this trait.
         unsafe { self.0.read_at(ud, file, buf, len, offset)? };
         panic!("simulated unwind after read submission");
@@ -97,7 +97,7 @@ impl coagomem_core::io::IoBackend for PanicAfterSubmit {
 pub struct RejectSubmit {
     pub calls: usize,
 }
-impl coagomem_core::io::IoBackend for RejectSubmit {
+impl ciagomem_core::io::IoBackend for RejectSubmit {
     unsafe fn write_at(
         &mut self,
         _ud: u64,
@@ -106,9 +106,9 @@ impl coagomem_core::io::IoBackend for RejectSubmit {
         _len: u32,
         _offset: u64,
         _dsync: bool,
-    ) -> Result<(), coagomem_core::io::SqFull> {
+    ) -> Result<(), ciagomem_core::io::SqFull> {
         self.calls += 1;
-        Err(coagomem_core::io::SqFull)
+        Err(ciagomem_core::io::SqFull)
     }
     unsafe fn read_at(
         &mut self,
@@ -117,8 +117,8 @@ impl coagomem_core::io::IoBackend for RejectSubmit {
         _buf: *mut u8,
         _len: u32,
         _offset: u64,
-    ) -> Result<(), coagomem_core::io::SqFull> {
+    ) -> Result<(), ciagomem_core::io::SqFull> {
         self.calls += 1;
-        Err(coagomem_core::io::SqFull)
+        Err(ciagomem_core::io::SqFull)
     }
 }

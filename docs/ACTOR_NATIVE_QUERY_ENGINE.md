@@ -1,6 +1,6 @@
-# CiagoMem actor-native query and relationship engine
+# Ciagomem actor-native query and relationship engine
 
-This document specifies the five database capabilities in the CiagoMem ecosystem and records their implementation boundaries. The accompanying `ciagomem-engine` crate is an executable, owner-local reference engine. It composes typed CiaQL, verified sessions, per-tenant indexes, immutable snapshots, and journal-gated writes. It does not start a network server or pin operating-system threads.
+This document specifies the five database capabilities in the Ciagomem ecosystem and records their implementation boundaries. The accompanying `ciagomem-engine` crate is an executable, owner-local reference engine. It composes typed CiaQL, verified sessions, per-tenant indexes, immutable snapshots, and journal-gated writes. It does not start a network server or pin operating-system threads.
 
 ## 1. Architecture and invariants
 

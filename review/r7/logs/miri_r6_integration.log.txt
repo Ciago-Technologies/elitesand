@@ -1257,9 +1257,9 @@ warning: use of deprecated associated function `core::num::<impl u8>::max_value`
    = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 warning: `sha2` (lib) generated 2 warnings
-   Compiling coagomem-core v0.3.0 (/home/user/workspace/r7patched/ciagomem-slae/coagomem-core)
+   Compiling ciagomem-core v0.3.0 (/home/user/workspace/r7patched/ciagomem-slae/ciagomem-core)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
-     Running ../tests/r6_regressions.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/coagomem-core/52311f9a7f714993/out/r6_regressions-52311f9a7f714993)
+     Running ../tests/r6_regressions.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/ciagomem-core/52311f9a7f714993/out/r6_regressions-52311f9a7f714993)
 
 running 4 tests
 test n1_durability_and_fence_span_all_size_classes_but_not_other_cores ... ok

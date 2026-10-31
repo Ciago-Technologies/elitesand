@@ -286,7 +286,7 @@ warning: `zeroize` (lib) generated 3 warnings (run `cargo fix --lib -p zeroize` 
     Checking hmac v0.12.1 (/home/user/workspace/r6/ciagomem-slae/vendor/hmac-0.12.1)
    Compiling io-uring v0.7.15 (/home/user/workspace/r6/ciagomem-slae/vendor/io-uring-0.7.15)
     Checking bitflags v2.13.2 (/home/user/workspace/r6/ciagomem-slae/vendor/bitflags-2.13.2)
-    Checking coagomem-ql v0.3.0 (/home/user/workspace/r6/ciagomem-slae/coagomem-ql)
+    Checking ciagomem-ql v0.3.0 (/home/user/workspace/r6/ciagomem-slae/ciagomem-ql)
     Checking cpufeatures v0.2.17 (/home/user/workspace/r6/ciagomem-slae/vendor/cpufeatures-0.2.17)
     Checking sha2 v0.10.9 (/home/user/workspace/r6/ciagomem-slae/vendor/sha2-0.10.9)
     Checking ed25519-dalek v2.1.1 (/home/user/workspace/r6/ciagomem-slae/vendor/ed25519-dalek-2.1.1)
@@ -452,7 +452,7 @@ warning: unused macro definition: `submodule`
 warning: `safe_arch` (lib) generated 1 warning
     Checking byteorder v1.5.0 (/home/user/workspace/r6/ciagomem-slae/vendor/byteorder-1.5.0)
     Checking roaring v0.10.12 (/home/user/workspace/r6/ciagomem-slae/vendor/roaring-0.10.12)
-    Checking coagomem-core v0.3.0 (/home/user/workspace/r6/ciagomem-slae/coagomem-core)
+    Checking ciagomem-core v0.3.0 (/home/user/workspace/r6/ciagomem-slae/ciagomem-core)
 warning: hiding a lifetime that's elided elsewhere is confusing
    --> vendor/roaring-0.10.12/src/bitmap/store/array_store/mod.rs:262:17
     |
@@ -582,7 +582,7 @@ warning: unexpected `cfg` condition name: `nightly`
    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
 
 warning: `flatbuffers` (lib) generated 3 warnings
-    Checking coagomem-wal v0.3.0 (/home/user/workspace/r6/ciagomem-slae/coagomem-wal)
+    Checking ciagomem-wal v0.3.0 (/home/user/workspace/r6/ciagomem-slae/ciagomem-wal)
 warning: the `must_use` attribute cannot be used on trait methods in impl blocks
   --> vendor/wide-0.7.33/src/f32x8_.rs:53:5
    |

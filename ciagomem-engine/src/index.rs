@@ -1,6 +1,6 @@
 //! Core-local bitmap, inverted text and SQ8 indexes. No global index mutex.
 use crate::{Error, Key, Record, Result, Scalar};
-use coagomem_ql::{BoolExpr, CompOp, Literal, Root, Value};
+use ciagomem_ql::{BoolExpr, CompOp, Literal, Root, Value};
 use roaring::RoaringBitmap;
 use std::collections::BTreeMap;
 use wide::{CmpGt, i32x8, i64x4};
@@ -338,7 +338,7 @@ pub fn literal(l: Literal<'_>) -> Result<Scalar> {
         Literal::Float(f) if f.is_finite() => Scalar::Float(f),
         Literal::Float(_) => return Err(Error::InvalidValue),
         Literal::Str(s) => Scalar::Text(
-            coagomem_ql::unescape(s)
+            ciagomem_ql::unescape(s)
                 .map_err(|_| Error::Parse)?
                 .into_owned(),
         ),

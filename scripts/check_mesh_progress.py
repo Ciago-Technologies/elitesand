@@ -10,7 +10,7 @@ p.add_argument('--concurrent',type=int,default=25)
 p.add_argument('--timeout',type=float,default=10)
 a=p.parse_args()
 root=Path(__file__).resolve().parents[1]
-build=subprocess.run(['cargo','test','--release','--offline','-p','coagomem-core','--lib','--no-run','--message-format=json'],cwd=root,text=True,capture_output=True,check=True)
+build=subprocess.run(['cargo','test','--release','--offline','-p','ciagomem-core','--lib','--no-run','--message-format=json'],cwd=root,text=True,capture_output=True,check=True)
 binaries=[]
 for line in build.stdout.splitlines():
  try:event=json.loads(line)

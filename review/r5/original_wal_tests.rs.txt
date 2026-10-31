@@ -1,10 +1,10 @@
 //! R5-W1 reproduction: after the log fences, a still-in-flight earlier buffer completes,
 //! the log advances and publishes durable_lsn for records whose acks were already
 //! reported as FAILED. Clients are told "failed" for records that recovery will replay.
-use coagomem_core::io::{Outcome, SimIo};
-use coagomem_core::slot::CoreControl;
-use coagomem_wal::envelope::KIND_DATA;
-use coagomem_wal::gclog::*;
+use ciagomem_core::io::{Outcome, SimIo};
+use ciagomem_core::slot::CoreControl;
+use ciagomem_wal::envelope::KIND_DATA;
+use ciagomem_wal::gclog::*;
 
 #[test]
 fn r5_defect_w1_failed_ack_later_published_durable() {

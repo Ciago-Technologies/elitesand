@@ -487,7 +487,7 @@ pub fn gateway_allow(arg: &Label, side_effect: bool, dest_tenant: Option<u128>) 
 
 // ---------------------------------------------------------------------------
 // H10. Stop-gap semantic validator for the v2.5 string-splitting parser.
-//      The real fix is a lexer + AST (as in slae-p0 turn-2 coagoql.rs); until
+//      The real fix is a lexer + AST (as in slae-p0 turn-2 ciaql.rs); until
 //      then, this rejects every exploit demonstrated in tests/adversarial.rs.
 // ---------------------------------------------------------------------------
 pub struct Policy<'p> {

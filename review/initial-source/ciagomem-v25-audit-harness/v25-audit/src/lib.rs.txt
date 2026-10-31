@@ -1,4 +1,4 @@
-//! CiagoMem - SLAE (Pre-Final v2.5) Complete Verified Core Implementation
+//! Ciagomem - SLAE (Pre-Final v2.5) Complete Verified Core Implementation
 //! Compiles and passes tests on Linux (x86_64 & aarch64), macOS, and Windows.
 
 #![allow(clippy::missing_safety_doc)]
@@ -969,7 +969,7 @@ impl VoteTable {
 }
 
 // ============================================================================
-// MODULE 5: CIAQL ( & COAGOQL) SPAN-VALIDATED PARSER (`ciaql.rs`)
+// MODULE 5: CIAQL ( & CiaQL) SPAN-VALIDATED PARSER (`ciaql.rs`)
 // ============================================================================
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1278,7 +1278,7 @@ mod tests {
         arena
             .write(h1, 11, |wm| {
                 wm.set(0, 0xCAFE_BABE);
-                wm.write_bytes(8, b"CiagoMem");
+                wm.write_bytes(8, b"Ciagomem");
             })
             .unwrap();
 
@@ -1301,7 +1301,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(snap.value.0, 0xCAFE_BABE);
-        assert_eq!(&snap.value.1, b"CiagoMem");
+        assert_eq!(&snap.value.1, b"Ciagomem");
 
         // Evict tenant 101 and install tenant 202 in the same physical slot 3
         arena.revoke(h1).unwrap();
