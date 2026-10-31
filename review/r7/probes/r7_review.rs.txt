@@ -1,0 +1,247 @@
+//! Independent R7 probes against the R6-fixed workspace (reviewer-authored).
+//!
+//! `defect_*` tests PASS while the defect exists; invert them when fixed.
+//! `guard_*` tests PASS when the claimed protection holds.
+mod support;
+use coagomem_core::*;
+
+fn session(tenant: u128) -> VerifiedMacaroon {
+    let k = KeyedPrf([9; 32]);
+    Macaroon::issue(
+        &k,
+        vec![
+            Caveat::Tenant(tenant),
+            Caveat::ExpiresAt(1_000_000),
+            Caveat::PeerUid(1000),
+            Caveat::Session(1),
+            Caveat::Audience(7),
+            Caveat::BootEpoch(1),
+            Caveat::Ops(OP_READ | OP_OPERATOR),
+            Caveat::KeyEpoch(2),
+        ],
+    )
+    .unwrap()
+    .verify(
+        &k,
+        &RequestCtx {
+            tenant_incarnation: tenant,
+            key_epoch: 2,
+            now_ns: 1,
+            op_bit: OP_READ,
+            peer_uid: 1000,
+            session: 1,
+            audience: 7,
+            boot_epoch: 1,
+        },
+    )
+    .unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// R7-1 (High, data loss): the N7 barrier rejects an already-assigned LSN.
+// `on_dirty(t, lsn)` needs the LSN, so the record has already been appended to
+// the WAL. During a checkpoint it returns CheckpointInProgress; once any other
+// tenant logs a later LSN, retrying the deferred LSN returns LsnRegression.
+// That logged record is never pinned, and min_needed_lsn moves past it.
+// ---------------------------------------------------------------------------
+#[test]
+fn defect_r7_1_logged_lsn_rejected_by_barrier_is_never_pinned() {
+    use dirty::DirtyError;
+    let mut pins = TruncationPins::new(2);
+    pins.on_dirty(0, 5, 0).unwrap();
+    let image = pins.begin_checkpoint(0).unwrap(); // image covers LSN 5
+    // Tenant 0's mutation was appended at LSN 6, then registered: rejected.
+    assert_eq!(pins.on_dirty(0, 6, 0), Err(DirtyError::CheckpointInProgress));
+    // Tenant 1 keeps writing on the same core log.
+    pins.on_dirty(1, 7, 0).unwrap();
+    pins.on_checkpointed(0, image).unwrap();
+    // Host retries the deferred registration for the record already at LSN 6.
+    assert_eq!(pins.on_dirty(0, 6, 0), Err(DirtyError::LsnRegression));
+    // Truncation is now allowed past LSN 6 although no image contains it.
+    assert_eq!(pins.min_needed_lsn(8), 7);
+}
+
+// ---------------------------------------------------------------------------
+// R7-2 (High, availability): normal (non-crash) cold loads go through the
+// crash-recovery WAL-coverage gate. A clean, evicted tenant whose checkpoint
+// LSN precedes the current WAL start (its pin was correctly released and the
+// log truncated) can no longer be loaded; it emits NeedsRepair.
+// ---------------------------------------------------------------------------
+fn image(lsn: u64, epoch: u64) -> Vec<u8> {
+    use envelope::*;
+    let mut bytes = vec![0; 4096];
+    bytes[160..168].copy_from_slice(&lsn.to_le_bytes());
+    let img = ExtentImage {
+        tenant: 1,
+        incarnation: 123,
+        tombstone: false,
+        layout_version: 1,
+        checkpoint_lsn: lsn,
+        epoch,
+        image_seq: lsn,
+    };
+    for (i, w) in img.header_words(&bytes[IMG_BYTES..]).iter().enumerate() {
+        bytes[i * 8..i * 8 + 8].copy_from_slice(&w.to_le_bytes());
+    }
+    bytes
+}
+
+fn cold_load(bounds: lifecycle::RecoveryBounds) -> Vec<lifecycle::Event> {
+    use io::{Outcome, SimIo};
+    use lifecycle::*;
+    use slot::RouteTable;
+    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
+    let route = RouteTable::new(4);
+    let mut lc = SlotLifecycle::new(
+        &arena,
+        &route,
+        0,
+        0..2,
+        LifecycleConfig {
+            low_free: 0,
+            high_free: 1,
+            max_flush_inflight: 1,
+            max_retries: 2,
+            epoch: 2,
+        },
+    );
+    let mut disk = SimIo::new(1, 8 * 4096);
+    disk.files[0][8192..12288].copy_from_slice(&image(5, 1));
+    // recover = false: the route table is intact and names the current copy.
+    lc.admit_load(1, 123, bounds, ExtentLoc::new(0, 2, false), 1, false, &mut disk)
+        .unwrap();
+    let mut events = Vec::new();
+    while !disk.inflight.is_empty() {
+        let (ud, res) = disk.complete(0, Outcome::Ok);
+        lc.on_cqe(ud, res, &mut disk, &mut events);
+    }
+    events
+}
+
+#[test]
+fn defect_r7_2_clean_cold_load_after_wal_truncation_needs_repair() {
+    let events = cold_load(lifecycle::RecoveryBounds {
+        current_epoch: 2,
+        expected_image_epoch: Some(1),
+        wal_start_lsn: 100, // tenant 1 was clean at LSN 5; log truncated later
+        wal_end_lsn: 200,
+    });
+    assert!(
+        events.contains(&lifecycle::Event::NeedsRepair { tenant: 1 }),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn defect_r7_2b_clean_cold_load_with_retained_wal_forces_global_suffix_replay() {
+    let events = cold_load(lifecycle::RecoveryBounds {
+        current_epoch: 2,
+        expected_image_epoch: Some(1),
+        wal_start_lsn: 1,
+        wal_end_lsn: 200,
+    });
+    // A clean tenant with no records after LSN 5 still needs a replay pass to the
+    // global log end (and a no-op write at LSN 200) before its route publishes.
+    assert!(events.iter().any(|e| matches!(
+        e,
+        lifecycle::Event::ReplayRequired {
+            from_lsn: 6,
+            through_lsn: 200,
+            ..
+        }
+    )));
+    assert!(!events.iter().any(|e| matches!(e, lifecycle::Event::Loaded { .. })));
+}
+
+// ---------------------------------------------------------------------------
+// R7-3 (Medium): the replay tracker trusts caller-supplied `now` for eviction.
+// A request evaluated with a later timestamp evicts a still-live approval, and
+// a request carrying an earlier timestamp (e.g. read before lock acquisition on
+// another thread) then replays it successfully.
+// ---------------------------------------------------------------------------
+#[test]
+fn defect_r7_3_non_monotonic_now_reopens_replay_window() {
+    let signer = AttestationSigner::from_seed([3; 32]);
+    let verifier = signer.verifier();
+    let token = session(11);
+    let mut tracker = NonceTracker::new(4, 4, 1);
+    let admit = |nonce: u128, now: u64, expires: u64, tr: &mut NonceTracker| {
+        let label = support::label(Integrity::AgentDerived, 2, vec![11]).unwrap();
+        let e = signer.endorse(Approval {
+            tenant: 11,
+            session: 1,
+            boot_epoch: 1,
+            nonce,
+            field: FrameField::ActiveIntent as u8,
+            sources: 2,
+            digest: content_digest(b"value"),
+            sink: 11,
+            tool: "send".into(),
+            expires_at: expires,
+        });
+        let ctx = AdmissionContext {
+            session: &token,
+            reader: 11,
+            content: b"value",
+            now,
+            nonce,
+            tool: "send",
+            sink: 11,
+            verifier: &verifier,
+        };
+        admit_to_frame(FrameField::ActiveIntent, label, Some(&e), &ctx, tr)
+    };
+    assert!(admit(1, 10, 500, &mut tracker).is_ok());
+    // Another request stamped later (now = 600) evicts nonce 1 (expires 500).
+    assert!(admit(2, 600, 900, &mut tracker).is_ok());
+    // A request stamped earlier (now = 20) replays nonce 1: accepted again.
+    assert!(admit(1, 20, 500, &mut tracker).is_ok(), "replay accepted");
+}
+
+// ---------------------------------------------------------------------------
+// Guards: claimed protections that hold.
+// ---------------------------------------------------------------------------
+#[test]
+fn guard_r7_controls_shared_and_fence_is_per_core() {
+    let controls = CoreControl::shared(2);
+    let a = SlotArena::<512>::new(0, 1, controls.clone());
+    let b = SlotArena::<512>::new(1, 1, controls.clone());
+    let tw = |core| TenantWord {
+        tenant: 1,
+        core,
+        layout_version: 1,
+        flags: 0,
+    };
+    let hb = b.install(0, tw(1), 123, 5, 0).unwrap().unwrap();
+    a.core(0).fence();
+    assert!(b.read(hb, 1, 123, Visibility::Applied, |_| Some(())).is_ok());
+    a.core(1).fence();
+    assert!(matches!(
+        b.read(hb, 1, 123, Visibility::Applied, |_| Some(())),
+        Err(slot::SlotReadError::Fenced)
+    ));
+}
+
+#[test]
+fn guard_r7_arena_accepts_unrelated_control_arrays_silently() {
+    // Integration hazard, not a component defect: nothing ties arenas or the WAL to
+    // one node allocation. Two different arrays are accepted without error.
+    let a = SlotArena::<512>::new(0, 1, CoreControl::shared(1));
+    let b = SlotArena::<512>::new(1, 1, CoreControl::shared(1));
+    a.core(0).fence();
+    assert!(!b.core(0).is_fenced());
+}
+
+#[test]
+fn guard_r7_layout_sizes() {
+    use std::mem::size_of;
+    eprintln!(
+        "R7 sizes: Label={} FrameValue={} CoreControl={} SlotHeader={}",
+        size_of::<Label>(),
+        size_of::<FrameValue>(),
+        size_of::<CoreControl>(),
+        size_of::<SlotHeader>()
+    );
+    assert_eq!(size_of::<Label>(), 176);
+    assert_eq!(size_of::<CoreControl>(), 256);
+}

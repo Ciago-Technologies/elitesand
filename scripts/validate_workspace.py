@@ -32,9 +32,11 @@ for node in graph:
 core = (root / "coagomem-core/src/lib.rs").read_text()
 assert '#[cfg(feature = "legacy-audit")]\npub mod legacy;' in core
 assert "legacy-audit" not in packages["coagomem-core"]["features"].get("default", [])
-spec = root.parent / "ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md"
+spec = root / "MASTER_SPECIFICATION.md"
 text = spec.read_text()
-listing = text.split("<!-- BEGIN REVIEWED CORE SOURCE -->\n```rust\n", 1)[1].split("\n```\n<!-- END REVIEWED CORE SOURCE -->", 1)[0]
+match = re.search(r"<!-- BEGIN REVIEWED CORE SOURCE -->\s*```rust\n(.*?)\n```\s*<!-- END REVIEWED CORE SOURCE -->", text, re.S)
+assert match, "missing embedded core listing"
+listing = match.group(1)
 assert listing == core.rstrip(), "specification listing differs from core library"
 for path in [root / "README.md", *sorted((root / "docs").glob("*.md")), spec]:
     doc = path.read_text()
@@ -52,5 +54,19 @@ r6=(root / "docs/R6_REMEDIATION.md").read_text()
 assert {f"R6-N{i}" for i in range(1,8)} <= set(re.findall(r"R6-N\d+",r6)), "R6 finding lacks disposition"
 slot=(root / "coagomem-core/src/slot.rs").read_text()
 assert "pub durable_lsn:" not in slot and "pub fenced:" not in slot
+r7=(root / "docs/R7_REMEDIATION.md").read_text()
+assert {f"R7-{i}" for i in range(1,7)} <= set(re.findall(r"R7-\d+",r7)), "R7 finding lacks disposition"
+r8=(root / "docs/R8_REMEDIATION.md").read_text()
+assert {f"R8-{i}" for i in range(1,6)} <= set(re.findall(r"R8-\d+",r8)), "R8 finding lacks disposition"
+assert sorted(p.name for p in root.glob("*policy.json"))==["policy.json"], "keep one engineering policy.json"
+cleanup=json.loads((root / "docs/cleanup-manifest.json").read_text())
+import hashlib
+for name,digest in cleanup["preserved_source_files"].items():
+    assert hashlib.sha256((root/name).read_bytes()).hexdigest()==digest, name
+for name in cleanup["removed_archives"]+cleanup["removed_directories"]:
+    assert not (root.parent/name).exists(), f"obsolete artifact reappeared: {name}"
+r9=(root / "docs/R9_REMEDIATION.md").read_text()
+assert {"R9-1","R9-2"} <= set(re.findall(r"R9-\d+",r9)), "R9 finding lacks disposition"
+assert all(f"pub(crate) fn {name}" in slot for name in ["publish_durable","bind_log","unbind_log"]), "raw publication must stay crate-private"
 print("Validated crate DAG, parser/crypto boundaries, opt-in legacy API, source listing, links and vendor inventory.")
 print("VERDICT: PASS")

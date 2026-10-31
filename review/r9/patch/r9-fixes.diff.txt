@@ -1,0 +1,604 @@
+diff -ruN -x target -x vendor a/coagomem-core/Cargo.toml b/coagomem-core/Cargo.toml
+--- a/coagomem-core/Cargo.toml	2026-10-31 05:29:23.679440521 +0000
++++ b/coagomem-core/Cargo.toml	2026-10-31 05:38:12.031440521 +0000
+@@ -40,3 +40,7 @@
+ [[test]]
+ name = "r8_regressions"
+ path = "../tests/r8_regressions.rs"
++
++[[test]]
++name = "r9_regressions"
++path = "../tests/r9_regressions.rs"
+diff -ruN -x target -x vendor a/coagomem-core/src/lifecycle.rs b/coagomem-core/src/lifecycle.rs
+--- a/coagomem-core/src/lifecycle.rs	2026-10-31 05:29:23.679440521 +0000
++++ b/coagomem-core/src/lifecycle.rs	2026-10-31 05:57:59.487440521 +0000
+@@ -263,8 +263,36 @@
+ 
+ const EXTENT_BYTES_MAX: usize = u32::MAX as usize;
+ 
++impl<const W: usize> Drop for SlotLifecycle<'_, W> {
++    /// R9-1: dropping with device I/O outstanding fences the core so a late DMA cannot be
++    /// served as valid data; the arena keeps its memory alive while `io_pending > 0`.
++    fn drop(&mut self) {
++        if self.meta.iter().any(|m| m.io_inflight > 0) {
++            self.arena.core(self.core).fence();
++        }
++    }
++}
++
+ impl<'a, const W: usize> SlotLifecycle<'a, W> {
+     pub const EXTENT_BYTES: usize = W * 8;
++    /// True when no load or checkpoint I/O from this lifecycle is outstanding.
++    pub fn quiescent(&self) -> bool {
++        self.meta.iter().all(|m| m.io_inflight == 0)
++    }
++    /// Declare that the device holds no pointer into this lifecycle's payloads (ring
++    /// destroyed or every operation reaped), so teardown neither fences nor leaks.
++    /// Outstanding operations are abandoned; call only before dropping the lifecycle.
++    ///
++    /// # Safety
++    /// No submitted load or checkpoint may still read or write its payload.
++    pub unsafe fn release_device_references(&mut self) {
++        for i in 0..self.meta.len() {
++            while self.meta[i].io_inflight > 0 {
++                self.meta[i].io_inflight -= 1;
++                self.arena.io_completed();
++            }
++        }
++    }
+ 
+     pub fn new(
+         arena: &'a SlotArena<W>,
+@@ -549,6 +577,7 @@
+                 Self::probe_offset(loc, probe),
+             )?
+         };
++        self.arena.io_submitted();
+         self.m(idx).io_inflight += 1;
+         Ok(())
+     }
+@@ -921,6 +950,7 @@
+                 true,
+             )?;
+         }
++        self.arena.io_submitted();
+         let m = self.m(idx);
+         m.ticket = ticket;
+         m.io_inflight += 1;
+@@ -1014,7 +1044,9 @@
+             return;
+         }
+         m.io_inflight -= 1;
+-        match (ud.op, m.state) {
++        let state = m.state;
++        self.arena.io_completed();
++        match (ud.op, state) {
+             (Op::Load, State::Loading { .. }) if current => self.on_load_cqe(idx, res, io, events),
+             (
+                 Op::Checkpoint,
+@@ -1304,6 +1336,8 @@
+             &mut e,
+         );
+         assert!(e.is_empty() && lc.stats.stale_cqes == 1);
++        // SAFETY: `io` is never completed again; it is dropped with this test.
++        unsafe { lc.release_device_references() };
+     }
+ 
+     #[test]
+@@ -1590,6 +1624,9 @@
+                 "seed {seed}: weak coverage {:?}",
+                 lc.stats
+             );
++            // SAFETY: the simulated device is dropped with this iteration; it never
++            // completes the remaining ops.
++            unsafe { lc.release_device_references() };
+         }
+     }
+ }
+diff -ruN -x target -x vendor a/coagomem-core/src/slot.rs b/coagomem-core/src/slot.rs
+--- a/coagomem-core/src/slot.rs	2026-10-31 05:29:23.679440521 +0000
++++ b/coagomem-core/src/slot.rs	2026-10-31 05:36:50.775440521 +0000
+@@ -249,9 +249,10 @@
+         fence(Acquire);
+         d
+     }
+-    /// Log side: monotonic publish.
++    /// Log side: monotonic publish. Reachable outside this crate only through a
++    /// [`DurabilityPublisher`] claim (R9-2).
+     #[inline(always)]
+-    pub fn publish_durable(&self, lsn: u64) {
++    pub(crate) fn publish_durable(&self, lsn: u64) {
+         let _guard = self.publication.lock().unwrap_or_else(|p| p.into_inner());
+         if !self.is_fenced() {
+             self.durable_lsn.fetch_max(lsn, Release);
+@@ -265,15 +266,68 @@
+         self.fenced.load(Acquire)
+     }
+     /// Claim the single log-publisher role for this core. `false` if already claimed.
+-    pub fn bind_log(&self) -> bool {
++    pub(crate) fn bind_log(&self) -> bool {
+         self.log_bound
+             .compare_exchange(false, true, AcqRel, Acquire)
+             .is_ok()
+     }
+-    /// Release the publisher role (the owning log's `Drop`).
+-    pub fn unbind_log(&self) {
++    /// Release the publisher role (only `DurabilityPublisher::drop`).
++    pub(crate) fn unbind_log(&self) {
+         self.log_bound.store(false, Release);
+     }
++    /// True while a `DurabilityPublisher` holds this core.
++    pub fn log_bound(&self) -> bool {
++        self.log_bound.load(Acquire)
++    }
++}
++
++/// R9-2: the only way outside `coagomem-core` to advance a core's durable watermark.
++/// At most one exists per core; dropping it releases the claim.
++///
++/// ```compile_fail
++/// let arena = coagomem_core::SlotArena::<512>::new(0, 1, coagomem_core::CoreControl::shared(1));
++/// arena.core(0).publish_durable(u64::MAX); // private: needs a DurabilityPublisher
++/// ```
++/// ```compile_fail
++/// let c = coagomem_core::CoreControl::shared(1);
++/// c[0].unbind_log(); // private: only the publisher's Drop releases the claim
++/// ```
++#[derive(Debug)]
++pub struct DurabilityPublisher {
++    controls: std::sync::Arc<[CoreControl]>,
++    core: u8,
++}
++
++impl DurabilityPublisher {
++    /// `None` if `core` is out of range or already claimed.
++    pub fn claim(controls: std::sync::Arc<[CoreControl]>, core: u8) -> Option<Self> {
++        // Construct only after a successful claim: a dropped value releases the claim.
++        if (core as usize) < controls.len() && controls[core as usize].bind_log() {
++            Some(Self { controls, core })
++        } else {
++            None
++        }
++    }
++    #[inline(always)]
++    pub fn publish(&self, lsn: u64) {
++        self.control().publish_durable(lsn);
++    }
++    #[inline(always)]
++    pub fn control(&self) -> &CoreControl {
++        &self.controls[self.core as usize]
++    }
++    pub fn controls(&self) -> &std::sync::Arc<[CoreControl]> {
++        &self.controls
++    }
++    pub fn core_id(&self) -> u8 {
++        self.core
++    }
++}
++
++impl Drop for DurabilityPublisher {
++    fn drop(&mut self) {
++        self.control().unbind_log();
++    }
+ }
+ 
+ // ---------------------------------------------------------------------------------
+@@ -355,6 +409,8 @@
+     cores: std::sync::Arc<[CoreControl]>,
+     backing: Backing,
+     base: NonNull<u8>,
++    /// Device operations that may still read or write this arena's payloads (R9-1).
++    io_pending: AtomicU64,
+ }
+ 
+ impl<const W: usize> core::fmt::Debug for SlotArena<W> {
+@@ -479,6 +535,7 @@
+             cores,
+             backing,
+             base,
++            io_pending: AtomicU64::new(0),
+         }
+     }
+ 
+@@ -732,8 +789,26 @@
+     }
+ }
+ 
++impl<const W: usize> SlotArena<W> {
++    pub(crate) fn io_submitted(&self) {
++        self.io_pending.fetch_add(1, AcqRel);
++    }
++    pub(crate) fn io_completed(&self) {
++        self.io_pending.fetch_sub(1, AcqRel);
++    }
++    /// Payload I/Os submitted by a lifecycle whose CQE has not been consumed.
++    pub fn io_pending(&self) -> u64 {
++        self.io_pending.load(Acquire)
++    }
++}
++
+ impl<const W: usize> Drop for SlotArena<W> {
+     fn drop(&mut self) {
++        // R9-1: a device may still DMA into or out of this memory; leaking it is the
++        // only sound option without a completion to wait for.
++        if self.io_pending.load(Acquire) != 0 {
++            return;
++        }
+         match &self.backing {
+             // SAFETY: allocated in `new_heap` with exactly this layout.
+             Backing::Heap { layout } => unsafe { std::alloc::dealloc(self.base.as_ptr(), *layout) },
+diff -ruN -x target -x vendor a/coagomem-wal/src/gclog.rs b/coagomem-wal/src/gclog.rs
+--- a/coagomem-wal/src/gclog.rs	2026-10-31 05:29:23.679440521 +0000
++++ b/coagomem-wal/src/gclog.rs	2026-10-31 05:37:38.319440521 +0000
+@@ -34,7 +34,7 @@
+     record_size,
+ };
+ use coagomem_core::io::{IoBackend, Op, UserData};
+-use coagomem_core::slot::{CoreControl, SlotArena};
++use coagomem_core::slot::{CoreControl, DurabilityPublisher, SlotArena};
+ use core::ptr::NonNull;
+ use std::collections::VecDeque;
+ use std::sync::Arc;
+@@ -269,17 +269,10 @@
+     }
+ }
+ 
+-struct LogBinding {
+-    controls: Arc<[CoreControl]>,
+-    core_id: u8,
+-}
+-impl Drop for LogBinding {
+-    fn drop(&mut self) {
+-        self.controls[self.core_id as usize].unbind_log();
+-    }
+-}
+ pub struct GroupCommitLog {
+-    binding: LogBinding,
++    binding: DurabilityPublisher,
++    /// Set by `release_device_references`: the device holds no pointer into `bufs`.
++    device_released: bool,
+     cfg: LogConfig,
+     bufs: Vec<LogBuf>,
+     free: Vec<usize>,
+@@ -310,6 +303,18 @@
+     }
+ }
+ 
++impl Drop for GroupCommitLog {
++    /// R9-1: a submitted write still references its buffer. Without a completion to wait
++    /// for, fence the core (no further durability can be published and reopen needs
++    /// fresh controls) and leak the buffers so the device never reads freed memory.
++    fn drop(&mut self) {
++        if !self.quiescent() && !self.device_released {
++            self.binding.control().fence();
++            core::mem::forget(core::mem::take(&mut self.bufs));
++        }
++    }
++}
++
+ impl GroupCommitLog {
+     /// Open after recovery. The returned superblock (new epoch) must be made durable and
+     /// then passed to `superblock_durable` before the first append.
+@@ -321,13 +326,10 @@
+     ) -> (GroupCommitLog, Superblock) {
+         cfg.validate();
+         assert!((core_id as usize) < controls.len() && !controls[core_id as usize].is_fenced());
+-        assert!(
+-            controls[core_id as usize].bind_log(),
+-            "core {core_id} already has a bound log"
+-        );
+         // Own the claim before fallible initialization so any unwind releases it.
+-        let binding = LogBinding { controls, core_id };
+-        let core = &binding.controls[core_id as usize];
++        let binding = DurabilityPublisher::claim(controls, core_id)
++            .unwrap_or_else(|| panic!("core {core_id} already has a bound log"));
++        let core = binding.control();
+         let recovered_end = rec
+             .next_lsn
+             .checked_sub(1)
+@@ -373,6 +375,7 @@
+             .collect();
+         let log = GroupCommitLog {
+             binding,
++            device_released: false,
+             cfg,
+             bufs,
+             free: (0..cfg.buffers).rev().collect(),
+@@ -399,7 +402,7 @@
+     }
+ 
+     pub fn validate_arena<const W: usize>(&self, arena: &SlotArena<W>) -> Result<(), LogError> {
+-        if Arc::ptr_eq(&self.binding.controls, arena.controls()) {
++        if Arc::ptr_eq(self.binding.controls(), arena.controls()) {
+             Ok(())
+         } else {
+             Err(LogError::MismatchedControls)
+@@ -410,7 +413,7 @@
+         self.sb = *sb;
+         self.truncate_logical = self.truncate_logical.max(sb.start_logical);
+         self.ready = true;
+-        self.binding.controls[self.binding.core_id as usize].publish_durable(self.durable_lsn);
++        self.binding.publish(self.durable_lsn);
+     }
+ 
+     pub fn epoch(&self) -> u32 {
+@@ -429,6 +432,15 @@
+             .map(|b| (b.mem.ptr.as_ptr(), b.mem.len))
+             .collect()
+     }
++    /// Declare that the device no longer references any submitted buffer, so a drop
++    /// while writes are nominally in flight may free them. Writes stay unacknowledged.
++    ///
++    /// # Safety
++    /// Every submitted write must have been cancelled and reaped, or the device/ring
++    /// destroyed after its operations terminated (e.g. `SimIo::power_loss`).
++    pub unsafe fn release_device_references(&mut self) {
++        self.device_released = true;
++    }
+     /// True when no write is in flight (safe to drop the log).
+     pub fn quiescent(&self) -> bool {
+         self.bufs.iter().all(|b| b.state != BufState::InFlight)
+@@ -740,12 +752,12 @@
+         acks: &mut Vec<u64>,
+         indeterminate: &mut Vec<AckOutcome>,
+     ) -> Result<(), LogError> {
+-        if self.binding.controls[self.binding.core_id as usize].is_fenced() && self.fenced.is_none()
++        if self.binding.control().is_fenced() && self.fenced.is_none()
+         {
+             self.fence(libc::EIO, indeterminate);
+         }
+         if let Some(errno) = self.fenced {
+-            self.binding.controls[self.binding.core_id as usize].fence();
++            self.binding.control().fence();
+             return Err(LogError::Fenced(errno));
+         }
+         let Some(ud) = UserData::decode(user_data) else {
+@@ -775,7 +787,7 @@
+             self.stats.retries += 1;
+             if b.retries > self.cfg.max_retries {
+                 let errno = if res < 0 { res } else { -libc::EIO };
+-                self.binding.controls[self.binding.core_id as usize].fence();
++                self.binding.control().fence();
+                 self.fence(errno, indeterminate);
+                 return Err(LogError::Fenced(errno));
+             }
+@@ -805,7 +817,7 @@
+             moved = true;
+         }
+         if moved {
+-            self.binding.controls[self.binding.core_id as usize].publish_durable(self.durable_lsn);
++            self.binding.publish(self.durable_lsn);
+         }
+     }
+ 
+@@ -1172,7 +1184,9 @@
+             for a in keep {
+                 m.ack_lsn.remove(&a);
+             }
+-            drop(log); // SimIo holds no in-flight ops after power_loss
++            // SAFETY: SimIo::power_loss removed every in-flight op above.
++            unsafe { log.release_device_references() };
++            drop(log);
+         }
+         assert!(
+             m.acked.len() > 2500,
+diff -ruN -x target -x vendor a/coagomem-wal/tests/r9_recovery.rs b/coagomem-wal/tests/r9_recovery.rs
+--- a/coagomem-wal/tests/r9_recovery.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/coagomem-wal/tests/r9_recovery.rs	2026-10-31 05:36:50.787440521 +0000
+@@ -0,0 +1,75 @@
++//! R9 acceptance: dropping a log never frees a buffer the device still references, and
++//! the durable watermark has exactly one publisher.
++use coagomem_core::io::{Outcome, SimIo};
++use coagomem_core::slot::DurabilityPublisher;
++use coagomem_core::CoreControl;
++use coagomem_wal::envelope::KIND_DATA;
++use coagomem_wal::gclog::*;
++fn cfg() -> LogConfig {
++    LogConfig {
++        block: 4096,
++        buf_bytes: 16384,
++        buffers: 4,
++        max_inflight: 3,
++        min_batch_bytes: 8192,
++        max_delay_ns: 5000,
++        capacity: 65536,
++        file: 0,
++        tail: TailMode::Pad,
++        max_retries: 3,
++    }
++}
++fn io() -> SimIo {
++    SimIo::new(1, (cfg().data_offset() + cfg().capacity) as usize)
++}
++#[test]
++fn r9_1_dropping_log_with_inflight_write_fences_and_keeps_buffer_live() {
++    let controls = CoreControl::shared(1);
++    let mut d = io();
++    let (mut a, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
++    a.superblock_durable(&sb);
++    let before = controls[0].durable();
++    a.append(1, KIND_DATA, b"payload", Some(1), 0, &mut d).unwrap();
++    a.poll(1_000_000, true, &mut d);
++    assert!(!a.quiescent());
++    drop(a);
++    assert!(controls[0].is_fenced());
++    // Reopen on the same controls is refused; fresh controls are required.
++    let c2 = controls.clone();
++    assert!(std::panic::catch_unwind(move || {
++        GroupCommitLog::open(cfg(), &Recovery::fresh(), c2, 0);
++    })
++    .is_err());
++    // The late completion reads still-live (leaked) memory and publishes nothing.
++    let _ = d.complete(0, Outcome::Ok);
++    assert_eq!(controls[0].durable(), before);
++}
++#[test]
++fn r9_1_quiescent_drop_still_releases_cleanly() {
++    let controls = CoreControl::shared(1);
++    let mut d = io();
++    let (mut a, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
++    a.superblock_durable(&sb);
++    a.append(1, KIND_DATA, b"x", Some(1), 0, &mut d).unwrap();
++    a.poll(1_000_000, true, &mut d);
++    let (ud, res) = d.complete(0, Outcome::Ok);
++    a.on_cqe(ud, res, &mut d, &mut Vec::new(), &mut Vec::new()).unwrap();
++    assert!(a.quiescent());
++    let published = controls[0].durable();
++    drop(a);
++    assert!(!controls[0].is_fenced() && !controls[0].log_bound());
++    let rec = Recovery { next_lsn: published + 1, ..Recovery::fresh() };
++    let (_b, _) = GroupCommitLog::open(cfg(), &rec, controls, 0);
++}
++#[test]
++fn r9_2_no_second_publisher_while_a_log_is_bound() {
++    let controls = CoreControl::shared(1);
++    let (a, _) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
++    assert!(controls[0].log_bound());
++    assert!(DurabilityPublisher::claim(controls.clone(), 0).is_none());
++    // A refused claim must not release the existing one.
++    assert!(controls[0].log_bound());
++    assert!(DurabilityPublisher::claim(controls.clone(), 1).is_none());
++    drop(a);
++    assert!(DurabilityPublisher::claim(controls, 0).is_some());
++}
+diff -ruN -x target -x vendor a/tests/r6_regressions.rs b/tests/r6_regressions.rs
+--- a/tests/r6_regressions.rs	2026-10-31 05:29:23.691440521 +0000
++++ b/tests/r6_regressions.rs	2026-10-31 05:35:24.011440521 +0000
+@@ -60,8 +60,10 @@
+         .install(1, TenantWord { core: 1, ..tw() }, 124, 5, 0)
+         .unwrap()
+         .unwrap();
+-    class0.core(0).publish_durable(5);
+-    class0.core(1).publish_durable(5);
++    let p0 = slot::DurabilityPublisher::claim(controls.clone(), 0).unwrap();
++    let p1 = slot::DurabilityPublisher::claim(controls.clone(), 1).unwrap();
++    p0.publish(5);
++    p1.publish(5);
+     assert_eq!(class1.core(0).durable(), 5);
+     assert!(
+         class1
+@@ -78,7 +80,7 @@
+             .unwrap_err(),
+         SlotReadError::Fenced
+     );
+-    class0.core(0).publish_durable(u64::MAX);
++    p0.publish(u64::MAX);
+     assert_eq!(class1.core(0).durable(), 5);
+     assert!(
+         class1
+diff -ruN -x target -x vendor a/tests/r8_regressions.rs b/tests/r8_regressions.rs
+--- a/tests/r8_regressions.rs	2026-10-31 05:29:23.691440521 +0000
++++ b/tests/r8_regressions.rs	2026-10-31 05:34:31.143440521 +0000
+@@ -51,10 +51,12 @@
+ #[test]
+ fn r8_1_core_control_layout_and_single_publisher_claim() {
+     assert_eq!(std::mem::size_of::<CoreControl>(), 256);
++    use slot::DurabilityPublisher as P;
+     let c = CoreControl::shared(2);
+-    assert!(c[0].bind_log());
+-    assert!(!c[0].bind_log());
+-    assert!(c[1].bind_log());
+-    c[0].unbind_log();
+-    assert!(c[0].bind_log());
++    let a = P::claim(c.clone(), 0).unwrap();
++    assert!(P::claim(c.clone(), 0).is_none());
++    let _b = P::claim(c.clone(), 1).unwrap();
++    assert!(P::claim(c.clone(), 2).is_none());
++    drop(a);
++    assert!(P::claim(c, 0).is_some());
+ }
+diff -ruN -x target -x vendor a/tests/r9_regressions.rs b/tests/r9_regressions.rs
+--- a/tests/r9_regressions.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/tests/r9_regressions.rs	2026-10-31 05:57:59.495440521 +0000
+@@ -0,0 +1,64 @@
++//! R9 acceptance: lifecycle/arena teardown with outstanding device I/O stays sound.
++use coagomem_core::*;
++fn lc_cfg() -> lifecycle::LifecycleConfig {
++    lifecycle::LifecycleConfig { low_free: 0, high_free: 1, max_flush_inflight: 1, max_retries: 2, epoch: 2 }
++}
++#[test]
++fn r9_1_lifecycle_drop_with_inflight_read_fences_and_arena_memory_survives() {
++    use io::{Outcome, SimIo};
++    use lifecycle::*;
++    use slot::RouteTable;
++    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
++    let route = RouteTable::new(4);
++    let mut disk = SimIo::new(1, 8 * 4096);
++    {
++        let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..2, lc_cfg());
++        lc.admit_load(1, 123, RecoveryBounds::clean(2, 1, 5), ExtentLoc::new(0, 2, false), 1, false, &mut disk)
++            .unwrap();
++        assert!(!lc.quiescent());
++    }
++    assert_eq!(arena.io_pending(), 1);
++    assert!(arena.core(0).is_fenced());
++    drop(arena); // leaked: a device op still targets it
++    drop(route);
++    let _ = disk.complete(0, Outcome::Ok); // no crash, no UB
++}
++#[test]
++fn r9_1_completed_io_returns_arena_to_zero_pending() {
++    use io::{Outcome, SimIo};
++    use lifecycle::*;
++    use slot::RouteTable;
++    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
++    let route = RouteTable::new(4);
++    let mut disk = SimIo::new(1, 8 * 4096);
++    let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..2, lc_cfg());
++    lc.admit_load(1, 123, RecoveryBounds::clean(2, 1, 5), ExtentLoc::new(0, 2, false), 1, false, &mut disk)
++        .unwrap();
++    let mut events = Vec::new();
++    while !disk.inflight.is_empty() {
++        let (ud, res) = disk.complete(0, Outcome::Ok);
++        lc.on_cqe(ud, res, &mut disk, &mut events);
++    }
++    assert!(lc.quiescent());
++    assert_eq!(arena.io_pending(), 0);
++    drop(lc);
++    assert!(!arena.core(0).is_fenced());
++}
++#[test]
++fn r9_1_released_lifecycle_neither_fences_nor_leaks() {
++    use io::SimIo;
++    use lifecycle::*;
++    use slot::RouteTable;
++    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
++    let route = RouteTable::new(4);
++    let mut disk = SimIo::new(1, 8 * 4096);
++    let mut lc = SlotLifecycle::new(&arena, &route, 0, 0..2, lc_cfg());
++    lc.admit_load(1, 123, RecoveryBounds::clean(2, 1, 5), ExtentLoc::new(0, 2, false), 1, false, &mut disk)
++        .unwrap();
++    disk.inflight.clear(); // the device abandons the op (ring destroyed)
++    // SAFETY: no simulated op references the arena any more.
++    unsafe { lc.release_device_references() };
++    drop(lc);
++    assert_eq!(arena.io_pending(), 0);
++    assert!(!arena.core(0).is_fenced());
++}
+diff -ruN -x target -x vendor a/tests/v30_regressions.rs b/tests/v30_regressions.rs
+--- a/tests/v30_regressions.rs	2026-10-31 05:29:23.691440521 +0000
++++ b/tests/v30_regressions.rs	2026-10-31 05:34:31.143440521 +0000
+@@ -569,8 +569,9 @@
+             .value,
+         0
+     );
+-    a.core(0).publish_durable(100);
+-    a.core(0).publish_durable(10);
++    let publisher = slot::DurabilityPublisher::claim(a.controls().clone(), 0).unwrap();
++    publisher.publish(100);
++    publisher.publish(10);
+     assert_eq!(a.core(0).durable(), 100);
+ }
+ #[test]
+@@ -599,8 +600,9 @@
+             attempted: 50
+         })
+     );
+-    a.core(0).publish_durable(100);
+-    a.core(0).publish_durable(10);
++    let publisher = slot::DurabilityPublisher::claim(a.controls().clone(), 0).unwrap();
++    publisher.publish(100);
++    publisher.publish(10);
+     assert_eq!(a.core(0).durable(), 100);
+ }
+ #[test]

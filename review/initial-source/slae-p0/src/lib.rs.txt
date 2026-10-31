@@ -1,0 +1,41 @@
+//! CoagoMem-SLAE P0 kernel fixes.
+//!
+//! | Module      | Fixes                                                                 |
+//! |-------------|-----------------------------------------------------------------------|
+//! | `seqlock`   | UB / ARM64-unsound SeqLock -> word-atomic Boehm protocol              |
+//! | `slot`      | Untagged slot indices -> 64-bit generational handles, owner-checked reads |
+//! | `mesh`      | Multi-producer "SPSC" mailbox -> N x N SPSC grid with doorbells       |
+//! | `lifecycle` | Free-before-CQE eviction -> CQE-gated slot state machine              |
+//! | `envelope`  | Log record v2 + extent image header + CRC32C (HW accelerated)         |
+//! | `gclog`     | Per-tenant O_DIRECT writes -> per-core group-commit pipeline          |
+//! | `uring`     | io_uring backend (fixed buffers, MSG_RING wakeups)                    |
+//! | `calvin`    | `1 << 64` commit-mask overflow + bit-63 collision -> tagged vote slots |
+//! | `coagoql`   | Parser silently dropping MUTATE / PROJECT / GROUP_BY -> full grammar  |
+#![deny(unsafe_op_in_unsafe_fn)]
+#![warn(missing_debug_implementations)]
+
+pub mod calvin;
+pub mod coagoql;
+pub mod envelope;
+pub mod gclog;
+pub mod io;
+pub mod lifecycle;
+pub mod mesh;
+pub mod seqlock;
+pub mod slot;
+#[cfg(target_os = "linux")]
+pub mod uring;
+
+/// 128-byte alignment: Intel's L2 adjacent-line prefetcher and Apple/Neoverse
+/// 128-byte lines both make 64-byte padding insufficient against false sharing.
+#[derive(Debug, Default)]
+#[repr(C, align(128))]
+pub struct CachePadded<T>(pub T);
+
+impl<T> core::ops::Deref for CachePadded<T> {
+    type Target = T;
+    #[inline(always)]
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}

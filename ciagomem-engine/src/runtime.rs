@@ -89,6 +89,9 @@ struct Shard {
     bytes: usize,
 }
 pub struct Engine<J: Journal> {
+    boot_epoch: u128,
+    clock: Arc<dyn coagomem_core::Clock + Send + Sync>,
+    last_now: std::sync::atomic::AtomicU64,
     shards: Vec<Shard>,
     limits: Limits,
     journal: J,
@@ -196,8 +199,15 @@ fn allowed(token: &VerifiedMacaroon, r: &Record, write: bool) -> Result<()> {
     Ok(())
 }
 impl<J: Journal> Engine<J> {
-    pub fn new(cores: usize, limits: Limits, journal: J) -> Result<Self> {
-        if cores == 0
+    pub fn new(
+        cores: usize,
+        limits: Limits,
+        journal: J,
+        boot_epoch: u128,
+        clock: Arc<dyn coagomem_core::Clock + Send + Sync>,
+    ) -> Result<Self> {
+        if boot_epoch == 0
+            || cores == 0
             || cores > 64
             || limits.rows_per_core == 0
             || limits.rows_per_core > u32::MAX as usize
@@ -207,6 +217,9 @@ impl<J: Journal> Engine<J> {
             return Err(Error::InvalidValue);
         }
         Ok(Self {
+            boot_epoch,
+            clock,
+            last_now: std::sync::atomic::AtomicU64::new(0),
             shards: (0..cores).map(|_| Shard::default()).collect(),
             limits,
             journal,
@@ -216,6 +229,19 @@ impl<J: Journal> Engine<J> {
             jobs: BTreeMap::new(),
             schemas: Schemas::new(),
         })
+    }
+    fn authorize(&self, token: &VerifiedMacaroon) -> Result<()> {
+        // R8-3: Send + Sync high-water mark (Engine was Send + Sync before R7-5).
+        let seen = self.clock.now_ns();
+        let now = seen.max(
+            self.last_now
+                .fetch_max(seen, std::sync::atomic::Ordering::AcqRel),
+        );
+        if token.boot_epoch() != self.boot_epoch || now >= token.expires_at() {
+            Err(Error::Permission)
+        } else {
+            Ok(())
+        }
     }
     pub fn owner_core(&self, id: u64) -> usize {
         (id % self.shards.len() as u64) as usize
@@ -233,6 +259,7 @@ impl<J: Journal> Engine<J> {
             .ok_or(Error::MissingActor)
     }
     pub fn snapshot(&self, actor: ActorRef, token: &VerifiedMacaroon) -> Result<Snapshot> {
+        self.authorize(token)?;
         let s = self.stored(actor.id)?;
         allowed(token, &s.snapshot.record, false)?;
         if self.deleting.contains(&actor) {
@@ -249,7 +276,9 @@ impl<J: Journal> Engine<J> {
         token: &VerifiedMacaroon,
         now: u64,
     ) -> join::Reply {
-        let snapshot = if r.tenant != token.tenant_incarnation() {
+        let snapshot = if self.authorize(token).is_err() {
+            Err(Error::Permission)
+        } else if r.tenant != token.tenant_incarnation() {
             Err(Error::ForeignActor)
         } else if now >= r.deadline_ns {
             Err(Error::Budget)
@@ -342,6 +371,7 @@ impl<J: Journal> Engine<J> {
         );
     }
     pub fn put(&mut self, record: Record, token: &VerifiedMacaroon) -> Result<()> {
+        self.authorize(token)?;
         allowed(token, &record, true)?;
         if self.deleting.contains(&record.actor) {
             return Err(Error::Restricted);
@@ -358,6 +388,7 @@ impl<J: Journal> Engine<J> {
         mode: OnDelete,
         token: &VerifiedMacaroon,
     ) -> Result<()> {
+        self.authorize(token)?;
         if !token.allows(OP_WRITE) {
             return Err(Error::Permission);
         }
@@ -378,6 +409,7 @@ impl<J: Journal> Engine<J> {
         Ok(())
     }
     pub fn delete(&mut self, actor: ActorRef, token: &VerifiedMacaroon) -> Result<usize> {
+        self.authorize(token)?;
         if !token.allows(OP_WRITE) {
             return Err(Error::Permission);
         }
@@ -411,9 +443,11 @@ impl<J: Journal> Engine<J> {
         Ok(plan.len())
     }
     pub fn projected(&self, actor: ActorRef, token: &VerifiedMacaroon) -> Result<Record> {
+        self.authorize(token)?;
         self.schemas.project(&self.snapshot(actor, token)?.record)
     }
     pub fn upgrade(&mut self, actor: ActorRef, token: &VerifiedMacaroon) -> Result<bool> {
+        self.authorize(token)?;
         let s = self.snapshot(actor, token)?;
         if s.record.schema_version == self.schemas.latest() {
             return Ok(false);
@@ -423,6 +457,7 @@ impl<J: Journal> Engine<J> {
         Ok(true)
     }
     pub fn execute(&mut self, q: &Query<'_>, token: &VerifiedMacaroon) -> Result<QueryResult> {
+        self.authorize(token)?;
         self.execute_with(q, token, Options::default())
     }
     pub fn execute_with(
@@ -431,6 +466,7 @@ impl<J: Journal> Engine<J> {
         token: &VerifiedMacaroon,
         options: Options,
     ) -> Result<QueryResult> {
+        self.authorize(token)?;
         let owner = |id| self.stored(id).ok().map(|s| s.snapshot.record.tenant);
         let validated = validate_query(
             q,
@@ -450,6 +486,7 @@ impl<J: Journal> Engine<J> {
         token: &VerifiedMacaroon,
         options: Options,
     ) -> Result<QueryResult> {
+        self.authorize(token)?;
         if validated.scope() != coagomem_core::QueryScope::Tenant(token.tenant_incarnation())
             || validated.session_id() != token.session_id()
             || validated.owner_version() != self.sequence
@@ -1153,6 +1190,7 @@ impl<J: Journal> Engine<J> {
         root: ActorRef,
         token: &VerifiedMacaroon,
     ) -> Result<DeleteStatus> {
+        self.authorize(token)?;
         if !token.allows(OP_WRITE) {
             return Err(Error::Permission);
         }
@@ -1188,6 +1226,7 @@ impl<J: Journal> Engine<J> {
         })
     }
     pub fn delete_status(&self, job: u64, token: &VerifiedMacaroon) -> Result<DeleteStatus> {
+        self.authorize(token)?;
         let j = self.jobs.get(&job).ok_or(Error::MissingActor)?;
         if j.tenant != token.tenant_incarnation() || !token.allows(OP_WRITE) {
             return Err(Error::Permission);
@@ -1205,6 +1244,7 @@ impl<J: Journal> Engine<J> {
         max: usize,
         token: &VerifiedMacaroon,
     ) -> Result<DeleteStatus> {
+        self.authorize(token)?;
         if max == 0 {
             return Err(Error::InvalidValue);
         }

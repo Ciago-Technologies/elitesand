@@ -1,0 +1,193 @@
+//! Executable proof of the spec defects next to the fixes.
+//!
+//! `cargo run --release --example spec_regressions`
+//!
+//! The `spec` module below is the spec's code, copied verbatim (types + parser +
+//! Calvin mask), so the failures are reproduced, not paraphrased.
+
+use slae_p0::calvin::{Participants, Vote, VoteTable, full_mask};
+use slae_p0::coagoql::{self, spec_examples::*};
+
+#[allow(dead_code, clippy::all)]
+mod spec {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // ---- spec section 6 (verbatim) ----
+    pub const TX_ABORT_BIT: u64 = 1 << 63;
+    pub struct CalvinDistributedTx {
+        pub tx_seq: u64,
+        pub expected_mask: u64,
+        pub status_word: AtomicU64,
+    }
+    impl CalvinDistributedTx {
+        pub fn new(tx_seq: u64, num_participants: u8) -> Self {
+            // `1u64 << 64` panics in debug; in release the shift amount is masked to 0,
+            // so the mask becomes (1 << 0) - 1 = 0. Reproduced with `wrapping_shl`.
+            let mask = 1u64.wrapping_shl(num_participants as u32).wrapping_sub(1);
+            Self { tx_seq, expected_mask: mask, status_word: AtomicU64::new(0) }
+        }
+        pub fn record_participant_vote(&self, participant_idx: u8, invariant_ok: bool) -> u64 {
+            let bit = if invariant_ok { 1u64 << participant_idx } else { TX_ABORT_BIT | (1u64 << participant_idx) };
+            self.status_word.fetch_or(bit, Ordering::AcqRel) | bit
+        }
+        pub fn is_ready_to_commit(&self) -> Option<bool> {
+            let word = self.status_word.load(Ordering::Acquire);
+            if (word & TX_ABORT_BIT) != 0 {
+                return Some(false);
+            }
+            if (word & self.expected_mask) == self.expected_mask {
+                return Some(true);
+            }
+            None
+        }
+    }
+
+    // ---- spec section 8 (verbatim) ----
+    #[derive(Debug, PartialEq, Clone)]
+    pub enum CoagoSource {
+        SingleActor(u64),
+        MultiActorTx(Vec<u64>),
+        ScanRange { start: u64, end: u64 },
+        ScanAll,
+    }
+    #[derive(Debug, PartialEq, Clone, Copy)]
+    pub enum CompOp {
+        Eq,
+        Neq,
+        Gt,
+        Lt,
+        Gte,
+        Lte,
+    }
+    #[derive(Debug, PartialEq, Clone)]
+    pub struct Predicate<'a> {
+        pub field_path: &'a str,
+        pub op: CompOp,
+        pub literal: &'a str,
+    }
+    #[derive(Debug, PartialEq, Clone)]
+    pub enum CoagoStage<'a> {
+        Filter(Vec<Predicate<'a>>),
+        Project(Vec<&'a str>),
+        Similarity { metric: &'a str, threshold: f32 },
+        CheckpointFrame { intent: &'a str },
+        HydrateFrame { frame_hash: u64 },
+        Take(usize),
+    }
+    #[derive(Debug, PartialEq, Clone)]
+    pub struct CoagoQueryPlan<'a> {
+        pub source: CoagoSource,
+        pub stages: Vec<CoagoStage<'a>>,
+    }
+    pub fn parse_coagoql<'a>(query: &'a str) -> Result<CoagoQueryPlan<'a>, &'static str> {
+        let mut pipeline = query.split("|>").map(str::trim);
+        let source_raw = pipeline.next().ok_or("Empty CoagoQL pipeline")?;
+        let source = if let Some(id_str) = source_raw.strip_prefix("ACTOR(").and_then(|s| s.strip_suffix(')')) {
+            CoagoSource::SingleActor(parse_u64_id(id_str)?)
+        } else if let Some(range_str) = source_raw.strip_prefix("SCAN ACTORS[").and_then(|s| s.strip_suffix(']')) {
+            if range_str.trim() == "*" {
+                CoagoSource::ScanAll
+            } else {
+                let (s, e) = range_str.split_once("..").ok_or("Malformed SCAN ACTORS range")?;
+                CoagoSource::ScanRange { start: parse_u64_id(s)?, end: parse_u64_id(e)? }
+            }
+        } else {
+            return Err("Unrecognized CoagoQL source clause");
+        };
+        let mut stages = Vec::new();
+        for raw_stage in pipeline {
+            if let Some(body) = raw_stage.strip_prefix("FILTER").map(str::trim).and_then(|s| s.strip_prefix('(')).and_then(|s| s.strip_suffix(')')) {
+                let mut preds = Vec::new();
+                for clause in body.split("AND").map(str::trim) {
+                    let (field, op, lit) = parse_predicate_clause(clause)?;
+                    preds.push(Predicate { field_path: field, op, literal: lit });
+                }
+                stages.push(CoagoStage::Filter(preds));
+            } else if let Some(limit_str) = raw_stage.strip_prefix("TAKE ") {
+                let n = limit_str.trim().parse::<usize>().map_err(|_| "Invalid TAKE integer")?;
+                stages.push(CoagoStage::Take(n));
+            } else if let Some(intent_body) = raw_stage.strip_prefix("CHECKPOINT_FRAME(intent:").and_then(|s| s.strip_suffix(')')) {
+                stages.push(CoagoStage::CheckpointFrame { intent: intent_body.trim().trim_matches('"') });
+            } else if let Some(hash_str) = raw_stage.strip_prefix("HYDRATE_FRAME(").and_then(|s| s.strip_suffix(')')) {
+                stages.push(CoagoStage::HydrateFrame { frame_hash: parse_u64_id(hash_str)? });
+            }
+        }
+        Ok(CoagoQueryPlan { source, stages })
+    }
+    fn parse_u64_id(raw: &str) -> Result<u64, &'static str> {
+        let clean = raw.trim().replace('_', "");
+        if let Some(hex) = clean.strip_prefix("0x").or_else(|| clean.strip_prefix("0X")) {
+            u64::from_str_radix(hex, 16).map_err(|_| "Invalid hex literal")
+        } else {
+            clean.parse::<u64>().map_err(|_| "Invalid integer literal")
+        }
+    }
+    fn parse_predicate_clause<'a>(clause: &'a str) -> Result<(&'a str, CompOp, &'a str), &'static str> {
+        let ops = [("==", CompOp::Eq), ("!=", CompOp::Neq), (">=", CompOp::Gte), ("<=", CompOp::Lte), (">", CompOp::Gt), ("<", CompOp::Lt)];
+        for (symbol, op) in ops {
+            if let Some((lhs, rhs)) = clause.split_once(symbol) {
+                return Ok((lhs.trim(), op, rhs.trim().trim_matches('"')));
+            }
+        }
+        Err("Invalid comparison operator in FILTER stage")
+    }
+}
+
+fn spec_stage_name(s: &spec::CoagoStage<'_>) -> &'static str {
+    match s {
+        spec::CoagoStage::Filter(_) => "FILTER",
+        spec::CoagoStage::Project(_) => "PROJECT",
+        spec::CoagoStage::Similarity { .. } => "SIMILARITY",
+        spec::CoagoStage::CheckpointFrame { .. } => "CHECKPOINT_FRAME",
+        spec::CoagoStage::HydrateFrame { .. } => "HYDRATE_FRAME",
+        spec::CoagoStage::Take(_) => "TAKE",
+    }
+}
+
+fn main() {
+    println!("== CoagoQL: spec parser vs fixed parser ==");
+    let queries = [
+        ("Example 1", EXAMPLE_1),
+        ("Example 2", EXAMPLE_2),
+        ("Example 3", EXAMPLE_3),
+        ("Example 4", EXAMPLE_4),
+        ("BRAND/literal", r#"ACTOR(1) |> FILTER (state.BRAND == "a|>b") |> TAKE 1"#),
+        ("typo", "ACTOR(1) |> MUTTATE { state.x = 1 }"),
+    ];
+    for (name, q) in queries {
+        let old = match spec::parse_coagoql(q) {
+            Ok(p) => format!("Ok {:?}", p.stages.iter().map(spec_stage_name).collect::<Vec<_>>()),
+            Err(e) => format!("Err({e:?})"),
+        };
+        let new = match coagoql::parse(q) {
+            Ok(p) => format!("Ok {:?}", p.stages.iter().map(|s| s.name()).collect::<Vec<_>>()),
+            Err(e) => {
+                let (l, c) = e.line_col(q);
+                format!("Err({:?} at {l}:{c})", e.msg)
+            }
+        };
+        println!("{name:<14} spec : {old}\n{:<14} fixed: {new}", "");
+    }
+
+    println!("\n== Calvin commit mask ==");
+    for n in [1u8, 2, 63, 64] {
+        let tx = spec::CalvinDistributedTx::new(1, n);
+        println!("n={n:<2} spec mask = {:#018x}   fixed mask = {:#018x}", tx.expected_mask, full_mask(n as u32).unwrap());
+    }
+    let tx = spec::CalvinDistributedTx::new(1, 64);
+    println!("spec, n=64, zero votes cast: is_ready_to_commit() = {:?}  (commits with no votes)", tx.is_ready_to_commit());
+    let tx = spec::CalvinDistributedTx::new(1, 64);
+    tx.record_participant_vote(63, true);
+    println!("spec, n=64, participant 63 votes YES: is_ready_to_commit() = {:?}  (YES on bit 63 == ABORT bit)", tx.is_ready_to_commit());
+
+    let t = VoteTable::new(8);
+    t.open(1, Participants::new(64).unwrap()).unwrap();
+    let mut last = Vote::Pending;
+    for i in 0..64 {
+        last = t.vote(1, i, true);
+        if i < 63 {
+            assert_eq!(last, Vote::Pending);
+        }
+    }
+    println!("fixed, n=64: Pending for votes 0..62, after vote 63: {last:?}");
+}

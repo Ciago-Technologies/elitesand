@@ -242,14 +242,14 @@ fn p4_filesystem_adapter_blocks_symlinks_traversal_and_foreign_tenant() {
     let _ = fs::remove_dir_all(&path);
     fs::create_dir(&path).unwrap();
     symlink("/tmp", path.join("escape")).unwrap();
-    let root = destination::LocalExportRoot::open(&path, 11).unwrap();
+    let root = destination::LocalExportRoot::open(&path, 11, 1).unwrap();
     let token = session(11);
-    assert!(root.create(&token, "../outside").is_err());
-    assert!(root.create(&token, "escape/outside").is_err());
-    assert!(root.create(&session(22), "foreign").is_err());
-    let file = root.create(&token, "safe").unwrap();
+    assert!(root.create(&token, "../outside", 1).is_err());
+    assert!(root.create(&token, "escape/outside", 1).is_err());
+    assert!(root.create(&session(22), "foreign", 1).is_err());
+    let file = root.create(&token, "safe", 1).unwrap();
     drop(file);
-    assert!(root.create(&token, "safe").is_err());
+    assert!(root.create(&token, "safe", 1).is_err());
     fs::remove_dir_all(path).unwrap();
 }
 #[cfg(target_os = "linux")]

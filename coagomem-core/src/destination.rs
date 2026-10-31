@@ -11,18 +11,32 @@ use std::{
 pub struct LocalExportRoot {
     directory: File,
     tenant: u128,
+    boot_epoch: u128,
 }
 impl LocalExportRoot {
-    /// Trusted operator configuration: one tenant's export directory, opened once.
-    pub fn open(path: &Path, tenant: u128) -> std::io::Result<Self> {
+    /// Trusted operator configuration: one tenant's export directory, opened once, bound
+    /// to the current boot epoch so capabilities from an earlier boot are rejected (R8-2).
+    pub fn open(path: &Path, tenant: u128, boot_epoch: u128) -> std::io::Result<Self> {
         let directory = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(path)?;
-        Ok(Self { directory, tenant })
+        Ok(Self {
+            directory,
+            tenant,
+            boot_epoch,
+        })
     }
-    pub fn create(&self, session: &VerifiedMacaroon, relative: &str) -> std::io::Result<File> {
+    /// `now` must come from the trusted boot clock used to issue `session` (R8-2).
+    pub fn create(
+        &self,
+        session: &VerifiedMacaroon,
+        relative: &str,
+        now: u64,
+    ) -> std::io::Result<File> {
         if session.tenant_incarnation() != self.tenant
+            || session.boot_epoch() != self.boot_epoch
+            || now >= session.expires_at()
             || !session.allows(OP_OPERATOR | OP_READ)
             || relative.is_empty()
             || Path::new(relative).is_absolute()

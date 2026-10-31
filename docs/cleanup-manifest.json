@@ -1,0 +1,63 @@
+{
+  "removed_archives": [
+    "New File/Old/ciagomem-r6-verification-harness.zip",
+    "New File/Old/ciagomem-r5-review-harness.zip",
+    "New File/Old/ciagomem-v30-review-harness.zip",
+    "New File/Old/ciagomem-r7-fix-patch.zip",
+    "ciagomem-r5-fixed-review.zip",
+    "ciagomem-r6-fixed-review.zip",
+    "ciagomem-r7-fixed-review.zip",
+    "ciagomem-slae-perplexity-review.zip",
+    "ciagomem-v25-audit-harness.zip",
+    "slae-p0 (P0 fix crate).zip",
+    "slae-patterns.zip",
+    "ciagomem-r8-fixed-review.zip",
+    "New File/ciagomem-r8-fix-patch.zip"
+  ],
+  "removed_directories": [
+    "New File/Old",
+    "slae-p0",
+    "ciagomem-v25-audit-harness"
+  ],
+  "preserved_source_files": {
+    "review/initial-source/slae-p0/Cargo.lock.txt": "b0b65492ee7283c5c205a96c07ebf2eba739a9b00564d43e77d1194e3bac0636",
+    "review/initial-source/slae-p0/Cargo.toml.txt": "7be28dcb93658087e600b134ed59cd804f3f474356719eac74b2aab4ec25e23e",
+    "review/initial-source/slae-p0/README.md.txt": "ddf5a913f34a92fd8cdb34c2783ae24cd9adf1ff595f8c969b88086c5a08cdf0",
+    "review/initial-source/slae-p0/examples/spec_regressions.rs.txt": "1bb6c0326f81d3c68299c174fb7f655fc888632e3719853246484c93109b3309",
+    "review/initial-source/slae-p0/examples/wa_model.rs.txt": "f42fd790dd406575d13c1659e1286cf030a5b7050bbea226b27359f8e5361641",
+    "review/initial-source/slae-p0/src/calvin.rs.txt": "458d1b2458b6cbdaffcec35ecac4fcb75e0421c9512a53fde8c44b4bceece1bb",
+    "review/initial-source/slae-p0/src/coagoql.rs.txt": "34b3c04594d842fcf2427e9b8cfb0d8f5eb93b0a0c9079fd501a869894a20611",
+    "review/initial-source/slae-p0/src/envelope.rs.txt": "51723e1d05f994a92e8b7f4161396e929c478e809f6076639cbb338d9f4320eb",
+    "review/initial-source/slae-p0/src/gclog.rs.txt": "db1b46e322af90e19deb98ea1946d539e4e08a61a6c0a91e64fb0801688a0319",
+    "review/initial-source/slae-p0/src/io.rs.txt": "5ba1c35ac08d0c541a38d45929573660c127a49580e1c169446c1a81cab43798",
+    "review/initial-source/slae-p0/src/lib.rs.txt": "a0414a3b1165a4fe3987f328c0a1f36db7cb6830ae78d9f2e4cb918f4e5e3586",
+    "review/initial-source/slae-p0/src/lifecycle.rs.txt": "f685f8a18dc12231d96ffae4ecc383710a0fc5b412431e3e6b850c2a6f3261bb",
+    "review/initial-source/slae-p0/src/mesh.rs.txt": "469f5f2799671ec4cce8ec48d2c2f3b0b8b9fdcd7631c3a88eca642795d6fdb7",
+    "review/initial-source/slae-p0/src/seqlock.rs.txt": "732071a57ac4086b7a880229b56a9423533982fae3993a6edb78df202cde7a2f",
+    "review/initial-source/slae-p0/src/slot.rs.txt": "1cf0e4dfee34070359ce07b76c18815c125bae449b7507d970f5a3a64c39dac4",
+    "review/initial-source/slae-p0/src/uring.rs.txt": "f45185ef156a3151cfb535f53f87a72a78aca36ab679728605e336cffe96c1fa",
+    "review/initial-source/slae-p0/tests/uring_log.rs.txt": "aefc4b294f13455c052f76c1402c7dd6f9012162ae0d09a3b683f041187f5868",
+    "review/initial-source/ciagomem-v25-audit-harness/v25-audit/Cargo.lock.txt": "16b707ad6a4a81e8605aeb3e98bb35340b1fa0eea3438827fc4b0a1deab5fed3",
+    "review/initial-source/ciagomem-v25-audit-harness/v25-audit/Cargo.toml.txt": "e91702ad88cb57265f2daa91a29b33b122e1f6df552156dfe44656b2add1fd27",
+    "review/initial-source/ciagomem-v25-audit-harness/v25-audit/src/hardening.rs.txt": "8161d2cd6e5b0b69558f7ebc056d40e53b524dac50ecfa3a695122dc800e3317",
+    "review/initial-source/ciagomem-v25-audit-harness/v25-audit/src/lib.rs.txt": "799e63ad78a1713d34fb576e6ddf55bbe0efa807a7175a76c7a395ea05aaf9fe",
+    "review/initial-source/ciagomem-v25-audit-harness/v25-audit/tests/adversarial.rs.txt": "e133afc85186620cd826c79c5924316c81752bec83bfa997a5715869211ba9f8",
+    "review/initial-source/ciagomem-v25-audit-harness/v25-audit/tests/export_window.rs.txt": "edef459c359926c0b8392a25a1f5df686fc8df67ab3fe338c2bffe0b86a01da1"
+  },
+  "moved_reports": [
+    "review/reports/CiagoMem-SLAE R5 Remediation Verification (R6).md",
+    "review/reports/CiagoMem-SLAE R6 Remediation Verification (R7).md",
+    "review/reports/CiagoMem-SLAE v3.0 Production-Readiness Sign-Off Review.md",
+    "review/reports/CiagoMem-SLAE v3.0 Remediation Deep-Research Review.md",
+    "review/reports/CiagoMem-SLAE R7 Remediation Verification (R8).md"
+  ],
+  "removed_prompts": [
+    "docs/PERPLEXITY_R5_REVIEW_PROMPT.md",
+    "docs/PERPLEXITY_R6_REVIEW_PROMPT.md",
+    "docs/PERPLEXITY_R7_REVIEW_PROMPT.md"
+  ],
+  "removed_archive_sha256": {
+    "ciagomem-r8-fixed-review.zip": "aba201e0ba92555a4151d668414121d880a38ea3fe6f0abd1583ee1d3ef4ce31",
+    "New File/ciagomem-r8-fix-patch.zip": "3434d331763fa3d6961226439a1ba9dc269a442ab23ee2ef6a46ee932415849b"
+  }
+}

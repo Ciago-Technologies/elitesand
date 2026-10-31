@@ -54,7 +54,14 @@ fn record(id: u64, tenant: u128, fields: &[(&str, Scalar)]) -> Record {
     )
 }
 fn engine() -> Engine<MemoryJournal> {
-    Engine::new(2, Limits::default(), MemoryJournal::new(64 << 20)).unwrap()
+    Engine::new(
+        2,
+        Limits::default(),
+        MemoryJournal::new(64 << 20),
+        1,
+        std::sync::Arc::new(TestClock),
+    )
+    .unwrap()
 }
 fn run(e: &mut Engine<MemoryJournal>, s: &str) -> QueryResult {
     e.execute(&parse(s).unwrap(), &session(11)).unwrap()
@@ -479,7 +486,14 @@ impl Journal for FailAfter {
 }
 #[test]
 fn journal_failure_prevents_state_and_index_publication() {
-    let mut e = Engine::new(1, Limits::default(), FailAfter { remaining: 1 }).unwrap();
+    let mut e = Engine::new(
+        1,
+        Limits::default(),
+        FailAfter { remaining: 1 },
+        1,
+        std::sync::Arc::new(TestClock),
+    )
+    .unwrap();
     let t = session(11);
     e.put(record(1, 11, &[("v", Scalar::Int(1))]), &t).unwrap();
     assert_eq!(
@@ -498,7 +512,14 @@ fn all_resource_failures_are_explicit_and_do_not_commit() {
     let mut limits = Limits::default();
     limits.groups = 1;
     limits.cascade_rows = 1;
-    let mut e = Engine::new(1, limits, MemoryJournal::new(1 << 20)).unwrap();
+    let mut e = Engine::new(
+        1,
+        limits,
+        MemoryJournal::new(1 << 20),
+        1,
+        std::sync::Arc::new(TestClock),
+    )
+    .unwrap();
     for id in 1..=2 {
         e.put(record(id, 11, &[("g", Scalar::Int(id as i64))]), &t)
             .unwrap();
@@ -517,7 +538,14 @@ fn all_resource_failures_are_explicit_and_do_not_commit() {
     assert!(e.snapshot(actor(1), &t).is_ok());
     let mut limits = Limits::default();
     limits.bytes_per_core = 1;
-    let mut e = Engine::new(1, limits, MemoryJournal::new(1 << 20)).unwrap();
+    let mut e = Engine::new(
+        1,
+        limits,
+        MemoryJournal::new(1 << 20),
+        1,
+        std::sync::Arc::new(TestClock),
+    )
+    .unwrap();
     assert_eq!(e.put(record(1, 11, &[]), &t), Err(Error::Budget));
     assert!(e.journal().batches.is_empty());
 }
@@ -726,7 +754,14 @@ fn query_work_and_projection_budgets_fail_before_writes() {
     let t = session(11);
     let mut limits = Limits::default();
     limits.query_work = 3;
-    let mut e = Engine::new(1, limits, MemoryJournal::new(1 << 20)).unwrap();
+    let mut e = Engine::new(
+        1,
+        limits,
+        MemoryJournal::new(1 << 20),
+        1,
+        std::sync::Arc::new(TestClock),
+    )
+    .unwrap();
     for id in 1..=5 {
         e.put(record(id, 11, &[("v", Scalar::Int(id as i64))]), &t)
             .unwrap();
@@ -738,7 +773,14 @@ fn query_work_and_projection_budgets_fail_before_writes() {
     );
     let mut limits = Limits::default();
     limits.result_bytes = 1;
-    let mut e = Engine::new(1, limits, MemoryJournal::new(1 << 20)).unwrap();
+    let mut e = Engine::new(
+        1,
+        limits,
+        MemoryJournal::new(1 << 20),
+        1,
+        std::sync::Arc::new(TestClock),
+    )
+    .unwrap();
     e.put(record(1, 11, &[("v", Scalar::Int(1))]), &t).unwrap();
     let before = e.journal().batches.len();
     assert_eq!(
@@ -855,4 +897,90 @@ fn test_label(
         expires_at: 1000,
     });
     Label::attested(&proof, &issuer.verifier(), tenant, 1, 1, b"value", 1)
+}
+
+struct TestClock;
+impl coagomem_core::Clock for TestClock {
+    fn now_ns(&self) -> u64 {
+        1
+    }
+}
+
+struct RequestClock(std::sync::atomic::AtomicU64);
+impl coagomem_core::Clock for RequestClock {
+    fn now_ns(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+#[test]
+fn r7_5_engine_rejects_expired_and_foreign_boot_tokens_at_every_entry() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    let clock = Arc::new(RequestClock(AtomicU64::new(1)));
+    let token = session(11);
+    let mut e = Engine::new(
+        2,
+        Limits::default(),
+        MemoryJournal::new(1 << 20),
+        1,
+        clock.clone(),
+    )
+    .unwrap();
+    let row = record(1, 11, &[("value", Scalar::Int(5))]);
+    e.put(row.clone(), &token).unwrap();
+    let job = e.begin_delete(actor(1), &token).unwrap().job;
+    clock.0.store(1000, Ordering::Relaxed);
+    let q = parse("@1").unwrap();
+    assert!(matches!(e.put(row.clone(), &token), Err(Error::Permission)));
+    assert!(matches!(
+        e.snapshot(actor(1), &token),
+        Err(Error::Permission)
+    ));
+    assert!(matches!(e.execute(&q, &token), Err(Error::Permission)));
+    assert!(matches!(
+        e.projected(actor(1), &token),
+        Err(Error::Permission)
+    ));
+    assert!(matches!(
+        e.upgrade(actor(1), &token),
+        Err(Error::Permission)
+    ));
+    assert!(matches!(
+        e.add_link(actor(1), actor(2), OnDelete::Restrict, &token),
+        Err(Error::Permission)
+    ));
+    assert!(matches!(e.delete(actor(1), &token), Err(Error::Permission)));
+    assert!(matches!(
+        e.begin_delete(actor(1), &token),
+        Err(Error::Permission)
+    ));
+    assert!(matches!(
+        e.delete_status(job, &token),
+        Err(Error::Permission)
+    ));
+    assert!(matches!(
+        e.advance_delete(job, 0, 1, &token),
+        Err(Error::Permission)
+    ));
+    let reply = e.handle_join(
+        &ciagomem_engine::join::Request {
+            ticket: 1,
+            tenant: 11,
+            target: actor(1),
+            deadline_ns: u64::MAX,
+        },
+        &token,
+        1,
+    );
+    assert!(matches!(reply.snapshot, Err(Error::Permission)));
+    clock.0.store(1, Ordering::Relaxed);
+    assert!(
+        matches!(e.execute(&q, &token), Err(Error::Permission)),
+        "clock rollback cannot revive the connection token"
+    );
+    let mut other =
+        Engine::new(1, Limits::default(), MemoryJournal::new(1 << 20), 2, clock).unwrap();
+    assert!(matches!(other.put(row, &token), Err(Error::Permission)));
 }

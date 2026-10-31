@@ -62,3 +62,63 @@ pub fn label(
     });
     Label::attested(&proof, &key.verifier(), tenant, 1, 1, b"value", 1)
 }
+
+/// Simulates a backend unwinding after it has accepted a buffer reference.
+pub struct PanicAfterSubmit(pub coagomem_core::io::SimIo);
+impl coagomem_core::io::IoBackend for PanicAfterSubmit {
+    unsafe fn write_at(
+        &mut self,
+        ud: u64,
+        file: u16,
+        buf: *const u8,
+        len: u32,
+        offset: u64,
+        dsync: bool,
+    ) -> Result<(), coagomem_core::io::SqFull> {
+        // SAFETY: the caller supplies the same live buffer required by this trait.
+        unsafe { self.0.write_at(ud, file, buf, len, offset, dsync)? };
+        panic!("simulated unwind after write submission");
+    }
+    unsafe fn read_at(
+        &mut self,
+        ud: u64,
+        file: u16,
+        buf: *mut u8,
+        len: u32,
+        offset: u64,
+    ) -> Result<(), coagomem_core::io::SqFull> {
+        // SAFETY: the caller supplies the same live buffer required by this trait.
+        unsafe { self.0.read_at(ud, file, buf, len, offset)? };
+        panic!("simulated unwind after read submission");
+    }
+}
+
+#[derive(Default)]
+pub struct RejectSubmit {
+    pub calls: usize,
+}
+impl coagomem_core::io::IoBackend for RejectSubmit {
+    unsafe fn write_at(
+        &mut self,
+        _ud: u64,
+        _file: u16,
+        _buf: *const u8,
+        _len: u32,
+        _offset: u64,
+        _dsync: bool,
+    ) -> Result<(), coagomem_core::io::SqFull> {
+        self.calls += 1;
+        Err(coagomem_core::io::SqFull)
+    }
+    unsafe fn read_at(
+        &mut self,
+        _ud: u64,
+        _file: u16,
+        _buf: *mut u8,
+        _len: u32,
+        _offset: u64,
+    ) -> Result<(), coagomem_core::io::SqFull> {
+        self.calls += 1;
+        Err(coagomem_core::io::SqFull)
+    }
+}

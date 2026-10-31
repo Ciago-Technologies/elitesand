@@ -1,0 +1,114 @@
+//! Simulated-time model of the per-core group-commit log vs the spec's per-tenant
+//! O_DIRECT delta writes. Uses the real `GroupCommitLog` against `SimIo`; only the
+//! device timing is modelled.
+//!
+//! `cargo run --release --example wa_model`
+//!
+//! Device model (conservative datacenter NVMe, per core): each write costs
+//! `LAT_NS + bytes / BW` with up to `max_inflight` writes overlapping.
+
+use slae_p0::envelope::KIND_DATA;
+use slae_p0::gclog::{GroupCommitLog, LogConfig, Recovery};
+use slae_p0::io::{Outcome, SimIo};
+use slae_p0::slot::CoreControl;
+use std::collections::HashMap;
+
+const LAT_NS: u64 = 20_000; // FUA write latency
+const BW_BYTES_PER_NS: f64 = 2.0; // 2 GB/s sequential per core share
+const DELTA: usize = 28; // spec: 28-byte delta per commit
+const SIM_NS: u64 = 50_000_000; // 50 ms simulated
+
+struct Row {
+    rate: u64,
+    commits: u64,
+    wa: f64,
+    bytes_per_commit: f64,
+    batch: f64,
+    p50_us: f64,
+    p99_us: f64,
+    dev_mb_s: f64,
+}
+
+/// `eager`: latency mode (seal as soon as the core is idle and the device is idle).
+/// Otherwise throughput mode: seal at `min_batch_bytes` or `max_delay_ns` (100 us).
+fn run(rate_per_s: u64, eager: bool) -> Row {
+    let cfg = LogConfig { capacity: 1 << 28, max_delay_ns: if eager { 200_000 } else { 100_000 }, ..LogConfig::default() };
+    let mut io = SimIo::new(1, (cfg.data_offset() + cfg.capacity) as usize);
+    let core = CoreControl::default();
+    let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh());
+    log.superblock_durable(&sb);
+    let mut due: HashMap<u64, u64> = HashMap::new();
+    let mut started: Vec<u64> = Vec::new(); // ack id -> append time
+    let mut lat: Vec<u64> = Vec::new();
+    let (mut acks, mut failed) = (Vec::new(), Vec::new());
+    let mut credit = 0.0f64;
+    let per_ns = rate_per_s as f64 / 1e9;
+    let mut now = 0u64;
+    let tick = 1_000u64; // 1 us reactor iteration
+    while now < SIM_NS {
+        now += tick;
+        credit += per_ns * tick as f64;
+        let mut arrived = false;
+        while credit >= 1.0 {
+            let id = started.len() as u64;
+            if log.append(id as u32 % 4096, KIND_DATA, &[0x5A; DELTA], Some(id), now, &mut io).is_err() {
+                break; // back-pressure: arrival waits for next tick
+            }
+            started.push(now);
+            credit -= 1.0;
+            arrived = true;
+        }
+        log.poll(now, eager && !arrived, &mut io);
+        for op in &io.inflight {
+            due.entry(op.user_data).or_insert_with(|| now + LAT_NS + (op.len as f64 / BW_BYTES_PER_NS) as u64);
+        }
+        while let Some(i) = io.inflight.iter().position(|op| due[&op.user_data] <= now) {
+            let ud = io.inflight[i].user_data;
+            due.remove(&ud);
+            let (ud, res) = io.complete(i, Outcome::Ok);
+            log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed).unwrap();
+            for a in acks.drain(..) {
+                lat.push(now - started[a as usize]);
+            }
+        }
+    }
+    lat.sort_unstable();
+    let st = log.stats;
+    let q = |p: f64| lat[((lat.len() - 1) as f64 * p) as usize] as f64 / 1000.0;
+    Row {
+        rate: rate_per_s,
+        commits: lat.len() as u64,
+        wa: st.write_amplification(),
+        bytes_per_commit: st.device_bytes as f64 / st.records.max(1) as f64,
+        batch: st.records as f64 / st.batches.max(1) as f64,
+        p50_us: q(0.50),
+        p99_us: q(0.99),
+        dev_mb_s: st.device_bytes as f64 / (SIM_NS as f64 / 1e9) / 1e6,
+    }
+}
+
+fn main() {
+    let base_wa = 4096.0 / DELTA as f64;
+    println!("Spec baseline: one 4 KiB O_DIRECT write per 28 B delta => WA {base_wa:.1}x, 4096 B/commit");
+    println!("  at the spec's claimed 480,000 TPS that is {:.2} GB/s of random 4 KiB FUA writes\n", 480_000.0 * 4096.0 / 1e9);
+    for (title, eager) in [("latency mode (seal when core and device are idle)", true), ("throughput mode (seal at 64 KiB or 100 us)", false)] {
+        println!("{title}");
+        println!("{:>9} {:>8} {:>7} {:>9} {:>10} {:>8} {:>8} {:>9} {:>10}", "rate/s", "acked", "WA", "B/commit", "rec/batch", "p50 us", "p99 us", "dev MB/s", "vs 146x");
+        for rate in [1_000, 10_000, 100_000, 250_000, 480_000, 1_000_000] {
+            let r = run(rate, eager);
+            println!(
+                "{:>9} {:>8} {:>6.2}x {:>9.1} {:>10.1} {:>8.1} {:>8.1} {:>9.1} {:>9.0}x",
+                r.rate,
+                r.commits,
+                r.wa,
+                r.bytes_per_commit,
+                r.batch,
+                r.p50_us,
+                r.p99_us,
+                r.dev_mb_s,
+                base_wa / r.wa
+            );
+        }
+        println!();
+    }
+}

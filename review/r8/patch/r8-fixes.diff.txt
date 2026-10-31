@@ -1,0 +1,348 @@
+diff -ruN -x target -x vendor -x '*.log' a/ciagomem-engine/src/runtime.rs b/ciagomem-engine/src/runtime.rs
+--- a/ciagomem-engine/src/runtime.rs	2026-10-31 04:57:57.703481377 +0000
++++ b/ciagomem-engine/src/runtime.rs	2026-10-31 05:00:26.435481377 +0000
+@@ -90,8 +90,8 @@
+ }
+ pub struct Engine<J: Journal> {
+     boot_epoch: u128,
+-    clock: Arc<dyn coagomem_core::Clock>,
+-    last_now: std::cell::Cell<u64>,
++    clock: Arc<dyn coagomem_core::Clock + Send + Sync>,
++    last_now: std::sync::atomic::AtomicU64,
+     shards: Vec<Shard>,
+     limits: Limits,
+     journal: J,
+@@ -204,7 +204,7 @@
+         limits: Limits,
+         journal: J,
+         boot_epoch: u128,
+-        clock: Arc<dyn coagomem_core::Clock>,
++        clock: Arc<dyn coagomem_core::Clock + Send + Sync>,
+     ) -> Result<Self> {
+         if boot_epoch == 0
+             || cores == 0
+@@ -219,7 +219,7 @@
+         Ok(Self {
+             boot_epoch,
+             clock,
+-            last_now: std::cell::Cell::new(0),
++            last_now: std::sync::atomic::AtomicU64::new(0),
+             shards: (0..cores).map(|_| Shard::default()).collect(),
+             limits,
+             journal,
+@@ -231,8 +231,12 @@
+         })
+     }
+     fn authorize(&self, token: &VerifiedMacaroon) -> Result<()> {
+-        let now = self.clock.now_ns().max(self.last_now.get());
+-        self.last_now.set(now);
++        // R8-3: Send + Sync high-water mark (Engine was Send + Sync before R7-5).
++        let seen = self.clock.now_ns();
++        let now = seen.max(
++            self.last_now
++                .fetch_max(seen, std::sync::atomic::Ordering::AcqRel),
++        );
+         if token.boot_epoch() != self.boot_epoch || now >= token.expires_at() {
+             Err(Error::Permission)
+         } else {
+diff -ruN -x target -x vendor -x '*.log' a/ciagomem-engine/tests/r8_engine.rs b/ciagomem-engine/tests/r8_engine.rs
+--- a/ciagomem-engine/tests/r8_engine.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/ciagomem-engine/tests/r8_engine.rs	2026-10-31 05:01:28.723481377 +0000
+@@ -0,0 +1,6 @@
++//! R8-3 acceptance: the engine stays movable to and shareable with core threads.
++fn send_sync<T: Send + Sync>() {}
++#[test]
++fn r8_3_engine_is_send_and_sync() {
++    send_sync::<ciagomem_engine::Engine<ciagomem_engine::MemoryJournal>>();
++}
+diff -ruN -x target -x vendor -x '*.log' a/coagomem-core/Cargo.toml b/coagomem-core/Cargo.toml
+--- a/coagomem-core/Cargo.toml	2026-10-31 04:57:57.703481377 +0000
++++ b/coagomem-core/Cargo.toml	2026-10-31 05:01:28.719481377 +0000
+@@ -36,3 +36,7 @@
+ [[test]]
+ name = "r7_regressions"
+ path = "../tests/r7_regressions.rs"
++
++[[test]]
++name = "r8_regressions"
++path = "../tests/r8_regressions.rs"
+diff -ruN -x target -x vendor -x '*.log' a/coagomem-core/src/destination.rs b/coagomem-core/src/destination.rs
+--- a/coagomem-core/src/destination.rs	2026-10-31 04:57:57.707481377 +0000
++++ b/coagomem-core/src/destination.rs	2026-10-31 05:00:08.495481377 +0000
+@@ -11,18 +11,32 @@
+ pub struct LocalExportRoot {
+     directory: File,
+     tenant: u128,
++    boot_epoch: u128,
+ }
+ impl LocalExportRoot {
+-    /// Trusted operator configuration: one tenant's export directory, opened once.
+-    pub fn open(path: &Path, tenant: u128) -> std::io::Result<Self> {
++    /// Trusted operator configuration: one tenant's export directory, opened once, bound
++    /// to the current boot epoch so capabilities from an earlier boot are rejected (R8-2).
++    pub fn open(path: &Path, tenant: u128, boot_epoch: u128) -> std::io::Result<Self> {
+         let directory = OpenOptions::new()
+             .read(true)
+             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+             .open(path)?;
+-        Ok(Self { directory, tenant })
++        Ok(Self {
++            directory,
++            tenant,
++            boot_epoch,
++        })
+     }
+-    pub fn create(&self, session: &VerifiedMacaroon, relative: &str) -> std::io::Result<File> {
++    /// `now` must come from the trusted boot clock used to issue `session` (R8-2).
++    pub fn create(
++        &self,
++        session: &VerifiedMacaroon,
++        relative: &str,
++        now: u64,
++    ) -> std::io::Result<File> {
+         if session.tenant_incarnation() != self.tenant
++            || session.boot_epoch() != self.boot_epoch
++            || now >= session.expires_at()
+             || !session.allows(OP_OPERATOR | OP_READ)
+             || relative.is_empty()
+             || Path::new(relative).is_absolute()
+diff -ruN -x target -x vendor -x '*.log' a/coagomem-core/src/slot.rs b/coagomem-core/src/slot.rs
+--- a/coagomem-core/src/slot.rs	2026-10-31 04:57:57.707481377 +0000
++++ b/coagomem-core/src/slot.rs	2026-10-31 05:00:32.447481377 +0000
+@@ -31,7 +31,7 @@
+ use core::ptr::NonNull;
+ use core::sync::atomic::{
+     AtomicU64,
+-    Ordering::{Acquire, Relaxed, Release},
++    Ordering::{AcqRel, Acquire, Relaxed, Release},
+     fence,
+ };
+ 
+@@ -230,6 +230,8 @@
+     durable_lsn: CachePadded<AtomicU64>,
+     publication: std::sync::Mutex<()>,
+     fenced: core::sync::atomic::AtomicBool,
++    /// Set while exactly one group-commit log publishes this core's watermark (R8-1).
++    log_bound: core::sync::atomic::AtomicBool,
+ }
+ 
+ impl CoreControl {
+@@ -262,6 +264,16 @@
+     pub fn is_fenced(&self) -> bool {
+         self.fenced.load(Acquire)
+     }
++    /// Claim the single log-publisher role for this core. `false` if already claimed.
++    pub fn bind_log(&self) -> bool {
++        self.log_bound
++            .compare_exchange(false, true, AcqRel, Acquire)
++            .is_ok()
++    }
++    /// Release the publisher role (the owning log's `Drop`).
++    pub fn unbind_log(&self) {
++        self.log_bound.store(false, Release);
++    }
+ }
+ 
+ // ---------------------------------------------------------------------------------
+@@ -482,10 +494,10 @@
+     pub fn is_empty(&self) -> bool {
+         self.n == 0
+     }
+-    #[inline(always)]
+     pub fn controls(&self) -> &std::sync::Arc<[CoreControl]> {
+         &self.cores
+     }
++    #[inline(always)]
+     pub fn core(&self, core: u8) -> &CoreControl {
+         &self.cores[core as usize]
+     }
+diff -ruN -x target -x vendor -x '*.log' a/coagomem-wal/src/gclog.rs b/coagomem-wal/src/gclog.rs
+--- a/coagomem-wal/src/gclog.rs	2026-10-31 04:57:57.707481377 +0000
++++ b/coagomem-wal/src/gclog.rs	2026-10-31 05:00:26.435481377 +0000
+@@ -302,6 +302,12 @@
+     }
+ }
+ 
++impl Drop for GroupCommitLog {
++    fn drop(&mut self) {
++        self.controls[self.core_id as usize].unbind_log();
++    }
++}
++
+ impl GroupCommitLog {
+     /// Open after recovery. The returned superblock (new epoch) must be made durable and
+     /// then passed to `superblock_durable` before the first append.
+@@ -313,6 +319,18 @@
+     ) -> (GroupCommitLog, Superblock) {
+         cfg.validate();
+         assert!((core_id as usize) < controls.len() && !controls[core_id as usize].is_fenced());
++        // R8-1: one publisher per core, and a reused control block must not already
++        // advertise records beyond the recovered durable prefix.
++        let core = &controls[core_id as usize];
++        assert!(core.bind_log(), "core {core_id} already has a bound log");
++        if core.durable() > rec.next_lsn - 1 {
++            core.unbind_log();
++            panic!(
++                "core {core_id} watermark {} exceeds recovered end {}",
++                core.durable(),
++                rec.next_lsn - 1
++            );
++        }
+         let epoch = rec.max_epoch.max(rec.sb.epoch) + 1;
+         let sb = Superblock {
+             seq: rec.sb.seq + 1,
+diff -ruN -x target -x vendor -x '*.log' a/coagomem-wal/tests/r8_recovery.rs b/coagomem-wal/tests/r8_recovery.rs
+--- a/coagomem-wal/tests/r8_recovery.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/coagomem-wal/tests/r8_recovery.rs	2026-10-31 05:01:28.719481377 +0000
+@@ -0,0 +1,63 @@
++//! R8-1 acceptance: one log per core, and no stale watermark above the recovered end.
++use coagomem_core::io::{Outcome, SimIo};
++use coagomem_core::CoreControl;
++use coagomem_wal::envelope::KIND_DATA;
++use coagomem_wal::gclog::*;
++fn cfg() -> LogConfig {
++    LogConfig {
++        block: 4096,
++        buf_bytes: 16384,
++        buffers: 4,
++        max_inflight: 3,
++        min_batch_bytes: 8192,
++        max_delay_ns: 5000,
++        capacity: 65536,
++        file: 0,
++        tail: TailMode::Pad,
++        max_retries: 3,
++    }
++}
++fn io() -> SimIo {
++    SimIo::new(1, (cfg().data_offset() + cfg().capacity) as usize)
++}
++fn commit(log: &mut GroupCommitLog, io: &mut SimIo) {
++    log.append(1, KIND_DATA, b"a", Some(1), 0, io).unwrap();
++    log.poll(1_000_000, true, io);
++    let (ud, res) = io.complete(0, Outcome::Ok);
++    log.on_cqe(ud, res, io, &mut Vec::new(), &mut Vec::new()).unwrap();
++}
++#[test]
++fn r8_1_second_log_on_same_core_is_rejected_until_first_is_dropped() {
++    let controls = CoreControl::shared(1);
++    let (a, _) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
++    let c2 = controls.clone();
++    let second = std::panic::catch_unwind(move || {
++        GroupCommitLog::open(cfg(), &Recovery::fresh(), c2, 0);
++    });
++    assert!(second.is_err());
++    drop(a);
++    let (_b, _) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls, 0);
++}
++#[test]
++fn r8_1_reopen_rejects_watermark_beyond_recovered_end_and_accepts_exact_prefix() {
++    let controls = CoreControl::shared(1);
++    let mut d = io();
++    let (mut a, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
++    a.superblock_durable(&sb);
++    for _ in 0..3 {
++        commit(&mut a, &mut d);
++    }
++    let published = controls[0].durable();
++    drop(a);
++    let c2 = controls.clone();
++    let short = std::panic::catch_unwind(move || {
++        let rec = Recovery { next_lsn: 2, ..Recovery::fresh() };
++        GroupCommitLog::open(cfg(), &rec, c2, 0);
++    });
++    assert!(short.is_err());
++    // The failed open released its claim; an exact recovered prefix reopens normally.
++    let rec = Recovery { next_lsn: published + 1, ..Recovery::fresh() };
++    let (mut b, sb) = GroupCommitLog::open(cfg(), &rec, controls.clone(), 0);
++    b.superblock_durable(&sb);
++    assert_eq!(controls[0].durable(), published);
++}
+diff -ruN -x target -x vendor -x '*.log' a/tests/r5_regressions.rs b/tests/r5_regressions.rs
+--- a/tests/r5_regressions.rs	2026-10-31 04:57:57.715481377 +0000
++++ b/tests/r5_regressions.rs	2026-10-31 05:00:08.495481377 +0000
+@@ -242,14 +242,14 @@
+     let _ = fs::remove_dir_all(&path);
+     fs::create_dir(&path).unwrap();
+     symlink("/tmp", path.join("escape")).unwrap();
+-    let root = destination::LocalExportRoot::open(&path, 11).unwrap();
++    let root = destination::LocalExportRoot::open(&path, 11, 1).unwrap();
+     let token = session(11);
+-    assert!(root.create(&token, "../outside").is_err());
+-    assert!(root.create(&token, "escape/outside").is_err());
+-    assert!(root.create(&session(22), "foreign").is_err());
+-    let file = root.create(&token, "safe").unwrap();
++    assert!(root.create(&token, "../outside", 1).is_err());
++    assert!(root.create(&token, "escape/outside", 1).is_err());
++    assert!(root.create(&session(22), "foreign", 1).is_err());
++    let file = root.create(&token, "safe", 1).unwrap();
+     drop(file);
+-    assert!(root.create(&token, "safe").is_err());
++    assert!(root.create(&token, "safe", 1).is_err());
+     fs::remove_dir_all(path).unwrap();
+ }
+ #[cfg(target_os = "linux")]
+diff -ruN -x target -x vendor -x '*.log' a/tests/r8_regressions.rs b/tests/r8_regressions.rs
+--- a/tests/r8_regressions.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/tests/r8_regressions.rs	2026-10-31 05:01:28.715481377 +0000
+@@ -0,0 +1,60 @@
++//! R8 acceptance tests: assert corrected behavior.
++use coagomem_core::*;
++fn session(boot: u128, expires: u64) -> VerifiedMacaroon {
++    let k = KeyedPrf([9; 32]);
++    Macaroon::issue(
++        &k,
++        vec![
++            Caveat::Tenant(11),
++            Caveat::ExpiresAt(expires),
++            Caveat::PeerUid(1000),
++            Caveat::Session(1),
++            Caveat::Audience(7),
++            Caveat::BootEpoch(boot),
++            Caveat::Ops(OP_READ | OP_OPERATOR),
++            Caveat::KeyEpoch(2),
++        ],
++    )
++    .unwrap()
++    .verify(
++        &k,
++        &RequestCtx {
++            tenant_incarnation: 11,
++            key_epoch: 2,
++            now_ns: 1,
++            op_bit: OP_READ,
++            peer_uid: 1000,
++            session: 1,
++            audience: 7,
++            boot_epoch: boot,
++        },
++    )
++    .unwrap()
++}
++#[cfg(target_os = "linux")]
++#[test]
++fn r8_2_export_root_rejects_expired_and_prior_boot_capabilities() {
++    let path = std::env::temp_dir().join(format!("ciagomem-r8a-{}", std::process::id()));
++    let _ = std::fs::remove_dir_all(&path);
++    std::fs::create_dir(&path).unwrap();
++    let root = destination::LocalExportRoot::open(&path, 11, 2).unwrap();
++    // Expired at the trusted clock reading: no file is created.
++    assert!(root.create(&session(2, 100), "expired", 100).is_err());
++    assert!(!path.join("expired").exists());
++    // Capability verified on boot 1 is not valid on boot 2.
++    assert!(root.create(&session(1, 100), "old-boot", 5).is_err());
++    assert!(!path.join("old-boot").exists());
++    // Fresh, same-boot capability still works.
++    drop(root.create(&session(2, 100), "fresh", 99).unwrap());
++    std::fs::remove_dir_all(path).unwrap();
++}
++#[test]
++fn r8_1_core_control_layout_and_single_publisher_claim() {
++    assert_eq!(std::mem::size_of::<CoreControl>(), 256);
++    let c = CoreControl::shared(2);
++    assert!(c[0].bind_log());
++    assert!(!c[0].bind_log());
++    assert!(c[1].bind_log());
++    c[0].unbind_log();
++    assert!(c[0].bind_log());
++}

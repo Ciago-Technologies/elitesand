@@ -1,0 +1,168 @@
+//! R7 acceptance tests: PASS when R7-1..R7-3 are fixed.
+mod support;
+use coagomem_core::*;
+
+fn session(tenant: u128) -> VerifiedMacaroon {
+    let k = KeyedPrf([9; 32]);
+    Macaroon::issue(
+        &k,
+        vec![
+            Caveat::Tenant(tenant),
+            Caveat::ExpiresAt(1_000_000),
+            Caveat::PeerUid(1000),
+            Caveat::Session(1),
+            Caveat::Audience(7),
+            Caveat::BootEpoch(1),
+            Caveat::Ops(OP_READ | OP_OPERATOR),
+            Caveat::KeyEpoch(2),
+        ],
+    )
+    .unwrap()
+    .verify(
+        &k,
+        &RequestCtx {
+            tenant_incarnation: tenant,
+            key_epoch: 2,
+            now_ns: 1,
+            op_bit: OP_READ,
+            peer_uid: 1000,
+            session: 1,
+            audience: 7,
+            boot_epoch: 1,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn r7_1_logged_lsn_during_checkpoint_stays_pinned() {
+    use dirty::DirtyError;
+    let mut pins = TruncationPins::new(2);
+    pins.on_dirty(0, 5, 0).unwrap();
+    let image = pins.begin_checkpoint(0).unwrap();
+    // Correct host order: admission is checked before an LSN is assigned.
+    assert_eq!(pins.check_admission(0), Err(DirtyError::CheckpointInProgress));
+    // A host that logged anyway must still be able to pin the record.
+    pins.on_dirty(0, 6, 0).unwrap();
+    pins.on_dirty(1, 7, 0).unwrap();
+    assert_eq!(pins.on_checkpointed(0, image), Err(DirtyError::StaleCheckpoint));
+    // The older covering pin is retained; LSN 6 cannot be truncated.
+    assert_eq!(pins.min_needed_lsn(8), 5);
+    // Admission is released after the stale completion; a covering checkpoint unpins.
+    assert_eq!(pins.check_admission(0), Ok(()));
+    let image = pins.begin_checkpoint(0).unwrap();
+    assert_eq!(image, 6);
+    pins.on_checkpointed(0, image).unwrap();
+    assert_eq!(pins.min_needed_lsn(8), 7);
+}
+
+fn image(lsn: u64, epoch: u64) -> Vec<u8> {
+    use envelope::*;
+    let mut bytes = vec![0; 4096];
+    bytes[160..168].copy_from_slice(&lsn.to_le_bytes());
+    let img = ExtentImage {
+        tenant: 1,
+        incarnation: 123,
+        tombstone: false,
+        layout_version: 1,
+        checkpoint_lsn: lsn,
+        epoch,
+        image_seq: lsn,
+    };
+    for (i, w) in img.header_words(&bytes[IMG_BYTES..]).iter().enumerate() {
+        bytes[i * 8..i * 8 + 8].copy_from_slice(&w.to_le_bytes());
+    }
+    bytes
+}
+
+fn cold_load(bounds: lifecycle::RecoveryBounds) -> Vec<lifecycle::Event> {
+    use io::{Outcome, SimIo};
+    use lifecycle::*;
+    use slot::RouteTable;
+    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
+    let route = RouteTable::new(4);
+    let mut lc = SlotLifecycle::new(
+        &arena,
+        &route,
+        0,
+        0..2,
+        LifecycleConfig {
+            low_free: 0,
+            high_free: 1,
+            max_flush_inflight: 1,
+            max_retries: 2,
+            epoch: 2,
+        },
+    );
+    let mut disk = SimIo::new(1, 8 * 4096);
+    disk.files[0][8192..12288].copy_from_slice(&image(5, 1));
+    lc.admit_load(1, 123, bounds, ExtentLoc::new(0, 2, false), 1, false, &mut disk)
+        .unwrap();
+    let mut events = Vec::new();
+    while !disk.inflight.is_empty() {
+        let (ud, res) = disk.complete(0, Outcome::Ok);
+        lc.on_cqe(ud, res, &mut disk, &mut events);
+    }
+    events
+}
+
+#[test]
+fn r7_2_clean_cold_load_after_truncation_loads_without_replay() {
+    // Durable metadata: tenant clean at LSN 5; the node WAL now starts at 100.
+    let events = cold_load(lifecycle::RecoveryBounds::clean(2, 1, 5));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        lifecycle::Event::Loaded { checkpoint_lsn: 5, .. }
+    )));
+    // Stale image (metadata says 6, disk holds 5) fails closed.
+    let events = cold_load(lifecycle::RecoveryBounds::clean(2, 1, 6));
+    assert!(events.contains(&lifecycle::Event::NeedsRepair { tenant: 1 }));
+}
+
+#[test]
+fn r7_2_dirty_tenant_with_truncated_suffix_still_needs_repair() {
+    let events = cold_load(lifecycle::RecoveryBounds {
+        current_epoch: 2,
+        expected_image_epoch: Some(1),
+        wal_start_lsn: 100,
+        wal_end_lsn: 200,
+    });
+    assert!(events.contains(&lifecycle::Event::NeedsRepair { tenant: 1 }));
+}
+
+#[test]
+fn r7_3_non_monotonic_now_cannot_reopen_replay() {
+    let signer = AttestationSigner::from_seed([3; 32]);
+    let verifier = signer.verifier();
+    let token = session(11);
+    let mut tracker = NonceTracker::new(4, 4, 1);
+    let admit = |nonce: u128, now: u64, expires: u64, tr: &mut NonceTracker| {
+        let label = support::label(Integrity::AgentDerived, 2, vec![11]).unwrap();
+        let e = signer.endorse(Approval {
+            tenant: 11,
+            session: 1,
+            boot_epoch: 1,
+            nonce,
+            field: FrameField::ActiveIntent as u8,
+            sources: 2,
+            digest: content_digest(b"value"),
+            sink: 11,
+            tool: "send".into(),
+            expires_at: expires,
+        });
+        let ctx = AdmissionContext {
+            session: &token,
+            reader: 11,
+            content: b"value",
+            now,
+            nonce,
+            tool: "send",
+            sink: 11,
+            verifier: &verifier,
+        };
+        admit_to_frame(FrameField::ActiveIntent, label, Some(&e), &ctx, tr)
+    };
+    assert!(admit(1, 10, 500, &mut tracker).is_ok());
+    assert!(admit(2, 600, 900, &mut tracker).is_ok());
+    assert!(admit(1, 20, 500, &mut tracker).is_err(), "replay must be denied");
+}

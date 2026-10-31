@@ -59,7 +59,9 @@ impl UserData {
 
 /// Contract of a submission: `Ok(())` means exactly one CQE carrying `user_data` *will*
 /// be delivered later (success, error, or `-ECANCELED`). Until it is, the buffer belongs
-/// to the kernel/device.
+/// to the kernel/device. `Err(SqFull)` must retain no request or buffer reference.
+/// A backend that unwinds after accepting a request may still reference its buffer;
+/// owners must provision lifetime protection before invoking submission.
 pub trait IoBackend {
     /// # Safety
     /// `buf..buf+len` must stay allocated and must not be written by the CPU until the

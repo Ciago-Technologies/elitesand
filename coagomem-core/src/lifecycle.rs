@@ -111,6 +111,18 @@ impl RecoveryBounds {
             && self.wal_start_lsn - 1 <= checkpoint
             && checkpoint <= self.wal_end_lsn
     }
+    /// Normal (non-crash) cold load of a tenant whose durable metadata records that its
+    /// image at `checkpoint_lsn` contains every record it has logged. The required log
+    /// interval is empty, so WAL truncation below it is irrelevant; an older or newer
+    /// image on disk fails coverage and requests repair (R7-2).
+    pub fn clean(current_epoch: u64, image_epoch: u64, checkpoint_lsn: u64) -> Self {
+        Self {
+            current_epoch,
+            expected_image_epoch: Some(image_epoch),
+            wal_start_lsn: checkpoint_lsn.checked_add(1).unwrap_or(0),
+            wal_end_lsn: checkpoint_lsn,
+        }
+    }
 }
 #[derive(Debug, Clone, Copy)]
 struct Meta {
@@ -251,8 +263,36 @@ impl<const W: usize> core::fmt::Debug for SlotLifecycle<'_, W> {
 
 const EXTENT_BYTES_MAX: usize = u32::MAX as usize;
 
+impl<const W: usize> Drop for SlotLifecycle<'_, W> {
+    /// R9-1: dropping with device I/O outstanding fences the core so a late DMA cannot be
+    /// served as valid data; the arena keeps its memory alive while `io_pending > 0`.
+    fn drop(&mut self) {
+        if self.meta.iter().any(|m| m.io_inflight > 0) {
+            self.arena.core(self.core).fence();
+        }
+    }
+}
+
 impl<'a, const W: usize> SlotLifecycle<'a, W> {
     pub const EXTENT_BYTES: usize = W * 8;
+    /// True when no load or checkpoint I/O from this lifecycle is outstanding.
+    pub fn quiescent(&self) -> bool {
+        self.meta.iter().all(|m| m.io_inflight == 0)
+    }
+    /// Declare that the device holds no pointer into this lifecycle's payloads (ring
+    /// destroyed or every operation reaped), so teardown neither fences nor leaks.
+    /// Outstanding operations are abandoned; call only before dropping the lifecycle.
+    ///
+    /// # Safety
+    /// No submitted load or checkpoint may still read or write its payload.
+    pub unsafe fn release_device_references(&mut self) {
+        for i in 0..self.meta.len() {
+            while self.meta[i].io_inflight > 0 {
+                self.meta[i].io_inflight -= 1;
+                self.arena.io_completed();
+            }
+        }
+    }
 
     pub fn new(
         arena: &'a SlotArena<W>,
@@ -528,16 +568,22 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         }
         .encode();
         // SAFETY: the slot is unowned and not on the free list until this CQE (I1/I2).
-        unsafe {
+        self.arena.io_submitted();
+        self.m(idx).io_inflight += 1;
+        let result = unsafe {
             io.read_at(
                 ud,
                 loc.container(),
                 self.arena.payload_ptr(idx),
                 Self::EXTENT_BYTES as u32,
                 Self::probe_offset(loc, probe),
-            )?
+            )
         };
-        self.m(idx).io_inflight += 1;
+        if let Err(e) = result {
+            self.m(idx).io_inflight -= 1;
+            self.arena.io_completed();
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -899,7 +945,9 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
         .encode();
         // SAFETY: Flushing freezes CPU writes to this payload until the CQE (I2), and the
         // slot cannot be freed while io_inflight > 0 (I1).
-        unsafe {
+        self.arena.io_submitted();
+        self.m(idx).io_inflight += 1;
+        let result = unsafe {
             io.write_at(
                 ud,
                 target.container(),
@@ -907,11 +955,15 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
                 Self::EXTENT_BYTES as u32,
                 target.current_offset(Self::EXTENT_BYTES as u64),
                 true,
-            )?;
+            )
+        };
+        if let Err(e) = result {
+            self.m(idx).io_inflight -= 1;
+            self.arena.io_completed();
+            return Err(e);
         }
         let m = self.m(idx);
         m.ticket = ticket;
-        m.io_inflight += 1;
         m.state = State::Flushing {
             res: r,
             target,
@@ -976,7 +1028,18 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
     // ----------------------------------------------------------------- completions
 
     /// Feed every CQE whose op is `Load` or `Checkpoint` here.
-    pub fn on_cqe<I: IoBackend>(
+    ///
+    /// # Safety
+    /// A matching token/result must be a genuine completed request owned by this
+    /// lifecycle; the backend must no longer access its buffer. Proven stale tokens
+    /// are allowed only when they cannot match a currently pending request.
+    /// ```compile_fail
+    /// use coagomem_core::{lifecycle::SlotLifecycle,io::IoBackend};
+    /// fn forged(owner:&mut SlotLifecycle<'_,512>,io:&mut impl IoBackend) {
+    ///     owner.on_cqe(0,4096,io,&mut Vec::new());
+    /// }
+    /// ```
+    pub unsafe fn on_cqe<I: IoBackend>(
         &mut self,
         user_data: u64,
         res: i32,
@@ -1002,7 +1065,9 @@ impl<'a, const W: usize> SlotLifecycle<'a, W> {
             return;
         }
         m.io_inflight -= 1;
-        match (ud.op, m.state) {
+        let state = m.state;
+        self.arena.io_completed();
+        match (ud.op, state) {
             (Op::Load, State::Loading { .. }) if current => self.on_load_cqe(idx, res, io, events),
             (
                 Op::Checkpoint,
@@ -1113,7 +1178,8 @@ mod tests {
     ) -> Vec<Event> {
         let (ud, res) = io.complete(i, o);
         let mut ev = Vec::new();
-        lc.on_cqe(ud, res, io, &mut ev);
+        /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+        unsafe { lc.on_cqe(ud, res, io, &mut ev) };
         ev
     }
 
@@ -1128,20 +1194,25 @@ mod tests {
         assert!(lc.checkpoint(h, 1, &mut io));
         let (ud, res) = io.complete(0, Outcome::Ok);
         let decoded = UserData::decode(ud).unwrap();
-        lc.on_cqe(
-            UserData {
-                ticket: decoded.ticket + 1,
-                ..decoded
-            }
-            .encode(),
-            res,
-            &mut io,
-            &mut ev,
-        );
+        /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+        unsafe {
+            lc.on_cqe(
+                UserData {
+                    ticket: decoded.ticket + 1,
+                    ..decoded
+                }
+                .encode(),
+                res,
+                &mut io,
+                &mut ev,
+            )
+        };
         assert_eq!(lc.flushing(), 1);
-        lc.on_cqe(ud, res, &mut io, &mut ev);
+        /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+        unsafe { lc.on_cqe(ud, res, &mut io, &mut ev) };
         assert_eq!(lc.flushing(), 0);
-        lc.on_cqe(ud, res, &mut io, &mut ev);
+        /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+        unsafe { lc.on_cqe(ud, res, &mut io, &mut ev) };
         assert_eq!(lc.flushing(), 0);
         assert_eq!(lc.stats.stale_cqes, 2);
         lc.unpin(u32::MAX, &mut ev);
@@ -1280,18 +1351,23 @@ mod tests {
 
         // Out-of-range CQE: counted, ignored.
         let mut e = Vec::new();
-        lc.on_cqe(
-            UserData {
-                op: Op::Checkpoint,
-                object: 77,
-                ticket: 1,
-            }
-            .encode(),
-            4096,
-            &mut io,
-            &mut e,
-        );
+        /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+        unsafe {
+            lc.on_cqe(
+                UserData {
+                    op: Op::Checkpoint,
+                    object: 77,
+                    ticket: 1,
+                }
+                .encode(),
+                4096,
+                &mut io,
+                &mut e,
+            )
+        };
         assert!(e.is_empty() && lc.stats.stale_cqes == 1);
+        // SAFETY: `io` is never completed again; it is dropped with this test.
+        unsafe { lc.release_device_references() };
     }
 
     #[test]
@@ -1335,12 +1411,7 @@ mod tests {
             .admit_load(
                 3,
                 (3) as u128 + 1,
-                RecoveryBounds {
-                    current_epoch: 2,
-                    expected_image_epoch: None,
-                    wal_start_lsn: 1,
-                    wal_end_lsn: 6,
-                },
+                RecoveryBounds::clean(2, 1, 6),
                 cur,
                 1,
                 false,
@@ -1364,7 +1435,7 @@ mod tests {
         assert_eq!((handle.index(), checkpoint_lsn), (idx, 6));
         assert_eq!(value(&arena, handle, 3), Ok(222));
 
-        // Corrupt copy A on disk; evict and reload: falls back to B (lsn 5).
+        // Corrupt the exact clean image; normal reload must not substitute older B.
         lc.run_eviction(6, &mut io, &mut ev);
         lc.run_eviction(6, &mut io, &mut ev);
         assert_eq!(route.lookup(3).unwrap().0, SlotHandle::NULL);
@@ -1373,12 +1444,7 @@ mod tests {
         lc.admit_load(
             3,
             (3) as u128 + 1,
-            RecoveryBounds {
-                current_epoch: 2,
-                expected_image_epoch: None,
-                wal_start_lsn: 1,
-                wal_end_lsn: 6,
-            },
+            RecoveryBounds::clean(2, 1, 6),
             cur,
             1,
             false,
@@ -1474,6 +1540,7 @@ mod tests {
             // Model: committed value per tenant, and whether it exists on disk.
             let mut model = vec![None::<u64>; T as usize];
             let mut loading = vec![false; T as usize];
+            let mut checkpointed = vec![0; T as usize];
             let mut lsn = 1u64;
             let mut ev = Vec::new();
             for _ in 0..3000 {
@@ -1510,12 +1577,7 @@ mod tests {
                                 .admit_load(
                                     t,
                                     (t) as u128 + 1,
-                                    RecoveryBounds {
-                                        current_epoch: 1,
-                                        expected_image_epoch: None,
-                                        wal_start_lsn: 1,
-                                        wal_end_lsn: lsn,
-                                    },
+                                    RecoveryBounds::clean(1, 1, checkpointed[t as usize]),
                                     cur,
                                     1,
                                     false,
@@ -1543,10 +1605,14 @@ mod tests {
                         _ => Outcome::Ok,
                     };
                     let (ud, res) = io.complete(i, o);
-                    lc.on_cqe(ud, res, &mut io, &mut ev);
+                    /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+                    unsafe { lc.on_cqe(ud, res, &mut io, &mut ev) };
                 }
                 for e in ev.drain(..) {
                     match e {
+                        Event::Checkpointed { tenant, lsn, .. } => {
+                            checkpointed[tenant as usize] = lsn
+                        }
                         Event::ReplayRequired {
                             handle,
                             through_lsn,
@@ -1589,6 +1655,9 @@ mod tests {
                 "seed {seed}: weak coverage {:?}",
                 lc.stats
             );
+            // SAFETY: the simulated device is dropped with this iteration; it never
+            // completes the remaining ops.
+            unsafe { lc.release_device_references() };
         }
     }
 }

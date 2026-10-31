@@ -1,0 +1,60 @@
+//! R8 acceptance tests: assert corrected behavior.
+use coagomem_core::*;
+fn session(boot: u128, expires: u64) -> VerifiedMacaroon {
+    let k = KeyedPrf([9; 32]);
+    Macaroon::issue(
+        &k,
+        vec![
+            Caveat::Tenant(11),
+            Caveat::ExpiresAt(expires),
+            Caveat::PeerUid(1000),
+            Caveat::Session(1),
+            Caveat::Audience(7),
+            Caveat::BootEpoch(boot),
+            Caveat::Ops(OP_READ | OP_OPERATOR),
+            Caveat::KeyEpoch(2),
+        ],
+    )
+    .unwrap()
+    .verify(
+        &k,
+        &RequestCtx {
+            tenant_incarnation: 11,
+            key_epoch: 2,
+            now_ns: 1,
+            op_bit: OP_READ,
+            peer_uid: 1000,
+            session: 1,
+            audience: 7,
+            boot_epoch: boot,
+        },
+    )
+    .unwrap()
+}
+#[cfg(target_os = "linux")]
+#[test]
+fn r8_2_export_root_rejects_expired_and_prior_boot_capabilities() {
+    let path = std::env::temp_dir().join(format!("ciagomem-r8a-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir(&path).unwrap();
+    let root = destination::LocalExportRoot::open(&path, 11, 2).unwrap();
+    // Expired at the trusted clock reading: no file is created.
+    assert!(root.create(&session(2, 100), "expired", 100).is_err());
+    assert!(!path.join("expired").exists());
+    // Capability verified on boot 1 is not valid on boot 2.
+    assert!(root.create(&session(1, 100), "old-boot", 5).is_err());
+    assert!(!path.join("old-boot").exists());
+    // Fresh, same-boot capability still works.
+    drop(root.create(&session(2, 100), "fresh", 99).unwrap());
+    std::fs::remove_dir_all(path).unwrap();
+}
+#[test]
+fn r8_1_core_control_layout_and_single_publisher_claim() {
+    assert_eq!(std::mem::size_of::<CoreControl>(), 256);
+    let c = CoreControl::shared(2);
+    assert!(c[0].bind_log());
+    assert!(!c[0].bind_log());
+    assert!(c[1].bind_log());
+    c[0].unbind_log();
+    assert!(c[0].bind_log());
+}

@@ -209,6 +209,8 @@ pub struct NonceTracker {
     per_tenant: usize,
     max_tenants: usize,
     boot_epoch: u128,
+    /// High-water clock: eviction and expiry never move backwards (R7-3).
+    clock: u64,
 }
 impl NonceTracker {
     pub fn new(per_tenant: usize, max_tenants: usize, boot_epoch: u128) -> Self {
@@ -220,7 +222,12 @@ impl NonceTracker {
             per_tenant,
             max_tenants,
             boot_epoch,
+            clock: 0,
         }
+    }
+    fn observe(&mut self, now: u64) -> u64 {
+        self.clock = self.clock.max(now);
+        self.clock
     }
     fn consume(
         &mut self,
@@ -230,6 +237,8 @@ impl NonceTracker {
         expires: u64,
         now: u64,
     ) -> Result<(), FlowDenied> {
+        self.clock = self.clock.max(now);
+        let now = self.clock;
         if expires <= now || expires - now > MAX_APPROVAL_TTL_NS {
             return Err(FlowDenied::InvalidEndorsement);
         }
@@ -294,10 +303,11 @@ pub fn admit_to_frame(
     ctx: &AdmissionContext<'_>,
     nonces: &mut NonceTracker,
 ) -> Result<FrameValue, FlowDenied> {
+    let now = nonces.observe(ctx.now);
     if !label.readers.contains(&ctx.reader) {
         return Err(FlowDenied::ReaderDenied);
     }
-    if ctx.now >= ctx.session.expires_at() {
+    if now >= ctx.session.expires_at() {
         return Err(FlowDenied::ExpiredSession);
     }
     if ctx.session.boot_epoch() != nonces.boot_epoch {
@@ -310,7 +320,7 @@ pub fn admit_to_frame(
         && (label.issuer != Some(ctx.verifier.to_bytes())
             || label.scope != Some((tenant, session, ctx.session.boot_epoch()))
             || label.digest != Some(digest)
-            || ctx.now >= label.expires_at)
+            || now >= label.expires_at)
     {
         return Err(FlowDenied::InvalidProvenance);
     }
@@ -331,7 +341,7 @@ pub fn admit_to_frame(
             tool: ctx.tool.to_owned(),
             expires_at: e.approval.expires_at,
         };
-        if !e.verify(ctx.verifier, &expected, ctx.now) {
+        if !e.verify(ctx.verifier, &expected, now) {
             return Err(FlowDenied::InvalidEndorsement);
         }
         if matches!(field, FrameField::ActiveIntent | FrameField::Playbook) {
@@ -349,7 +359,7 @@ pub fn admit_to_frame(
         return Err(FlowDenied::InsufficientIntegrity);
     }
     if let Some(e) = endorsement {
-        nonces.consume(tenant, session, ctx.nonce, e.approval.expires_at, ctx.now)?;
+        nonces.consume(tenant, session, ctx.nonce, e.approval.expires_at, now)?;
     }
     Ok(FrameValue {
         expires_at: label

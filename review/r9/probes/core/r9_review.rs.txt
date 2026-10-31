@@ -1,0 +1,26 @@
+//! Reviewer R9 probe: lifecycle/arena drop with an in-flight read (Miri reports UB).
+use coagomem_core::*;
+#[test]
+fn defect_r9_1_lifecycle_drop_with_inflight_read() {
+    use io::{Outcome, SimIo};
+    use lifecycle::*;
+    use slot::RouteTable;
+    let arena = SlotArena::<512>::new_heap(0, 2, CoreControl::shared(1));
+    let route = RouteTable::new(4);
+    let mut disk = SimIo::new(1, 8 * 4096);
+    {
+        let mut lc = SlotLifecycle::new(
+            &arena,
+            &route,
+            0,
+            0..2,
+            LifecycleConfig { low_free: 0, high_free: 1, max_flush_inflight: 1, max_retries: 2, epoch: 2 },
+        );
+        lc.admit_load(1, 123, RecoveryBounds::clean(2, 1, 5), ExtentLoc::new(0, 2, false), 1, false, &mut disk)
+            .unwrap();
+        assert_eq!(disk.inflight.len(), 1);
+    } // lifecycle dropped (safe) with the read outstanding
+    drop(arena); // the read's destination payload is freed
+    drop(route);
+    let _ = disk.complete(0, Outcome::Ok); // DMA into freed memory
+}

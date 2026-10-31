@@ -1,0 +1,61 @@
+{
+  "planning": "deep",
+  "context_depth": "dependency",
+  "verification_depth": "impact",
+  "delegation": "none",
+  "reason_codes": [
+    "R9-device-buffer-lifetime",
+    "exclusive-publication-capability",
+    "authorized-cleanup"
+  ],
+  "allowed_write_scope": [
+    "ciagomem-slae",
+    "ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md",
+    "ciagomem-r9-fixed-review.zip",
+    "ciagomem-r8-fixed-review.zip",
+    "New File/ciagomem-r8-fix-patch.zip",
+    "New File/CiagoMem-SLAE R7 Remediation Verification (R8).md"
+  ],
+  "acceptance": [
+    "supplied R9 probes evaluated in bounded child processes",
+    "R9 fixes and callers verified",
+    "teardown/new-submission lifetime regressions covered",
+    "single project policy JSON",
+    "obsolete uploads removed after preserving evidence",
+    "specification synchronized and fresh review ZIP validated"
+  ],
+  "project_invariants": [
+    "five-crate acyclic workspace",
+    "legacy vulnerability APIs opt-in only",
+    "default and all-feature release tests",
+    "preserve upstream vendor sources and licenses",
+    "report actual verification and remaining production gates"
+  ],
+  "supersedes": [
+    "assembly-policy.json",
+    "ecosystem-policy.json",
+    "r5-policy.json",
+    "r6-policy.json",
+    "r7-policy.json",
+    "review-policy.json"
+  ],
+  "cleanup_targets": [
+    "New File/Old/ciagomem-r6-verification-harness.zip",
+    "New File/Old/ciagomem-r5-review-harness.zip",
+    "New File/Old/ciagomem-v30-review-harness.zip",
+    "New File/Old/ciagomem-r7-fix-patch.zip",
+    "ciagomem-r5-fixed-review.zip",
+    "ciagomem-r6-fixed-review.zip",
+    "ciagomem-r7-fixed-review.zip",
+    "ciagomem-slae-perplexity-review.zip",
+    "ciagomem-v25-audit-harness.zip",
+    "slae-p0 (P0 fix crate).zip",
+    "slae-patterns.zip",
+    "slae-p0",
+    "ciagomem-v25-audit-harness",
+    "New File/Old",
+    "ciagomem-r8-fixed-review.zip",
+    "New File/ciagomem-r8-fix-patch.zip"
+  ],
+  "maintenance": "Update policy.json in place; do not create revision-specific policy files."
+}

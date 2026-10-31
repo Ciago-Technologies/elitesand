@@ -1,5 +1,14 @@
 # R6 remediation — 31 October 2026
 
+> Historical ledger. The [R9 ledger](R9_REMEDIATION.md) supersedes publisher access and pending-device-I/O teardown contracts.
+
+
+> Historical ledger. The [R8 ledger](R8_REMEDIATION.md) supersedes durability binding, local export freshness, Engine thread traits and current cleanup/policy layout.
+
+
+> Historical ledger. The [R7 ledger](R7_REMEDIATION.md) supersedes admission/pin ordering, clean-load bounds, security time, engine token freshness and WAL control/recovery publication contracts.
+
+
 Input: **CiagoMem-SLAE R5 Remediation Verification (R6).md** and `ciagomem-r6-verification-harness.zip` from `New File/`. The harness adds seven core probes and one WAL probe, despite inconsistent probe totals in the report. All eight passed on the previous revision, reproducing its reported behavior. Five probes assert defects; those assertions have been inverted or replaced with corrected contracts. Original tests, setup and reviewer logs are retained as text under [review/r6](../review/r6).
 
 This ledger supersedes the affected R5 dispositions. The source remains a component/reference workspace, with no production sign-off.

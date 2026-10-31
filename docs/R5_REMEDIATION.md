@@ -1,5 +1,14 @@
 # R5 review disposition — 31 October 2026
 
+> Historical ledger. The [R9 ledger](R9_REMEDIATION.md) supersedes publisher access and pending-device-I/O teardown contracts.
+
+
+> Historical ledger. The [R8 ledger](R8_REMEDIATION.md) supersedes durability binding, local export freshness, Engine thread traits and current cleanup/policy layout.
+
+
+> Historical ledger. The [R7 ledger](R7_REMEDIATION.md) supersedes admission/pin ordering, clean-load bounds, security time, engine token freshness and WAL control/recovery publication contracts.
+
+
 > Historical ledger. The [R6 remediation ledger](R6_REMEDIATION.md) supersedes shared core controls, derived-label authority, random incarnations, replay quotas/boot binding, recovery epochs and checkpoint barriers.
 
 

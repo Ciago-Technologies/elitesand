@@ -1,0 +1,16 @@
+[package]
+name = "ciagomem-slae-p0"
+version = "2.5.0"
+edition = "2024"
+description = "CiagoMem - SLAE: Audit-Hardened Unified State-Log Actor Engine & CiaQL Core"
+
+[dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

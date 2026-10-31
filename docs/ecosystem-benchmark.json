@@ -1,22 +1,22 @@
 {
   "rows": 10000,
   "cores_simulated": 4,
-  "snapshot_ns": 27,
+  "snapshot_ns": 52,
   "accounted_bytes": 10260000,
   "bitmap": {
-    "ns_per_query": 1036,
+    "ns_per_query": 1085,
     "work_units": 7
   },
   "scalar": {
-    "ns_per_query": 4609543,
+    "ns_per_query": 5058765,
     "work_units": 20001
   },
-  "scope": "Single unpinned Linux process; in-memory journal; simulated owner shards; no SQL baseline; uncontrolled host load.",
+  "scope": "Single unpinned Linux process; in-memory journal; simulated owner shards; atomic engine validity checks; no SQL baseline; uncontrolled host load.",
   "date": "2026-10-31",
   "platform": "Linux-7.2.11-200.fc44.x86_64-x86_64-with-glibc2.43",
   "source_sha256": {
-    "ciagomem-engine/examples/benchmark.rs": "f45fff155ae7975254bf17e56fc82db091f0624f0b2c5331d8fd95922e49bf5f",
-    "ciagomem-engine/src/runtime.rs": "86e9fc37b7a7a0dd46dfde2e4770676c502c92ee16dd224f2ae2029253648678",
+    "ciagomem-engine/examples/benchmark.rs": "a8fb4c6318f09a11f705758323e8d41e4783426abb412eecd823ad0db94841a7",
+    "ciagomem-engine/src/runtime.rs": "06e57e5a082236edc7fbdd002ede6c54d67f17fee1100b9ce423c683d23bdd46",
     "ciagomem-engine/src/index.rs": "d4040ec8cc2be6caf61b935dc3d36a37bad5372a10148615aa02f30b58defb42"
   }
 }

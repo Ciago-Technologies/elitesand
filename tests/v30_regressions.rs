@@ -569,8 +569,9 @@ fn checked_primitives_reject_regression_before_mutating() {
             .value,
         0
     );
-    a.core(0).publish_durable(100);
-    a.core(0).publish_durable(10);
+    let publisher = slot::DurabilityPublisher::claim(a.controls().clone(), 0).unwrap();
+    publisher.publish(100);
+    publisher.publish(10);
     assert_eq!(a.core(0).durable(), 100);
 }
 #[test]
@@ -599,8 +600,9 @@ fn p0_slot_regressions_are_also_rejected_in_release() {
             attempted: 50
         })
     );
-    a.core(0).publish_durable(100);
-    a.core(0).publish_durable(10);
+    let publisher = slot::DurabilityPublisher::claim(a.controls().clone(), 0).unwrap();
+    publisher.publish(100);
+    publisher.publish(10);
     assert_eq!(a.core(0).durable(), 100);
 }
 #[test]

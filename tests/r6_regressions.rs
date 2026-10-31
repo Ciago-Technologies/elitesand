@@ -60,8 +60,10 @@ fn n1_durability_and_fence_span_all_size_classes_but_not_other_cores() {
         .install(1, TenantWord { core: 1, ..tw() }, 124, 5, 0)
         .unwrap()
         .unwrap();
-    class0.core(0).publish_durable(5);
-    class0.core(1).publish_durable(5);
+    let p0 = slot::DurabilityPublisher::claim(controls.clone(), 0).unwrap();
+    let p1 = slot::DurabilityPublisher::claim(controls.clone(), 1).unwrap();
+    p0.publish(5);
+    p1.publish(5);
     assert_eq!(class1.core(0).durable(), 5);
     assert!(
         class1
@@ -78,7 +80,7 @@ fn n1_durability_and_fence_span_all_size_classes_but_not_other_cores() {
             .unwrap_err(),
         SlotReadError::Fenced
     );
-    class0.core(0).publish_durable(u64::MAX);
+    p0.publish(u64::MAX);
     assert_eq!(class1.core(0).durable(), 5);
     assert!(
         class1
@@ -254,7 +256,7 @@ fn n7_checkpoint_barrier_releases_hot_tenant_pin_and_preserves_failed_pins() {
     for lsn in 11..1000 {
         let image = pins.begin_checkpoint(0).unwrap();
         assert_eq!(
-            pins.on_dirty(0, lsn, 0),
+            pins.check_admission(0),
             Err(DirtyError::CheckpointInProgress)
         );
         pins.on_checkpointed(0, image).unwrap();
@@ -352,7 +354,8 @@ fn n5_n6_recovery_distinguishes_absence_corruption_and_covered_single_copy() {
         let mut events = Vec::new();
         while !disk.inflight.is_empty() {
             let (ud, res) = disk.complete(0, Outcome::Ok);
-            lc.on_cqe(ud, res, &mut disk, &mut events);
+            /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+            unsafe { lc.on_cqe(ud, res, &mut disk, &mut events) };
         }
         if case == 0 {
             assert!(events.contains(&Event::Absent { tenant: 1 }));
@@ -540,11 +543,12 @@ fn n7_lifecycle_and_pin_barriers_defer_writes_until_checkpoint_completion() {
         assert!(lc.checkpoint(handle, checkpoint, &mut disk));
         assert_eq!(lc.mutate(handle, lsn, |w| w.set(20, lsn)), Err(Gate::Defer));
         assert_eq!(
-            pins.on_dirty(1, lsn, 0),
+            pins.check_admission(1),
             Err(dirty::DirtyError::CheckpointInProgress)
         );
         let (ud, res) = disk.complete(0, Outcome::Ok);
-        lc.on_cqe(ud, res, &mut disk, &mut events);
+        /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+        unsafe { lc.on_cqe(ud, res, &mut disk, &mut events) };
         pins.on_checkpointed(1, checkpoint).unwrap();
         assert_eq!(pins.min_needed_lsn(lsn), lsn);
         lc.mutate(handle, lsn, |w| w.set(20, lsn)).unwrap();
@@ -553,7 +557,8 @@ fn n7_lifecycle_and_pin_barriers_defer_writes_until_checkpoint_completion() {
     let checkpoint = pins.begin_checkpoint(1).unwrap();
     assert!(lc.checkpoint(handle, checkpoint, &mut disk));
     let (ud, res) = disk.complete(0, Outcome::Err(libc::EIO));
-    lc.on_cqe(ud, res, &mut disk, &mut events);
+    /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+    unsafe { lc.on_cqe(ud, res, &mut disk, &mut events) };
     pins.checkpoint_failed(1).unwrap();
     assert_eq!(pins.min_needed_lsn(100), 19);
 }

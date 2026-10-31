@@ -1,0 +1,1298 @@
+   Compiling version_check v0.9.5 (/home/user/workspace/r7patched/ciagomem-slae/vendor/version_check-0.9.5)
+   Compiling typenum v1.17.0 (/home/user/workspace/r7patched/ciagomem-slae/vendor/typenum-1.17.0)
+warning: use of deprecated constant `std::i64::MAX`: replaced by the `MAX` associated constant on this type
+   --> vendor/typenum-1.17.0/build/main.rs:185:29
+    |
+185 |         if u <= ::std::i64::MAX as u64 && u != 0 {
+    |                             ^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+   Compiling generic-array v0.14.7 (/home/user/workspace/r7patched/ciagomem-slae/vendor/generic-array-0.14.7)
+warning: `typenum` (build script) generated 1 warning
+   Compiling proc-macro2 v1.0.86 (/home/user/workspace/r7patched/ciagomem-slae/vendor/proc-macro2-1.0.86)
+warning: unexpected `cfg` condition value: `cargo-clippy`
+  --> vendor/typenum-1.17.0/src/lib.rs:51:5
+   |
+51 |     feature = "cargo-clippy",
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `const-generics`, `force_unix_path_separator`, `i128`, `no_std`, `scale-info`, `scale_info`, and `strict`
+   = help: consider adding `cargo-clippy` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `cargo-clippy`
+  --> vendor/typenum-1.17.0/src/lib.rs:61:13
+   |
+61 | #![cfg_attr(feature = "cargo-clippy", deny(clippy::missing_inline_in_public_items))]
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `const-generics`, `force_unix_path_separator`, `i128`, `no_std`, `scale-info`, `scale_info`, and `strict`
+   = help: consider adding `cargo-clippy` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `cargo-clippy`
+  --> vendor/typenum-1.17.0/src/lib.rs:51:5
+   |
+51 |     feature = "cargo-clippy",
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `const-generics`, `force_unix_path_separator`, `i128`, `no_std`, `scale-info`, `scale_info`, and `strict`
+   = help: consider adding `cargo-clippy` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: duplicate diagnostic emitted due to `-Z deduplicate-diagnostics=no`
+
+warning: unexpected `cfg` condition value: `cargo-clippy`
+  --> vendor/typenum-1.17.0/src/lib.rs:61:13
+   |
+61 | #![cfg_attr(feature = "cargo-clippy", deny(clippy::missing_inline_in_public_items))]
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `const-generics`, `force_unix_path_separator`, `i128`, `no_std`, `scale-info`, `scale_info`, and `strict`
+   = help: consider adding `cargo-clippy` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: duplicate diagnostic emitted due to `-Z deduplicate-diagnostics=no`
+
+warning: unexpected `cfg` condition name: `tests`
+   --> vendor/typenum-1.17.0/src/bit.rs:187:7
+    |
+187 | #[cfg(tests)]
+    |       ^^^^^ help: there is a config with a similar name: `test`
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tests)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(tests)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `tests`
+    --> vendor/typenum-1.17.0/src/uint.rs:1656:7
+     |
+1656 | #[cfg(tests)]
+     |       ^^^^^ help: there is a config with a similar name: `test`
+     |
+     = help: consider using a Cargo feature instead
+     = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+              [lints.rust]
+              unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tests)'] }
+     = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(tests)");` to the top of the `build.rs`
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `cargo-clippy`
+    --> vendor/typenum-1.17.0/src/uint.rs:1709:16
+     |
+1709 |     #[cfg_attr(feature = "cargo-clippy", allow(clippy::suspicious_arithmetic_impl))]
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: expected values for `feature` are: `const-generics`, `force_unix_path_separator`, `i128`, `no_std`, `scale-info`, `scale_info`, and `strict`
+     = help: consider adding `cargo-clippy` as a feature in `Cargo.toml`
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unused import: `*`
+   --> vendor/typenum-1.17.0/src/lib.rs:104:25
+    |
+104 |     N1, N2, Z0, P1, P2, *,
+    |                         ^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling semver v1.0.25 (/home/user/workspace/r7patched/ciagomem-slae/vendor/semver-1.0.25)
+   Compiling unicode-ident v1.0.12 (/home/user/workspace/r7patched/ciagomem-slae/vendor/unicode-ident-1.0.12)
+warning: `typenum` (lib) generated 8 warnings (run `cargo fix --lib -p typenum` to apply 1 suggestion)
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/proc-macro2-1.0.86/src/parse.rs:125:25
+    |
+125 | fn block_comment(input: Cursor) -> PResult<&str> {
+    |                         ^^^^^^     ^^^^^^^^^^^^^
+    |                         |          |       |
+    |                         |          |       the same lifetime is elided here
+    |                         |          the same lifetime is hidden here
+    |                         the lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+125 | fn block_comment(input: Cursor<'_>) -> PResult<'_, &str> {
+    |                               ++++             +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/proc-macro2-1.0.86/src/parse.rs:322:25
+    |
+322 | fn ident_not_raw(input: Cursor) -> PResult<&str> {
+    |                         ^^^^^^     ^^^^^^^^^^^^^
+    |                         |          |       |
+    |                         |          |       the same lifetime is elided here
+    |                         |          the same lifetime is hidden here
+    |                         the lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+322 | fn ident_not_raw(input: Cursor<'_>) -> PResult<'_, &str> {
+    |                               ++++             +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/proc-macro2-1.0.86/src/parse.rs:478:35
+    |
+478 | fn delimiter_of_raw_string(input: Cursor) -> PResult<&str> {
+    |                                   ^^^^^^     ^^^^^^^^^^^^^
+    |                                   |          |       |
+    |                                   |          |       the same lifetime is elided here
+    |                                   |          the same lifetime is hidden here
+    |                                   the lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+478 | fn delimiter_of_raw_string(input: Cursor<'_>) -> PResult<'_, &str> {
+    |                                         ++++             +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/proc-macro2-1.0.86/src/parse.rs:961:32
+    |
+961 | fn doc_comment_contents(input: Cursor) -> PResult<(&str, bool)> {
+    |                                ^^^^^^     ^^^^^^^^^^^^^^^^^^^^^
+    |                                |          |        |
+    |                                |          |        the same lifetime is elided here
+    |                                |          the same lifetime is hidden here
+    |                                the lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+961 | fn doc_comment_contents(input: Cursor<'_>) -> PResult<'_, (&str, bool)> {
+    |                                      ++++             +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/proc-macro2-1.0.86/src/parse.rs:984:37
+    |
+984 | fn take_until_newline_or_eof(input: Cursor) -> (Cursor, &str) {
+    |                                     ^^^^^^      ^^^^^^  ^^^^ the same lifetime is elided here
+    |                                     |           |
+    |                                     |           the same lifetime is hidden here
+    |                                     the lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+984 | fn take_until_newline_or_eof(input: Cursor<'_>) -> (Cursor<'_>, &str) {
+    |                                           ++++            ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/proc-macro2-1.0.86/src/rcvec.rs:33:17
+   |
+33 |     pub fn iter(&self) -> slice::Iter<T> {
+   |                 ^^^^^     ^^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                 |
+   |                 the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+33 |     pub fn iter(&self) -> slice::Iter<'_, T> {
+   |                                       +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/proc-macro2-1.0.86/src/rcvec.rs:37:21
+   |
+37 |     pub fn make_mut(&mut self) -> RcVecMut<T>
+   |                     ^^^^^^^^^     ^^^^^^^^^^^ the same lifetime is hidden here
+   |                     |
+   |                     the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+37 |     pub fn make_mut(&mut self) -> RcVecMut<'_, T>
+   |                                            +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/proc-macro2-1.0.86/src/rcvec.rs:46:20
+   |
+46 |     pub fn get_mut(&mut self) -> Option<RcVecMut<T>> {
+   |                    ^^^^^^^^^            ^^^^^^^^^^^ the same lifetime is hidden here
+   |                    |
+   |                    the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+46 |     pub fn get_mut(&mut self) -> Option<RcVecMut<'_, T>> {
+   |                                                  +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/proc-macro2-1.0.86/src/rcvec.rs:83:19
+   |
+83 |     pub fn as_mut(&mut self) -> RcVecMut<T> {
+   |                   ^^^^^^^^^     ^^^^^^^^^^^ the same lifetime is hidden here
+   |                   |
+   |                   the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+83 |     pub fn as_mut(&mut self) -> RcVecMut<'_, T> {
+   |                                          +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/proc-macro2-1.0.86/src/rcvec.rs:109:19
+    |
+109 |     pub fn as_mut(&mut self) -> RcVecMut<T> {
+    |                   ^^^^^^^^^     ^^^^^^^^^^^ the same lifetime is hidden here
+    |                   |
+    |                   the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+109 |     pub fn as_mut(&mut self) -> RcVecMut<'_, T> {
+    |                                          +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/proc-macro2-1.0.86/src/fallback.rs:169:20
+    |
+169 | fn get_cursor(src: &str) -> Cursor {
+    |                    ^^^^     ^^^^^^ the same lifetime is hidden here
+    |                    |
+    |                    the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+169 | fn get_cursor(src: &str) -> Cursor<'_> {
+    |                                   ++++
+
+warning: unexpected `cfg` condition name: `relaxed_coherence`
+   --> vendor/generic-array-0.14.7/src/impls.rs:136:19
+    |
+126 |   macro_rules! impl_from {
+...
+136 |               #[cfg(relaxed_coherence)]
+    |                     ^^^^^^^^^^^^^^^^^
+...
+183 | / impl_from! {
+184 | |     1  => ::typenum::U1,
+185 | |     2  => ::typenum::U2,
+186 | |     3  => ::typenum::U3,
+...   |
+215 | |     32 => ::typenum::U32
+216 | | }
+    | |_- in this macro invocation
+    |
+    = help: expected names are: `docsrs`, `feature`, and `test` and 34 more
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(relaxed_coherence)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(relaxed_coherence)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition name: `relaxed_coherence`
+   --> vendor/generic-array-0.14.7/src/impls.rs:158:23
+    |
+126 |   macro_rules! impl_from {
+...
+158 |               #[cfg(not(relaxed_coherence))]
+    |                         ^^^^^^^^^^^^^^^^^
+...
+183 | / impl_from! {
+184 | |     1  => ::typenum::U1,
+185 | |     2  => ::typenum::U2,
+186 | |     3  => ::typenum::U3,
+...   |
+215 | |     32 => ::typenum::U32
+216 | | }
+    | |_- in this macro invocation
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(relaxed_coherence)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(relaxed_coherence)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `relaxed_coherence`
+   --> vendor/generic-array-0.14.7/src/impls.rs:136:19
+    |
+126 |   macro_rules! impl_from {
+...
+136 |               #[cfg(relaxed_coherence)]
+    |                     ^^^^^^^^^^^^^^^^^
+...
+183 | / impl_from! {
+184 | |     1  => ::typenum::U1,
+185 | |     2  => ::typenum::U2,
+186 | |     3  => ::typenum::U3,
+...   |
+215 | |     32 => ::typenum::U32
+216 | | }
+    | |_- in this macro invocation
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(relaxed_coherence)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(relaxed_coherence)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: duplicate diagnostic emitted due to `-Z deduplicate-diagnostics=no`
+
+warning: unexpected `cfg` condition name: `relaxed_coherence`
+   --> vendor/generic-array-0.14.7/src/impls.rs:158:23
+    |
+126 |   macro_rules! impl_from {
+...
+158 |               #[cfg(not(relaxed_coherence))]
+    |                         ^^^^^^^^^^^^^^^^^
+...
+183 | / impl_from! {
+184 | |     1  => ::typenum::U1,
+185 | |     2  => ::typenum::U2,
+186 | |     3  => ::typenum::U3,
+...   |
+215 | |     32 => ::typenum::U32
+216 | | }
+    | |_- in this macro invocation
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(relaxed_coherence)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(relaxed_coherence)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: duplicate diagnostic emitted due to `-Z deduplicate-diagnostics=no`
+
+warning: unexpected `cfg` condition name: `relaxed_coherence`
+   --> vendor/generic-array-0.14.7/src/impls.rs:136:19
+    |
+126 |   macro_rules! impl_from {
+...
+136 |               #[cfg(relaxed_coherence)]
+    |                     ^^^^^^^^^^^^^^^^^
+...
+219 | / impl_from! {
+220 | |     33 => ::typenum::U33,
+221 | |     34 => ::typenum::U34,
+222 | |     35 => ::typenum::U35,
+...   |
+268 | |     1024 => ::typenum::U1024
+269 | | }
+    | |_- in this macro invocation
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(relaxed_coherence)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(relaxed_coherence)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `relaxed_coherence`
+   --> vendor/generic-array-0.14.7/src/impls.rs:158:23
+    |
+126 |   macro_rules! impl_from {
+...
+158 |               #[cfg(not(relaxed_coherence))]
+    |                         ^^^^^^^^^^^^^^^^^
+...
+219 | / impl_from! {
+220 | |     33 => ::typenum::U33,
+221 | |     34 => ::typenum::U34,
+222 | |     35 => ::typenum::U35,
+...   |
+268 | |     1024 => ::typenum::U1024
+269 | | }
+    | |_- in this macro invocation
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(relaxed_coherence)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(relaxed_coherence)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `relaxed_coherence`
+   --> vendor/generic-array-0.14.7/src/impls.rs:136:19
+    |
+126 |   macro_rules! impl_from {
+...
+136 |               #[cfg(relaxed_coherence)]
+    |                     ^^^^^^^^^^^^^^^^^
+...
+219 | / impl_from! {
+220 | |     33 => ::typenum::U33,
+221 | |     34 => ::typenum::U34,
+222 | |     35 => ::typenum::U35,
+...   |
+268 | |     1024 => ::typenum::U1024
+269 | | }
+    | |_- in this macro invocation
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(relaxed_coherence)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(relaxed_coherence)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: duplicate diagnostic emitted due to `-Z deduplicate-diagnostics=no`
+
+warning: unexpected `cfg` condition name: `relaxed_coherence`
+   --> vendor/generic-array-0.14.7/src/impls.rs:158:23
+    |
+126 |   macro_rules! impl_from {
+...
+158 |               #[cfg(not(relaxed_coherence))]
+    |                         ^^^^^^^^^^^^^^^^^
+...
+219 | / impl_from! {
+220 | |     33 => ::typenum::U33,
+221 | |     34 => ::typenum::U34,
+222 | |     35 => ::typenum::U35,
+...   |
+268 | |     1024 => ::typenum::U1024
+269 | | }
+    | |_- in this macro invocation
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(relaxed_coherence)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(relaxed_coherence)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: duplicate diagnostic emitted due to `-Z deduplicate-diagnostics=no`
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/generic-array-0.14.7/src/lib.rs:235:33
+    |
+235 |     pub unsafe fn iter_position(&mut self) -> (slice::IterMut<T>, &mut usize) {
+    |                                 ^^^^^^^^^      ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^ the same lifetime is elided here
+    |                                 |              |
+    |                                 |              the same lifetime is hidden here
+    |                                 the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+235 |     pub unsafe fn iter_position(&mut self) -> (slice::IterMut<'_, T>, &mut usize) {
+    |                                                               +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/generic-array-0.14.7/src/lib.rs:290:33
+    |
+290 |     pub unsafe fn iter_position(&mut self) -> (slice::Iter<T>, &mut usize) {
+    |                                 ^^^^^^^^^      ^^^^^^^^^^^^^^  ^^^^^^^^^^ the same lifetime is elided here
+    |                                 |              |
+    |                                 |              the same lifetime is hidden here
+    |                                 the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+290 |     pub unsafe fn iter_position(&mut self) -> (slice::Iter<'_, T>, &mut usize) {
+    |                                                            +++
+
+warning: `generic-array` (lib) generated 156 warnings (146 duplicates) (run `cargo fix --lib -p generic-array` to apply 2 suggestions)
+   Compiling block-buffer v0.10.4 (/home/user/workspace/r7patched/ciagomem-slae/vendor/block-buffer-0.10.4)
+   Compiling crypto-common v0.1.6 (/home/user/workspace/r7patched/ciagomem-slae/vendor/crypto-common-0.1.6)
+warning: `proc-macro2` (lib) generated 11 warnings (run `cargo fix --lib -p proc-macro2` to apply 11 suggestions)
+   Compiling subtle v2.6.1 (/home/user/workspace/r7patched/ciagomem-slae/vendor/subtle-2.6.1)
+warning: use of deprecated module `std::isize`: all constants in this module replaced by associated constants on the type
+  --> vendor/semver-1.0.25/src/identifier.rs:70:11
+   |
+70 | use core::isize;
+   |           ^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated module `std::usize`: all constants in this module replaced by associated constants on the type
+  --> vendor/semver-1.0.25/src/identifier.rs:76:11
+   |
+76 | use core::usize;
+   |           ^^^^^
+
+warning: use of deprecated constant `std::isize::MAX`: replaced by the `MAX` associated constant on this type
+   --> vendor/semver-1.0.25/src/identifier.rs:108:37
+    |
+108 |         debug_assert!(len <= isize::MAX as usize);
+    |                                     ^^^
+
+warning: use of deprecated constant `std::usize::MAX`: replaced by the `MAX` associated constant on this type
+   --> vendor/semver-1.0.25/src/identifier.rs:134:44
+    |
+134 |                     let max_alloc = usize::MAX / 2 - align;
+    |                                            ^^^
+
+   Compiling digest v0.10.7 (/home/user/workspace/r7patched/ciagomem-slae/vendor/digest-0.10.7)
+   Compiling rustc_version v0.4.1 (/home/user/workspace/r7patched/ciagomem-slae/vendor/rustc_version-0.4.1)
+warning: `semver` (lib) generated 4 warnings
+   Compiling quote v1.0.36 (/home/user/workspace/r7patched/ciagomem-slae/vendor/quote-1.0.36)
+   Compiling cfg-if v1.0.5 (/home/user/workspace/r7patched/ciagomem-slae/vendor/cfg-if-1.0.5)
+   Compiling curve25519-dalek v4.1.3 (/home/user/workspace/r7patched/ciagomem-slae/vendor/curve25519-dalek-4.1.3)
+   Compiling syn v2.0.87 (/home/user/workspace/r7patched/ciagomem-slae/vendor/syn-2.0.87)
+   Compiling cpufeatures v0.2.17 (/home/user/workspace/r7patched/ciagomem-slae/vendor/cpufeatures-0.2.17)
+   Compiling signature v2.2.0 (/home/user/workspace/r7patched/ciagomem-slae/vendor/signature-2.2.0)
+warning: lint `repr_transparent_external_private_fields` has been removed: converted into hard error, see <https://github.com/rust-lang/rust/issues/78586> for more information
+   --> vendor/syn-2.0.87/src/token.rs:146:28
+    |
+146 |     #[allow(unknown_lints, repr_transparent_external_private_fields)] // False positive: https://github.com/rust-lang/rust/issues/7...
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(renamed_and_removed_lints)]` on by default
+
+warning: lint `repr_transparent_external_private_fields` has been removed: converted into hard error, see <https://github.com/rust-lang/rust/issues/78586> for more information
+   --> vendor/syn-2.0.87/src/token.rs:327:36
+    |
+323 |   macro_rules! define_punctuation_structs {
+...
+327 |               #[allow(unknown_lints, repr_transparent_external_private_fields)] // False positive: https://github.com/rust-lang/rus...
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+520 | / define_punctuation_structs! {
+521 | |     "_" pub struct Underscore/1 /// wildcard patterns, inferred types, unnamed items in constants, extern crates, use declaration...
+522 | | }
+    | |_- in this macro invocation
+
+warning: lint `repr_transparent_external_private_fields` has been removed: converted into hard error, see <https://github.com/rust-lang/rust/issues/78586> for more information
+   --> vendor/syn-2.0.87/src/token.rs:327:36
+    |
+323 | / macro_rules! define_punctuation_structs {
+324 | |     ($($token:literal pub struct $name:ident/$len:tt #[doc = $usage:literal])*) => {
+325 | |         $(
+326 | |             #[cfg_attr(not(doc), repr(transparent))]
+327 | |             #[allow(unknown_lints, repr_transparent_external_private_fields)] // False positive: https://github.com/rust-lang/rus...
+    | |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...   |
+397 | |     };
+398 | | }
+    | |_- this warning originates in the macro `define_punctuation_structs` which comes from the expansion of the macro `define_punctuation`
+...
+746 | / define_punctuation! {
+747 | |     "&"           pub struct And/1        /// bitwise and logical AND, borrow, references, reference patterns
+748 | |     "&&"          pub struct AndAnd/2     /// lazy AND, borrow, references, reference patterns
+749 | |     "&="          pub struct AndEq/2      /// bitwise AND assignment
+...   |
+792 | |     "~"           pub struct Tilde/1      /// unused since before Rust 1.0
+793 | | }
+    | |_- in this macro invocation
+
+   Compiling zeroize v1.8.1 (/home/user/workspace/r7patched/ciagomem-slae/vendor/zeroize-1.8.1)
+warning: unnecessary qualification
+   --> vendor/zeroize-1.8.1/src/lib.rs:415:63
+    |
+415 |             volatile_set((self as *mut Self).cast::<u8>(), 0, mem::size_of::<Self>());
+    |                                                               ^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> vendor/zeroize-1.8.1/src/lib.rs:7:41
+    |
+  7 | #![warn(missing_docs, rust_2018_idioms, unused_qualifications)]
+    |                                         ^^^^^^^^^^^^^^^^^^^^^
+help: remove the unnecessary path segments
+    |
+415 -             volatile_set((self as *mut Self).cast::<u8>(), 0, mem::size_of::<Self>());
+415 +             volatile_set((self as *mut Self).cast::<u8>(), 0, size_of::<Self>());
+    |
+
+warning: unnecessary qualification
+   --> vendor/zeroize-1.8.1/src/lib.rs:460:43
+    |
+460 |         let size = self.len().checked_mul(mem::size_of::<Z>()).unwrap();
+    |                                           ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+460 -         let size = self.len().checked_mul(mem::size_of::<Z>()).unwrap();
+460 +         let size = self.len().checked_mul(size_of::<Z>()).unwrap();
+    |
+
+warning: unnecessary qualification
+   --> vendor/zeroize-1.8.1/src/lib.rs:840:16
+    |
+840 |     let size = mem::size_of::<F>();
+    |                ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+840 -     let size = mem::size_of::<F>();
+840 +     let size = size_of::<F>();
+    |
+
+warning: `zeroize` (lib) generated 3 warnings (run `cargo fix --lib -p zeroize` to apply 3 suggestions)
+   Compiling libc v0.2.191 (/home/user/workspace/r7patched/ciagomem-slae/vendor/libc-0.2.191)
+   Compiling ed25519 v2.2.3 (/home/user/workspace/r7patched/ciagomem-slae/vendor/ed25519-2.2.3)
+   Compiling sha2 v0.10.9 (/home/user/workspace/r7patched/ciagomem-slae/vendor/sha2-0.10.9)
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+   --> vendor/sha2-0.10.9/src/sha256/x86.rs:100:1
+    |
+100 | cpufeatures::new!(shani_cpuid, "sha", "sse2", "ssse3", "sse4.1");
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+    = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+  --> vendor/sha2-0.10.9/src/sha512/x86.rs:14:1
+   |
+14 | cpufeatures::new!(avx2_cpuid, "avx2");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `sha2` (lib) generated 2 warnings
+   Compiling io-uring v0.7.15 (/home/user/workspace/r7patched/ciagomem-slae/vendor/io-uring-0.7.15)
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/syn-2.0.87/src/buffer.rs:81:18
+   |
+81 |     pub fn begin(&self) -> Cursor {
+   |                  ^^^^^     ^^^^^^ the same lifetime is hidden here
+   |                  |
+   |                  the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+   = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+   |
+81 |     pub fn begin(&self) -> Cursor<'_> {
+   |                                  ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/syn-2.0.87/src/data.rs:71:17
+   |
+71 |     pub fn iter(&self) -> punctuated::Iter<Field> {
+   |                 ^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                 |
+   |                 the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+71 |     pub fn iter(&self) -> punctuated::Iter<'_, Field> {
+   |                                            +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/syn-2.0.87/src/data.rs:82:21
+   |
+82 |     pub fn iter_mut(&mut self) -> punctuated::IterMut<Field> {
+   |                     ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                     |
+   |                     the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+82 |     pub fn iter_mut(&mut self) -> punctuated::IterMut<'_, Field> {
+   |                                                       +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/data.rs:141:24
+    |
+141 |         pub fn members(&self) -> impl Iterator<Item = Member> + Clone + '_ [Members] {
+    |                        ^^^^^ the lifetime is elided here                    ^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+141 |         pub fn members(&self) -> impl Iterator<Item = Member> + Clone + '_ [Members<'_>] {
+    |                                                                                    ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/generics.rs:108:26
+    |
+108 |         pub fn lifetimes(&self) -> impl Iterator<Item = &LifetimeParam> [Lifetimes] {
+    |                          ^^^^^ the lifetime is elided here               ^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+108 |         pub fn lifetimes(&self) -> impl Iterator<Item = &LifetimeParam> [Lifetimes<'_>] {
+    |                                                                                   ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/generics.rs:115:30
+    |
+115 |         pub fn lifetimes_mut(&mut self) -> impl Iterator<Item = &mut LifetimeParam> [LifetimesMut] {
+    |                              ^^^^^^^^^ the lifetime is elided here                   ^^^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+115 |         pub fn lifetimes_mut(&mut self) -> impl Iterator<Item = &mut LifetimeParam> [LifetimesMut<'_>] {
+    |                                                                                                  ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/generics.rs:122:28
+    |
+122 |         pub fn type_params(&self) -> impl Iterator<Item = &TypeParam> [TypeParams] {
+    |                            ^^^^^ the lifetime is elided here           ^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+122 |         pub fn type_params(&self) -> impl Iterator<Item = &TypeParam> [TypeParams<'_>] {
+    |                                                                                  ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/generics.rs:129:32
+    |
+129 |         pub fn type_params_mut(&mut self) -> impl Iterator<Item = &mut TypeParam> [TypeParamsMut] {
+    |                                ^^^^^^^^^ the lifetime is elided here               ^^^^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+129 |         pub fn type_params_mut(&mut self) -> impl Iterator<Item = &mut TypeParam> [TypeParamsMut<'_>] {
+    |                                                                                                 ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/generics.rs:136:29
+    |
+136 |         pub fn const_params(&self) -> impl Iterator<Item = &ConstParam> [ConstParams] {
+    |                             ^^^^^ the lifetime is elided here            ^^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+136 |         pub fn const_params(&self) -> impl Iterator<Item = &ConstParam> [ConstParams<'_>] {
+    |                                                                                     ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/generics.rs:143:33
+    |
+143 |         pub fn const_params_mut(&mut self) -> impl Iterator<Item = &mut ConstParam> [ConstParamsMut] {
+    |                                 ^^^^^^^^^ the lifetime is elided here                ^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+143 |         pub fn const_params_mut(&mut self) -> impl Iterator<Item = &mut ConstParam> [ConstParamsMut<'_>] {
+    |                                                                                                    ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/generics.rs:176:27
+    |
+176 |     pub fn split_for_impl(&self) -> (ImplGenerics, TypeGenerics, Option<&WhereClause>) {
+    |                           ^^^^^      ^^^^^^^^^^^^  ^^^^^^^^^^^^         ^^^^^^^^^^^^ the same lifetime is elided here
+    |                           |          |             |
+    |                           |          |             the same lifetime is hidden here
+    |                           |          the same lifetime is hidden here
+    |                           the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+176 |     pub fn split_for_impl(&self) -> (ImplGenerics<'_>, TypeGenerics<'_>, Option<&WhereClause>) {
+    |                                                  ++++              ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/generics.rs:371:25
+    |
+371 |     pub fn as_turbofish(&self) -> Turbofish {
+    |                         ^^^^^     ^^^^^^^^^ the same lifetime is hidden here
+    |                         |
+    |                         the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+371 |     pub fn as_turbofish(&self) -> Turbofish<'_> {
+    |                                            ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+    --> vendor/syn-2.0.87/src/parse.rs:1279:35
+     |
+1279 | fn tokens_to_parse_buffer(tokens: &TokenBuffer) -> ParseBuffer {
+     |                                   ^^^^^^^^^^^^     ^^^^^^^^^^^ the same lifetime is hidden here
+     |                                   |
+     |                                   the lifetime is elided here
+     |
+     = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+     |
+1279 | fn tokens_to_parse_buffer(tokens: &TokenBuffer) -> ParseBuffer<'_> {
+     |                                                               ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/discouraged.rs:208:28
+    |
+208 |     fn parse_any_delimiter(&self) -> Result<(Delimiter, DelimSpan, ParseBuffer)>;
+    |                            ^^^^^ the lifetime is elided here       ^^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+208 |     fn parse_any_delimiter(&self) -> Result<(Delimiter, DelimSpan, ParseBuffer<'_>)>;
+    |                                                                               ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/discouraged.rs:212:28
+    |
+212 |     fn parse_any_delimiter(&self) -> Result<(Delimiter, DelimSpan, ParseBuffer)> {
+    |                            ^^^^^ the lifetime is elided here       ^^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+212 |     fn parse_any_delimiter(&self) -> Result<(Delimiter, DelimSpan, ParseBuffer<'_>)> {
+    |                                                                               ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/punctuated.rs:119:17
+    |
+119 |     pub fn iter(&self) -> Iter<T> {
+    |                 ^^^^^     ^^^^^^^ the same lifetime is hidden here
+    |                 |
+    |                 the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+119 |     pub fn iter(&self) -> Iter<'_, T> {
+    |                                +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/punctuated.rs:130:21
+    |
+130 |     pub fn iter_mut(&mut self) -> IterMut<T> {
+    |                     ^^^^^^^^^     ^^^^^^^^^^ the same lifetime is hidden here
+    |                     |
+    |                     the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+130 |     pub fn iter_mut(&mut self) -> IterMut<'_, T> {
+    |                                           +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/punctuated.rs:141:18
+    |
+141 |     pub fn pairs(&self) -> Pairs<T, P> {
+    |                  ^^^^^     ^^^^^^^^^^^ the same lifetime is hidden here
+    |                  |
+    |                  the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+141 |     pub fn pairs(&self) -> Pairs<'_, T, P> {
+    |                                  +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/syn-2.0.87/src/punctuated.rs:150:22
+    |
+150 |     pub fn pairs_mut(&mut self) -> PairsMut<T, P> {
+    |                      ^^^^^^^^^     ^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                      |
+    |                      the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+150 |     pub fn pairs_mut(&mut self) -> PairsMut<'_, T, P> {
+    |                                             +++
+
+   Compiling hmac v0.12.1 (/home/user/workspace/r7patched/ciagomem-slae/vendor/hmac-0.12.1)
+   Compiling bitflags v2.13.2 (/home/user/workspace/r7patched/ciagomem-slae/vendor/bitflags-2.13.2)
+   Compiling coagomem-ql v0.3.0 (/home/user/workspace/r7patched/ciagomem-slae/coagomem-ql)
+warning: `syn` (lib) generated 67 warnings (45 duplicates) (run `cargo fix --lib -p syn` to apply 19 suggestions)
+   Compiling curve25519-dalek-derive v0.1.1 (/home/user/workspace/r7patched/ciagomem-slae/vendor/curve25519-dalek-derive-0.1.1)
+warning: the feature `avx512_target_feature` has been stable since 1.89.0 and no longer requires an attribute to enable
+  --> vendor/curve25519-dalek-4.1.3/src/lib.rs:23:13
+   |
+23 |     feature(avx512_target_feature)
+   |             ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(stable_features)]` on by default
+
+warning: the feature `stdarch_x86_avx512` has been stable since 1.89.0 and no longer requires an attribute to enable
+  --> vendor/curve25519-dalek-4.1.3/src/lib.rs:19:13
+   |
+19 |     feature(stdarch_x86_avx512)
+   |             ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+  --> vendor/curve25519-dalek-4.1.3/src/backend/mod.rs:58:9
+   |
+58 |         cpufeatures::new!(cpuid_avx512, "avx512ifma", "avx512vl");
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+   = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+  --> vendor/curve25519-dalek-4.1.3/src/backend/mod.rs:67:9
+   |
+67 |         cpufeatures::new!(cpuid_avx2, "avx2");
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:51:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+ 51 |                   unsafe {
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+213 | / impl_shared!(
+214 | |     u64x4,
+215 | |     u64,
+216 | |     _mm256_add_epi64,
+...   |
+220 | |     _mm256_extract_epi64
+221 | | );
+    | |_- in this macro invocation
+    |
+    = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:86:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+ 86 |                   unsafe { core::arch::x86_64::$add_intrinsic(self.0, rhs.0).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+213 | / impl_shared!(
+214 | |     u64x4,
+215 | |     u64,
+216 | |     _mm256_add_epi64,
+...   |
+220 | |     _mm256_extract_epi64
+221 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:105:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+105 |                   unsafe { core::arch::x86_64::$sub_intrinsic(self.0, rhs.0).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+213 | / impl_shared!(
+214 | |     u64x4,
+215 | |     u64,
+216 | |     _mm256_add_epi64,
+...   |
+220 | |     _mm256_extract_epi64
+221 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:115:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+115 |                   unsafe { core::arch::x86_64::_mm256_and_si256(self.0, rhs.0).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+213 | / impl_shared!(
+214 | |     u64x4,
+215 | |     u64,
+216 | |     _mm256_add_epi64,
+...   |
+220 | |     _mm256_extract_epi64
+221 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:125:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+125 |                   unsafe { core::arch::x86_64::_mm256_xor_si256(self.0, rhs.0).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+213 | / impl_shared!(
+214 | |     u64x4,
+215 | |     u64,
+216 | |     _mm256_add_epi64,
+...   |
+220 | |     _mm256_extract_epi64
+221 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:152:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+152 |                   unsafe { core::arch::x86_64::$shl_intrinsic(self.0, N).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+213 | / impl_shared!(
+214 | |     u64x4,
+215 | |     u64,
+216 | |     _mm256_add_epi64,
+...   |
+220 | |     _mm256_extract_epi64
+221 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:157:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+157 |                   unsafe { core::arch::x86_64::$shr_intrinsic(self.0, N).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+213 | / impl_shared!(
+214 | |     u64x4,
+215 | |     u64,
+216 | |     _mm256_add_epi64,
+...   |
+220 | |     _mm256_extract_epi64
+221 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:162:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+162 |                   unsafe { core::arch::x86_64::$extract_intrinsic(self.0, N) as $lane_ty }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+213 | / impl_shared!(
+214 | |     u64x4,
+215 | |     u64,
+216 | |     _mm256_add_epi64,
+...   |
+220 | |     _mm256_extract_epi64
+221 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:51:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+ 51 |                   unsafe {
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+222 | / impl_shared!(
+223 | |     u32x8,
+224 | |     u32,
+225 | |     _mm256_add_epi32,
+...   |
+229 | |     _mm256_extract_epi32
+230 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:86:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+ 86 |                   unsafe { core::arch::x86_64::$add_intrinsic(self.0, rhs.0).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+222 | / impl_shared!(
+223 | |     u32x8,
+224 | |     u32,
+225 | |     _mm256_add_epi32,
+...   |
+229 | |     _mm256_extract_epi32
+230 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:105:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+105 |                   unsafe { core::arch::x86_64::$sub_intrinsic(self.0, rhs.0).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+222 | / impl_shared!(
+223 | |     u32x8,
+224 | |     u32,
+225 | |     _mm256_add_epi32,
+...   |
+229 | |     _mm256_extract_epi32
+230 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:115:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+115 |                   unsafe { core::arch::x86_64::_mm256_and_si256(self.0, rhs.0).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+222 | / impl_shared!(
+223 | |     u32x8,
+224 | |     u32,
+225 | |     _mm256_add_epi32,
+...   |
+229 | |     _mm256_extract_epi32
+230 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:125:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+125 |                   unsafe { core::arch::x86_64::_mm256_xor_si256(self.0, rhs.0).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+222 | / impl_shared!(
+223 | |     u32x8,
+224 | |     u32,
+225 | |     _mm256_add_epi32,
+...   |
+229 | |     _mm256_extract_epi32
+230 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:152:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+152 |                   unsafe { core::arch::x86_64::$shl_intrinsic(self.0, N).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+222 | / impl_shared!(
+223 | |     u32x8,
+224 | |     u32,
+225 | |     _mm256_add_epi32,
+...   |
+229 | |     _mm256_extract_epi32
+230 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:157:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+157 |                   unsafe { core::arch::x86_64::$shr_intrinsic(self.0, N).into() }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+222 | / impl_shared!(
+223 | |     u32x8,
+224 | |     u32,
+225 | |     _mm256_add_epi32,
+...   |
+229 | |     _mm256_extract_epi32
+230 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:162:17
+    |
+ 16 |   macro_rules! impl_shared {
+...
+162 |                   unsafe { core::arch::x86_64::$extract_intrinsic(self.0, N) as $lane_ty }
+    |                   ^^^^^^ unnecessary `unsafe` block
+...
+222 | / impl_shared!(
+223 | |     u32x8,
+224 | |     u32,
+225 | |     _mm256_add_epi32,
+...   |
+229 | |     _mm256_extract_epi32
+230 | | );
+    | |_- in this macro invocation
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:258:9
+    |
+258 |         unsafe {
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:270:9
+    |
+270 |         unsafe { u64x4(core::arch::x86_64::_mm256_set1_epi64x(x as i64)) }
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:309:9
+    |
+309 |         unsafe {
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:322:9
+    |
+322 |         unsafe { u32x8(core::arch::x86_64::_mm256_set1_epi32(x as i32)) }
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/packed_simd.rs:335:9
+    |
+335 |         unsafe { core::arch::x86_64::_mm256_mul_epu32(self.0, rhs.0).into() }
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+  --> vendor/curve25519-dalek-4.1.3/src/backend/vector/avx2/field.rs:68:5
+   |
+68 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+  --> vendor/curve25519-dalek-4.1.3/src/backend/vector/avx2/field.rs:89:5
+   |
+89 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/avx2/field.rs:432:13
+    |
+432 |             unsafe {
+    |             ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/avx2/field.rs:456:13
+    |
+456 |             unsafe {
+    |             ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/avx2/field.rs:479:28
+    |
+479 |         let c9_19: u32x8 = unsafe {
+    |                            ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/curve25519-dalek-4.1.3/src/backend/vector/avx2/field.rs:663:13
+    |
+663 |             unsafe {
+    |             ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+  --> vendor/curve25519-dalek-4.1.3/src/backend/vector/ifma/field.rs:63:5
+   |
+63 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+  --> vendor/curve25519-dalek-4.1.3/src/backend/vector/ifma/field.rs:95:5
+   |
+95 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+
+   Compiling ed25519-dalek v2.1.1 (/home/user/workspace/r7patched/ciagomem-slae/vendor/ed25519-dalek-2.1.1)
+warning: `curve25519-dalek` (lib) generated 33 warnings
+   Compiling ciagomem-crypto v0.3.0 (/home/user/workspace/r7patched/ciagomem-slae/ciagomem-crypto)
+   Compiling coagomem-core v0.3.0 (/home/user/workspace/r7patched/ciagomem-slae/coagomem-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.31s
+     Running ../tests/r7_regressions.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/coagomem-core/4a60fd6f34daed5f/out/r7_regressions-4a60fd6f34daed5f)
+
+running 3 tests
+test r7_1_logged_lsn_during_checkpoint_stays_pinned ... ok
+test r7_2_clean_cold_load_after_truncation_loads_without_replay ... ok
+test r7_2_dirty_tenant_with_truncated_suffix_still_needs_repair ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.71s
+

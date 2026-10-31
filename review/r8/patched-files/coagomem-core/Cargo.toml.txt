@@ -1,0 +1,42 @@
+[package]
+name = "coagomem-core"
+version = "0.3.0"
+edition = "2024"
+
+[features]
+legacy-audit = []
+
+[dependencies]
+coagomem-ql = { path = "../coagomem-ql" }
+ciagomem-crypto = { path = "../ciagomem-crypto" }
+libc = "0.2"
+io-uring = "0.7"
+
+[[test]]
+name = "adversarial"
+required-features = ["legacy-audit"]
+path = "../tests/adversarial.rs"
+
+[[test]]
+name = "export_window"
+path = "../tests/export_window.rs"
+
+[[test]]
+name = "v30_regressions"
+path = "../tests/v30_regressions.rs"
+
+[[test]]
+name = "r5_regressions"
+path = "../tests/r5_regressions.rs"
+
+[[test]]
+name = "r6_regressions"
+path = "../tests/r6_regressions.rs"
+
+[[test]]
+name = "r7_regressions"
+path = "../tests/r7_regressions.rs"
+
+[[test]]
+name = "r8_regressions"
+path = "../tests/r8_regressions.rs"

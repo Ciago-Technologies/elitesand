@@ -11,7 +11,7 @@ fn main() -> Result<()> {
         &key,
         vec![
             Caveat::Tenant(11),
-            Caveat::ExpiresAt(1000),
+            Caveat::ExpiresAt(u64::MAX),
             Caveat::PeerUid(42),
             Caveat::Session(1),
             Caveat::Audience(7),
@@ -35,7 +35,13 @@ fn main() -> Result<()> {
         },
     )
     .unwrap();
-    let mut engine = Engine::new(4, Limits::default(), MemoryJournal::new(256 << 20))?;
+    let mut engine = Engine::new(
+        4,
+        Limits::default(),
+        MemoryJournal::new(256 << 20),
+        1,
+        std::sync::Arc::new(coagomem_core::MonotonicClock),
+    )?;
     for id in 1..=10_000 {
         engine.put(
             Record::new(

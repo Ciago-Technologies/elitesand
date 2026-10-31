@@ -1,0 +1,50 @@
+//! Reviewer R8 probe: PASSES while the defect exists.
+use coagomem_core::*;
+fn session(boot: u128) -> VerifiedMacaroon {
+    let k = KeyedPrf([9; 32]);
+    Macaroon::issue(
+        &k,
+        vec![
+            Caveat::Tenant(11),
+            Caveat::ExpiresAt(100),
+            Caveat::PeerUid(1000),
+            Caveat::Session(1),
+            Caveat::Audience(7),
+            Caveat::BootEpoch(boot),
+            Caveat::Ops(OP_READ | OP_OPERATOR),
+            Caveat::KeyEpoch(2),
+        ],
+    )
+    .unwrap()
+    .verify(
+        &k,
+        &RequestCtx {
+            tenant_incarnation: 11,
+            key_epoch: 2,
+            now_ns: 1,
+            op_bit: OP_READ,
+            peer_uid: 1000,
+            session: 1,
+            audience: 7,
+            boot_epoch: boot,
+        },
+    )
+    .unwrap()
+}
+/// R8-2: the side-effecting export adapter has no expiry or boot input at all.
+#[cfg(target_os = "linux")]
+#[test]
+fn defect_r8_2_export_root_accepts_expired_and_prior_boot_capability() {
+    let path = std::env::temp_dir().join(format!("ciagomem-r8-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir(&path).unwrap();
+    let root = destination::LocalExportRoot::open(&path, 11).unwrap();
+    let token = session(1); // expires at 100 ns, issued for boot 1
+    let clock = MonotonicClock;
+    std::thread::sleep(std::time::Duration::from_micros(10));
+    while clock.now_ns() < 1_000 {}
+    assert!(clock.now_ns() >= token.expires_at());
+    // The process is now on "boot 2"; no boot binding exists in the adapter either.
+    assert!(root.create(&token, "expired-export").is_ok());
+    std::fs::remove_dir_all(path).unwrap();
+}

@@ -1,6 +1,6 @@
 # Actor-native execution benchmark
 
-R6 revision measurement. Observed on 31 October 2026 using Rust 1.99.1, release optimization, a single unpinned Linux x86_64 process and an in-memory journal. Four partitions are simulated in-process; these are not four concurrent reactor threads.
+R8 revision measurement. Observed on 31 October 2026 using Rust 1.99.1, release optimization, a single unpinned Linux x86_64 process and an in-memory journal. Four partitions are simulated in-process; these are not four concurrent reactor threads.
 
 Command:
 
@@ -8,13 +8,13 @@ Command:
 cargo run --release --offline -p ciagomem-engine --example benchmark
 ```
 
-The example inserts 10,000 one-field records, warms the indexed path, parses once, then runs 100 queries for `state.value == 777` with projection. Both modes return the same one-row result. Timing excludes initial insertion, parsing and authentication-token verification. Bitmap and scalar measurements run consecutively, so cache/order effects are possible; this is a reproducible smoke measurement, not a statistically controlled SLO benchmark.
+The example inserts 10,000 one-field records, warms the indexed path, parses once, then runs 100 queries for `state.value == 777` with projection. Both modes return the same one-row result. Timing excludes initial insertion, parsing and cryptographic authentication-token verification. The engine now uses a thread-safe clock and atomic high-water timestamp while checking engine-owned boot scope and the real monotonic clock at token-taking entries, including snapshot lookup; the previous unchecked-token timing is not an equivalent path. Bitmap and scalar measurements run consecutively, so cache/order effects are possible; this is a reproducible smoke measurement, not a statistically controlled SLO benchmark.
 
 | Path | Observed average | Instrumented work units |
 | --- | ---: | ---: |
-| Bitmap candidate pushdown | 1,036 ns/query | 7 |
-| Scalar path in the same executor | 4,609,543 ns/query | 20,001 |
-| Snapshot handle lookup/pin, 100,000 calls | 27 ns/call | Not a complete query |
+| Bitmap candidate pushdown | 1,085 ns/query | 7 |
+| Scalar path in the same executor | 5,058,765 ns/query | 20,001 |
+| Snapshot handle lookup/pin, 100,000 calls | 52 ns/call | Not a complete query |
 
 Reported actor/index byte estimate: **10,260,000 bytes**, excluding independent MemoryJournal retention, external pinned snapshots and process/kernel overhead. This is not measured RSS or a one-million-user capacity result.
 

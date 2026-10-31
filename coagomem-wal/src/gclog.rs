@@ -34,9 +34,10 @@ use crate::envelope::{
     record_size,
 };
 use coagomem_core::io::{IoBackend, Op, UserData};
-use coagomem_core::slot::CoreControl;
+use coagomem_core::slot::{CoreControl, DurabilityPublisher, SlotArena};
 use core::ptr::NonNull;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// A fenced write may already be on disk; clients must reconcile rather than blindly retry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -111,6 +112,7 @@ pub enum LogError {
     /// No free buffer or ring space: back-pressure (stop draining mailboxes).
     Full,
     TooLarge,
+    MismatchedControls,
     /// A log write failed permanently: the core must stop accepting writes.
     Fenced(i32),
 }
@@ -268,6 +270,9 @@ impl Recovery {
 }
 
 pub struct GroupCommitLog {
+    binding: DurabilityPublisher,
+    /// Set by `release_device_references`: the device holds no pointer into `bufs`.
+    device_released: bool,
     cfg: LogConfig,
     bufs: Vec<LogBuf>,
     free: Vec<usize>,
@@ -298,14 +303,54 @@ impl core::fmt::Debug for GroupCommitLog {
     }
 }
 
+impl Drop for GroupCommitLog {
+    /// R9-1: a submitted write still references its buffer. Without a completion to wait
+    /// for, fence the core (no further durability can be published and reopen needs
+    /// fresh controls) and retain the buffers until process exit.
+    /// shortcut: reclaim abandoned buffers only when a reactor can cancel and reap I/O.
+    fn drop(&mut self) {
+        if !self.quiescent() && !self.device_released {
+            self.binding.control().fence();
+            core::mem::forget(core::mem::take(&mut self.bufs));
+        }
+    }
+}
+
 impl GroupCommitLog {
     /// Open after recovery. The returned superblock (new epoch) must be made durable and
     /// then passed to `superblock_durable` before the first append.
-    pub fn open(cfg: LogConfig, rec: &Recovery) -> (GroupCommitLog, Superblock) {
+    pub fn open(
+        cfg: LogConfig,
+        rec: &Recovery,
+        controls: Arc<[CoreControl]>,
+        core_id: u8,
+    ) -> (GroupCommitLog, Superblock) {
         cfg.validate();
-        let epoch = rec.max_epoch.max(rec.sb.epoch) + 1;
+        assert!((core_id as usize) < controls.len() && !controls[core_id as usize].is_fenced());
+        // Own the claim before fallible initialization so any unwind releases it.
+        let binding = DurabilityPublisher::claim(controls, core_id)
+            .unwrap_or_else(|| panic!("core {core_id} already has a bound log"));
+        let core = binding.control();
+        let recovered_end = rec
+            .next_lsn
+            .checked_sub(1)
+            .expect("recovered next LSN must be nonzero");
+        assert!(
+            core.durable() <= recovered_end,
+            "core {core_id} watermark {} exceeds recovered end {recovered_end}",
+            core.durable()
+        );
+        let epoch = rec
+            .max_epoch
+            .max(rec.sb.epoch)
+            .checked_add(1)
+            .expect("log epoch exhausted");
         let sb = Superblock {
-            seq: rec.sb.seq + 1,
+            seq: rec
+                .sb
+                .seq
+                .checked_add(1)
+                .expect("superblock sequence exhausted"),
             epoch,
             start_logical: rec.sb.start_logical,
             start_lsn: rec.sb.start_lsn,
@@ -330,13 +375,15 @@ impl GroupCommitLog {
             })
             .collect();
         let log = GroupCommitLog {
+            binding,
+            device_released: false,
             cfg,
             bufs,
             free: (0..cfg.buffers).rev().collect(),
             active: None,
             pipeline: VecDeque::with_capacity(cfg.buffers),
             next_lsn: rec.next_lsn,
-            durable_lsn: rec.next_lsn - 1,
+            durable_lsn: recovered_end,
             next_logical: rec.end_logical.next_multiple_of(cfg.block as u64),
             truncate_logical: rec.sb.start_logical,
             epoch,
@@ -355,11 +402,19 @@ impl GroupCommitLog {
         (log, sb)
     }
 
+    pub fn validate_arena<const W: usize>(&self, arena: &SlotArena<W>) -> Result<(), LogError> {
+        if Arc::ptr_eq(self.binding.controls(), arena.controls()) {
+            Ok(())
+        } else {
+            Err(LogError::MismatchedControls)
+        }
+    }
     pub fn superblock_durable(&mut self, sb: &Superblock) {
         assert_eq!(sb.epoch, self.epoch);
         self.sb = *sb;
         self.truncate_logical = self.truncate_logical.max(sb.start_logical);
         self.ready = true;
+        self.binding.publish(self.durable_lsn);
     }
 
     pub fn epoch(&self) -> u32 {
@@ -377,6 +432,15 @@ impl GroupCommitLog {
             .iter()
             .map(|b| (b.mem.ptr.as_ptr(), b.mem.len))
             .collect()
+    }
+    /// Declare that the device no longer references any submitted buffer, so a drop
+    /// while writes are nominally in flight may free them. Writes stay unacknowledged.
+    ///
+    /// # Safety
+    /// Every submitted write must have been cancelled and reaped, or the device/ring
+    /// destroyed after its operations terminated (e.g. `SimIo::power_loss`).
+    pub unsafe fn release_device_references(&mut self) {
+        self.device_released = true;
     }
     /// True when no write is in flight (safe to drop the log).
     pub fn quiescent(&self) -> bool {
@@ -632,7 +696,12 @@ impl GroupCommitLog {
             .encode();
             let off = self.phys(b.logical) + b.written as u64;
             let len = (b.submit_len - b.written) as u32;
-            // SAFETY: the buffer is Sealed: no CPU writes until it is recycled after its
+            let was_released = self.device_released;
+            self.device_released = false;
+            let b = &mut self.bufs[i];
+            b.ticket = ticket;
+            b.state = BufState::InFlight;
+            // SAFETY: the buffer is frozen: no CPU writes until it is recycled after its
             // CQE. It is not freed before the log is quiescent.
             let r = unsafe {
                 io.write_at(
@@ -645,11 +714,10 @@ impl GroupCommitLog {
                 )
             };
             if r.is_err() {
+                self.bufs[i].state = BufState::Sealed;
+                self.device_released = was_released;
                 return;
             }
-            let b = &mut self.bufs[i];
-            b.ticket = ticket;
-            b.state = BufState::InFlight;
             self.stats.device_bytes += len as u64;
             budget -= 1;
         }
@@ -681,17 +749,31 @@ impl GroupCommitLog {
     /// Feed every `Op::LogWrite` CQE here. Durable acknowledgements (in LSN order) are
     /// appended to `acks`; if the log fences, every pending acknowledgement is moved to
     /// `indeterminate` and `Err(Fenced)` is returned. No promise of rollback is made.
-    pub fn on_cqe<I: IoBackend>(
+    ///
+    /// # Safety
+    /// A matching token/result must be a genuine completed write owned by this log;
+    /// the backend must no longer access its buffer. Do not forge a completion for
+    /// pending I/O, which would allow that buffer to be freed while still in use.
+    /// ```compile_fail
+    /// use coagomem_wal::gclog::GroupCommitLog;
+    /// use coagomem_core::io::IoBackend;
+    /// fn forged(owner:&mut GroupCommitLog,io:&mut impl IoBackend) {
+    ///     let _=owner.on_cqe(0,4096,io,&mut Vec::new(),&mut Vec::new());
+    /// }
+    /// ```
+    pub unsafe fn on_cqe<I: IoBackend>(
         &mut self,
         user_data: u64,
         res: i32,
-        core: &CoreControl,
         io: &mut I,
         acks: &mut Vec<u64>,
         indeterminate: &mut Vec<AckOutcome>,
     ) -> Result<(), LogError> {
+        if self.binding.control().is_fenced() && self.fenced.is_none() {
+            self.fence(libc::EIO, indeterminate);
+        }
         if let Some(errno) = self.fenced {
-            core.fence();
+            self.binding.control().fence();
             return Err(LogError::Fenced(errno));
         }
         let Some(ud) = UserData::decode(user_data) else {
@@ -721,18 +803,18 @@ impl GroupCommitLog {
             self.stats.retries += 1;
             if b.retries > self.cfg.max_retries {
                 let errno = if res < 0 { res } else { -libc::EIO };
-                core.fence();
+                self.binding.control().fence();
                 self.fence(errno, indeterminate);
                 return Err(LogError::Fenced(errno));
             }
             b.state = BufState::Sealed;
         }
-        self.advance(core, acks);
+        self.advance(acks);
         self.try_submit(io);
         Ok(())
     }
 
-    fn advance(&mut self, core: &CoreControl, acks: &mut Vec<u64>) {
+    fn advance(&mut self, acks: &mut Vec<u64>) {
         let mut moved = false;
         while let Some(&i) = self.pipeline.front() {
             if self.bufs[i].state != BufState::Done {
@@ -751,7 +833,7 @@ impl GroupCommitLog {
             moved = true;
         }
         if moved {
-            core.publish_durable(self.durable_lsn);
+            self.binding.publish(self.durable_lsn);
         }
     }
 
@@ -1011,8 +1093,8 @@ mod tests {
                     _ => Outcome::Ok,
                 };
                 let (ud, res) = io.complete(i, outcome);
-                log.on_cqe(ud, res, core, io, &mut acks, &mut failed)
-                    .unwrap();
+                /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+                unsafe { log.on_cqe(ud, res, io, &mut acks, &mut failed) }.unwrap();
                 for a in acks.drain(..) {
                     let lsn = m.ack_lsn[&a];
                     assert!(
@@ -1071,7 +1153,8 @@ mod tests {
     fn crash_cycle(tail: TailMode, seed: u64) {
         let cfg = cfg(tail);
         let mut io = SimIo::new(1, (cfg.data_offset() + cfg.capacity) as usize);
-        let core = CoreControl::default();
+        let controls = CoreControl::shared(1);
+        let core = &controls[0];
         let mut rng = Rng(seed);
         let mut m = Model {
             appended: BTreeMap::new(),
@@ -1082,7 +1165,7 @@ mod tests {
         let mut now = 0;
         let mut rec = Recovery::fresh();
         for incarnation in 0..4 {
-            let (mut log, sb) = GroupCommitLog::open(cfg, &rec);
+            let (mut log, sb) = GroupCommitLog::open(cfg, &rec, controls.clone(), 0);
             assert_eq!(
                 log.append(1, KIND_DATA, b"x", None, now, &mut io),
                 Err(LogError::NotReady)
@@ -1091,7 +1174,7 @@ mod tests {
             log.superblock_durable(&sb);
             assert_eq!(log.epoch() as usize, incarnation + 1);
             run(
-                &mut log, &mut io, &core, &mut m, &mut rng, 400, &cfg, &mut now,
+                &mut log, &mut io, core, &mut m, &mut rng, 400, &cfg, &mut now,
             );
             // Power loss: in-flight writes persist a random 4 KiB-granular prefix.
             let mut r2 = rng.clone();
@@ -1107,7 +1190,6 @@ mod tests {
                     log.stats
                 );
             }
-            core.publish_durable(core.durable().max(rec.next_lsn - 1));
             // Records beyond the recovered end were never acknowledged; forget them.
             m.appended.retain(|&l, _| l < rec.next_lsn);
             let keep: Vec<u64> = m
@@ -1119,7 +1201,9 @@ mod tests {
             for a in keep {
                 m.ack_lsn.remove(&a);
             }
-            drop(log); // SimIo holds no in-flight ops after power_loss
+            // SAFETY: SimIo::power_loss removed every in-flight op above.
+            unsafe { log.release_device_references() };
+            drop(log);
         }
         assert!(
             m.acked.len() > 2500,
@@ -1146,8 +1230,9 @@ mod tests {
     fn out_of_order_cqes_release_acks_in_prefix_order() {
         let cfg = cfg(TailMode::Pad);
         let mut io = SimIo::new(1, (cfg.data_offset() + cfg.capacity) as usize);
-        let core = CoreControl::default();
-        let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh());
+        let controls = CoreControl::shared(1);
+        let core = &controls[0];
+        let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh(), controls.clone(), 0);
         log.superblock_durable(&sb);
         // Three sealed batches.
         for b in 0..3u64 {
@@ -1162,18 +1247,18 @@ mod tests {
         for _ in 0..2 {
             let i = io.inflight.len() - 1;
             let (ud, res) = io.complete(i, Outcome::Ok);
-            log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed)
-                .unwrap();
+            /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+            unsafe { log.on_cqe(ud, res, &mut io, &mut acks, &mut failed) }.unwrap();
         }
         assert!(acks.is_empty() && log.durable_lsn() == 0 && core.durable() == 0);
         let (ud, res) = io.complete(0, Outcome::Ok);
-        log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed)
-            .unwrap();
+        /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+        unsafe { log.on_cqe(ud, res, &mut io, &mut acks, &mut failed) }.unwrap();
         assert_eq!(acks, vec![0, 1, 2]);
         assert_eq!(core.durable(), log.durable_lsn());
         // A duplicate/stale CQE is ignored.
-        log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed)
-            .unwrap();
+        /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+        unsafe { log.on_cqe(ud, res, &mut io, &mut acks, &mut failed) }.unwrap();
         assert_eq!(log.stats.stale_cqes, 1);
         assert!(log.quiescent());
     }
@@ -1182,8 +1267,8 @@ mod tests {
     fn persistent_write_error_fences_and_fails_pending_acks() {
         let cfg = cfg(TailMode::Pad);
         let mut io = SimIo::new(1, (cfg.data_offset() + cfg.capacity) as usize);
-        let core = CoreControl::default();
-        let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh());
+        let controls = CoreControl::shared(1);
+        let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh(), controls.clone(), 0);
         log.superblock_durable(&sb);
         log.append(1, KIND_DATA, b"a", Some(10), 0, &mut io)
             .unwrap();
@@ -1194,7 +1279,10 @@ mod tests {
         let mut fenced = None;
         for _ in 0..=cfg.max_retries {
             let (ud, res) = io.complete(0, Outcome::Err(libc::EIO));
-            if let Err(e) = log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed) {
+            if let Err(e) =
+                /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+                unsafe { log.on_cqe(ud, res, &mut io, &mut acks, &mut failed) }
+            {
                 fenced = Some(e);
             }
         }
@@ -1218,8 +1306,8 @@ mod tests {
             ..LogConfig::default()
         };
         let mut io = SimIo::new(1, (cfg.data_offset() + cfg.capacity) as usize);
-        let core = CoreControl::default();
-        let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh());
+        let controls = CoreControl::shared(1);
+        let (mut log, sb) = GroupCommitLog::open(cfg, &Recovery::fresh(), controls.clone(), 0);
         log.superblock_durable(&sb);
         let (mut acks, mut failed) = (Vec::new(), Vec::new());
         // 28-byte deltas (the spec's example), 10k commits, device completes 1 op/tick.
@@ -1245,8 +1333,8 @@ mod tests {
             log.poll(now, false, &mut io);
             if !io.inflight.is_empty() {
                 let (ud, res) = io.complete(0, Outcome::Ok);
-                log.on_cqe(ud, res, &core, &mut io, &mut acks, &mut failed)
-                    .unwrap();
+                /* SAFETY: an actual simulator completion or a provably nonmatching stale token. */
+                unsafe { log.on_cqe(ud, res, &mut io, &mut acks, &mut failed) }.unwrap();
             }
         }
         let wa = log.stats.write_amplification();

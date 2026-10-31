@@ -42,9 +42,9 @@ impl TruncationPins {
         if i >= self.lsn.len() {
             return Err(DirtyError::InvalidTenant);
         }
-        if self.checkpointing[i] {
-            return Err(DirtyError::CheckpointInProgress);
-        }
+        // R7-1: an LSN passed here is already in the log. Never refuse to pin it; a
+        // record logged during a checkpoint makes that checkpoint stale and keeps the
+        // older pin. Hosts gate *before* assigning an LSN with `check_admission`.
         if lsn == 0 {
             return Err(DirtyError::ZeroLsn);
         }
@@ -67,6 +67,14 @@ impl TruncationPins {
         }
         self.tail = t;
         Ok(())
+    }
+    /// Call before assigning an LSN: `CheckpointInProgress` means defer the mutation.
+    pub fn check_admission(&self, t: u32) -> Result<(), DirtyError> {
+        match self.checkpointing.get(t as usize) {
+            None => Err(DirtyError::InvalidTenant),
+            Some(true) => Err(DirtyError::CheckpointInProgress),
+            Some(false) => Ok(()),
+        }
     }
     /// Owner barrier: defer mutations before applying them until completion or failure.
     pub fn begin_checkpoint(&mut self, t: u32) -> Result<u64, DirtyError> {
@@ -94,6 +102,8 @@ impl TruncationPins {
             return Err(DirtyError::InvalidTenant);
         }
         if self.latest[i] > image_lsn {
+            // Barrier was bypassed: release admission, retain the older (covering) pin.
+            self.checkpointing[i] = false;
             return Err(DirtyError::StaleCheckpoint);
         }
         self.checkpointing[i] = false;

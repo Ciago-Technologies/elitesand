@@ -31,7 +31,7 @@ use crate::seqlock::{ReadError, SeqWord, WordView, WordsMut, WriterBusy, read_de
 use core::ptr::NonNull;
 use core::sync::atomic::{
     AtomicU64,
-    Ordering::{Acquire, Relaxed, Release},
+    Ordering::{AcqRel, Acquire, Relaxed, Release},
     fence,
 };
 
@@ -230,6 +230,8 @@ pub struct CoreControl {
     durable_lsn: CachePadded<AtomicU64>,
     publication: std::sync::Mutex<()>,
     fenced: core::sync::atomic::AtomicBool,
+    /// Set while exactly one group-commit log publishes this core's watermark (R8-1).
+    log_bound: core::sync::atomic::AtomicBool,
 }
 
 impl CoreControl {
@@ -247,9 +249,10 @@ impl CoreControl {
         fence(Acquire);
         d
     }
-    /// Log side: monotonic publish.
+    /// Log side: monotonic publish. Reachable outside this crate only through a
+    /// [`DurabilityPublisher`] claim (R9-2).
     #[inline(always)]
-    pub fn publish_durable(&self, lsn: u64) {
+    pub(crate) fn publish_durable(&self, lsn: u64) {
         let _guard = self.publication.lock().unwrap_or_else(|p| p.into_inner());
         if !self.is_fenced() {
             self.durable_lsn.fetch_max(lsn, Release);
@@ -261,6 +264,69 @@ impl CoreControl {
     }
     pub fn is_fenced(&self) -> bool {
         self.fenced.load(Acquire)
+    }
+    /// Claim the single log-publisher role for this core. `false` if already claimed.
+    pub(crate) fn bind_log(&self) -> bool {
+        self.log_bound
+            .compare_exchange(false, true, AcqRel, Acquire)
+            .is_ok()
+    }
+    /// Release the publisher role (only `DurabilityPublisher::drop`).
+    pub(crate) fn unbind_log(&self) {
+        self.log_bound.store(false, Release);
+    }
+    /// True while a `DurabilityPublisher` holds this core.
+    pub fn log_bound(&self) -> bool {
+        self.log_bound.load(Acquire)
+    }
+}
+
+/// R9-2: the only way outside `coagomem-core` to advance a core's durable watermark.
+/// At most one exists per core; dropping it releases the claim.
+///
+/// ```compile_fail
+/// let arena = coagomem_core::SlotArena::<512>::new(0, 1, coagomem_core::CoreControl::shared(1));
+/// arena.core(0).publish_durable(u64::MAX); // private: needs a DurabilityPublisher
+/// ```
+/// ```compile_fail
+/// let c = coagomem_core::CoreControl::shared(1);
+/// c[0].unbind_log(); // private: only the publisher's Drop releases the claim
+/// ```
+#[derive(Debug)]
+pub struct DurabilityPublisher {
+    controls: std::sync::Arc<[CoreControl]>,
+    core: u8,
+}
+
+impl DurabilityPublisher {
+    /// `None` if `core` is out of range or already claimed.
+    pub fn claim(controls: std::sync::Arc<[CoreControl]>, core: u8) -> Option<Self> {
+        // Construct only after a successful claim: a dropped value releases the claim.
+        if (core as usize) < controls.len() && controls[core as usize].bind_log() {
+            Some(Self { controls, core })
+        } else {
+            None
+        }
+    }
+    #[inline(always)]
+    pub fn publish(&self, lsn: u64) {
+        self.control().publish_durable(lsn);
+    }
+    #[inline(always)]
+    pub fn control(&self) -> &CoreControl {
+        &self.controls[self.core as usize]
+    }
+    pub fn controls(&self) -> &std::sync::Arc<[CoreControl]> {
+        &self.controls
+    }
+    pub fn core_id(&self) -> u8 {
+        self.core
+    }
+}
+
+impl Drop for DurabilityPublisher {
+    fn drop(&mut self) {
+        self.control().unbind_log();
     }
 }
 
@@ -343,6 +409,8 @@ pub struct SlotArena<const W: usize> {
     cores: std::sync::Arc<[CoreControl]>,
     backing: Backing,
     base: NonNull<u8>,
+    /// Device operations that may still read or write this arena's payloads (R9-1).
+    io_pending: AtomicU64,
 }
 
 impl<const W: usize> core::fmt::Debug for SlotArena<W> {
@@ -467,6 +535,7 @@ impl<const W: usize> SlotArena<W> {
             cores,
             backing,
             base,
+            io_pending: AtomicU64::new(0),
         }
     }
 
@@ -481,6 +550,9 @@ impl<const W: usize> SlotArena<W> {
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.n == 0
+    }
+    pub fn controls(&self) -> &std::sync::Arc<[CoreControl]> {
+        &self.cores
     }
     #[inline(always)]
     pub fn core(&self, core: u8) -> &CoreControl {
@@ -717,8 +789,26 @@ impl<const W: usize> SlotArena<W> {
     }
 }
 
+impl<const W: usize> SlotArena<W> {
+    pub(crate) fn io_submitted(&self) {
+        self.io_pending.fetch_add(1, AcqRel);
+    }
+    pub(crate) fn io_completed(&self) {
+        self.io_pending.fetch_sub(1, AcqRel);
+    }
+    /// Payload I/Os submitted by a lifecycle whose CQE has not been consumed.
+    pub fn io_pending(&self) -> u64 {
+        self.io_pending.load(Acquire)
+    }
+}
+
 impl<const W: usize> Drop for SlotArena<W> {
     fn drop(&mut self) {
+        // shortcut: retain abandoned DMA backing until exit; replace with reactor-owned
+        // cancel-and-reap reclamation when that driver exists.
+        if self.io_pending.load(Acquire) != 0 {
+            return;
+        }
         match &self.backing {
             // SAFETY: allocated in `new_heap` with exactly this layout.
             Backing::Heap { layout } => unsafe { std::alloc::dealloc(self.base.as_ptr(), *layout) },

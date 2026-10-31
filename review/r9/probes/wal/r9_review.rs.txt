@@ -1,0 +1,57 @@
+//! Reviewer R9 probes. They PASS (or, under Miri, report UB) while the defects exist.
+use coagomem_core::io::{Outcome, SimIo};
+use coagomem_core::{CoreControl, SlotArena, TenantWord, Visibility};
+use coagomem_wal::envelope::KIND_DATA;
+use coagomem_wal::gclog::*;
+fn cfg() -> LogConfig {
+    LogConfig {
+        block: 4096,
+        buf_bytes: 16384,
+        buffers: 4,
+        max_inflight: 3,
+        min_batch_bytes: 8192,
+        max_delay_ns: 5000,
+        capacity: 65536,
+        file: 0,
+        tail: TailMode::Pad,
+        max_retries: 3,
+    }
+}
+fn io() -> SimIo {
+    SimIo::new(1, (cfg().data_offset() + cfg().capacity) as usize)
+}
+
+/// R9-1 (log): safe drop with a submitted write releases the core claim and frees the
+/// buffer the backend still references. Normal run: second open succeeds. Miri: the
+/// final completion reads freed memory (use-after-free).
+#[test]
+fn defect_r9_1_log_drop_with_inflight_write() {
+    let controls = CoreControl::shared(1);
+    let mut d = io();
+    let (mut a, sb) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    a.superblock_durable(&sb);
+    a.append(1, KIND_DATA, b"secret", Some(1), 0, &mut d).unwrap();
+    a.poll(1_000_000, true, &mut d);
+    assert_eq!(d.inflight.len(), 1);
+    assert!(!a.quiescent());
+    drop(a); // safe code; no drain
+    let (_b, _) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls, 0);
+    let _ = d.complete(0, Outcome::Ok); // backend touches the dropped buffer
+}
+
+/// R9-2: "exclusive publisher" is advisory: any arena holder can unbind the claim and
+/// publish an arbitrary watermark.
+#[test]
+fn defect_r9_2_arena_holder_bypasses_publisher_claim() {
+    let controls = CoreControl::shared(1);
+    let arena = SlotArena::<512>::new(0, 1, controls.clone());
+    let (_a, _) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    arena.core(0).unbind_log();
+    let (_b, _) = GroupCommitLog::open(cfg(), &Recovery::fresh(), controls.clone(), 0);
+    arena.core(0).publish_durable(u64::MAX);
+    let h = arena
+        .install(0, TenantWord { tenant: 1, core: 0, layout_version: 1, flags: 0 }, 9, 77, 0)
+        .unwrap()
+        .unwrap();
+    assert!(arena.read(h, 1, 9, Visibility::Durable, |_| Some(())).is_ok());
+}
