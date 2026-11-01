@@ -14,6 +14,7 @@ pub mod image;
 pub mod index;
 pub mod join;
 pub mod links;
+pub mod memory;
 mod model;
 mod runtime;
 pub mod schema;

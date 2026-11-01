@@ -68,6 +68,13 @@ def main():
         assert '**Implementation status:**' in (ROOT / name).read_text()
     assert 'RetryTooOld10' in (ROOT / 'DEBUGGING.md').read_text()
     assert 'never automatically repeat' in (ROOT / 'DEBUGGING.md').read_text()
+    orchestration = spec.split('## 18. Sub-agent memory orchestration and hybrid context assembly', 1)[1]
+    for required in ['MemoryBroker', 'Label::derived', 'External', 'MemoryJournal', 'source', 'hybrid_cost', 'evidence_label']:
+        assert required in orchestration, required
+    usecase = (ROOT / 'USECASE.md').read_text()
+    assert '## 5. Sub-Agent Memory Orchestration: The Zero-Token Waste Pattern' in usecase
+    assert 'model tokens still apply' in usecase
+    assert (ROOT / 'ciagomem-engine/examples/memory_orchestration.rs').exists()
     workflow = (ROOT / '.github/workflows/rust.yml').read_text()
     assert 'python3 scripts/validate_documentation.py' in workflow
     print('Checked full specification mirror, consolidated grammar, wire sizes, budgets, guide status/links and CI gate.')

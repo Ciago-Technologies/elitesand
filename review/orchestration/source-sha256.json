@@ -1,0 +1,11 @@
+{
+  "ciagomem-engine/src/memory.rs": "f42719e78b2fdafd06075c365b975f57278cfa5aa1169da65c9e80ad9ee7e1b3",
+  "ciagomem-engine/src/runtime.rs": "e231ae26ea1ad25ba799705938c9bbdfabcac793a01853c470bb26ae4526e196",
+  "ciagomem-engine/src/lib.rs": "7fee503ba226528bdc878091f5acfd2dabcf9c0a9fce3098abf6b7eac5d9fac4",
+  "ciagomem-engine/tests/memory.rs": "ee99b8d31b0b309f44e5ddf8d6ead8f74dffcc16753355ac10e0a6f7d171c01c",
+  "ciagomem-engine/examples/memory_orchestration.rs": "42c58fd0447a452f6662b2cdbf026f93dcdb749d9b36d6fef8d68f882219a060",
+  "docs/MEMORY_ORCHESTRATION_RESEARCH.md": "bfd4d3ed23130b4638bfa6c60d1e032d0df05c00919afcfcc748e13b1cfbe28f",
+  "MASTER_SPECIFICATION.md": "724e426edbead5e318c487b05f49bc4c9378fd48a2260694bee96d182e289765",
+  "USECASE.md": "23db1885d992328e19864f6b27b99015e99efdc188f022fffa399ca1b43a3a34",
+  "scripts/validate_documentation.py": "c6b4bca61c04999e7f0a0ce5db674944a18e4a9c31b59f61b6ccd55528799627"
+}

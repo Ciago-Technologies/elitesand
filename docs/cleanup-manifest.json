@@ -229,5 +229,13 @@
       "ciagomem-slae/target",
       "ciagomem-slae/scripts/__pycache__ (if present)"
     ]
+  },
+  "superseded_outgoing": {
+    "ciagomem-documentation-review.zip": {
+      "sha256": "81e80502bf738185b93e39e1f3ce9ffc68f52ed264eb33445a760ca5244705b4",
+      "replacement": "ciagomem-orchestration-review.zip",
+      "baseline_commit": "f845b51c0858d08c32f400feac7335416e0171bb",
+      "note": "Earlier review artifact; source/history and audit evidence retained in repository and replacement bundle."
+    }
   }
 }

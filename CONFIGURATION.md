@@ -64,3 +64,7 @@ Ceilings do not include metadata/connection affordability outside the arena; mix
 Applied is explicitly non-durable. Local-durable requires the qualified local WAL and result ledger persistence boundary. Replicated-durable additionally requires current-term consensus quorum persistence; unsupported mode rejects. Default production mode is local-durable only once its adapter is delivered.
 
 64 MiB admits at most16384 raw4-KiB export windows, not16384 sessions. Allocate windows lazily; extra sessions use framed bytes or receive Busy. Count sockets, TLS state, mappings and descriptors separately. Registered tenants, resident actors, active sessions and requests/sec are independent measurements. No latency or million-user guarantee follows from this table.
+
+## Current MemoryBroker limits
+
+The Rust memory module accepts MemoryLimits, not server environment variables. Defaults:64 tasks,16 sources/task,1-MiB source images, one source read,4096-byte summary,8192-byte context,8 context refs,300-second worker lease and900-second summary TTL. Engine limits apply as well. Explicit forget releases task metadata and journal-deletes outputs; there is no background retention service. Caller-held snapshots, broker instances and actual model token/cost budgets require host limits. See specification18.2 for constructor ceilings.

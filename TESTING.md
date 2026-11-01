@@ -58,3 +58,12 @@ Record schemas/vector dimensions, dataset, key skew, registered/resident/concurr
 Earlier specification figures (resident200 ns, published getter300 ns, local durable50 µs and cold fault250 µs) are objectives requiring workload/hardware evidence, not release guarantees. Network durable latency is not an in-memory lookup measurement. Differential pushdown tests must return identical authorized results.60-second ramps are smoke evidence only; sustained qualification must expose checkpoint/compaction, spool pressure, throttling and failure recovery.
 
 See [recorded verification](docs/VERIFICATION.md) for observed local results and skipped checks. Miri/model checking, fuzzing, ARM and real power-cut/storage qualification require their own evidence.
+
+## Current orchestration tests
+
+```sh
+cargo test --release --offline -p ciagomem-engine --test memory
+cargo run --release --offline -p ciagomem-engine --example memory_orchestration
+```
+
+These exercise the in-process scoped broker, taint/reader propagation, transitive invalidation, TTL/rollback, input/output packing, publication retries and journal rejection. They do not call paid models, prove summary grounding, measure token savings or establish restart-safe task recovery. Specification18 lists the remaining service, adapter, provider and adversarial requirements.

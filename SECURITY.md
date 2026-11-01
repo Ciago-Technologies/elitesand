@@ -47,3 +47,7 @@ TLS1.3/mTLS and QUIC, SO_PEERCRED socket sessions and native FD SDK adapters are
 ## Reporting vulnerabilities
 
 This repository does not establish a staffed security mailbox or response SLA. Use a maintainer-provided private channel when available; avoid putting tokens, keys, customer payloads or exploitable private data into public issues. A future release must publish its supported-version and disclosure process before production distribution.
+
+## Worker orchestration boundary
+
+MemoryBroker owns its Engine and restricts worker leases to exact sources/output, tenant/session/audience/boot and deadlines. It accepts summary text as data, derives minimum source integrity and never issues a tool permit. Raw External evidence remains External. It invalidates dependent summaries on controlled source updates and requires host-reported revisions for external files. Rust type privacy is not an OS sandbox. See specification18 and the research/threat assessment in docs/MEMORY_ORCHESTRATION_RESEARCH.md.

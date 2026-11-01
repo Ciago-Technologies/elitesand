@@ -230,13 +230,15 @@ impl<J: Journal> Engine<J> {
             schemas: Schemas::new(),
         })
     }
-    fn authorize(&self, token: &VerifiedMacaroon) -> Result<()> {
-        // R8-3: Send + Sync high-water mark (Engine was Send + Sync before R7-5).
+    pub(crate) fn observed_now(&self) -> u64 {
         let seen = self.clock.now_ns();
-        let now = seen.max(
+        seen.max(
             self.last_now
                 .fetch_max(seen, std::sync::atomic::Ordering::AcqRel),
-        );
+        )
+    }
+    pub(crate) fn authorize(&self, token: &VerifiedMacaroon) -> Result<()> {
+        let now = self.observed_now();
         if token.boot_epoch() != self.boot_epoch || now >= token.expires_at() {
             Err(Error::Permission)
         } else {

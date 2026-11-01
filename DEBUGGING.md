@@ -46,3 +46,7 @@ The target24-hour result-retention default is not an unlimited retry guarantee. 
 No automatic repair service or replica backup restorer ships today. A future operator must verify identity, image epoch, checkpoint and WAL coverage before restoring. NeedsRepair is not always a whole-core fence. Distinguish damaged selected copies from cold absence and preserve original files/logs.
 
 Target metrics include active_sessions_total, eviction/dwell/generation headroom, export bytes, migration pause, route mismatch, WAL/archive pressure and CQE latency. Use bounded node/core/class/result labels and sampled hashed identities, not per-user metric cardinality. Existing local logs are evidence, not a running telemetry endpoint.
+
+## Current MemoryBroker errors and reconciliation
+
+The Rust broker returns Engine Error variants, not target network status numbers. Permission covers invalid role/session/boot/expiry; StaleReference covers invalidated/missing job/source lifetimes; Budget covers task/source/read/output/context caps; Duplicate covers conflicting publication/output; Journal means publication/cleanup did not succeed through the adapter. For a lost worker message, use result with the original lease and controller scope. Repeated identical live-job publish returns its reference without another journal write; read_context still revalidates freshness. forget is explicit retention cleanup and invalidates descendants. After process restart old broker refs are invalid; no task recovery service is supplied.

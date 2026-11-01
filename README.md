@@ -22,6 +22,16 @@ let rows = engine.execute(&query, &session)?;
 
 For a local Rust application, use path dependencies on `ciagomem-engine`, `ciagomem-core` and `ciagomem-ql`; see [installation](INSTALL.md). Native Linux I/O/export components have additional kernel and storage qualification requirements.
 
+## Worker memory handoffs
+
+A bounded Rust broker can delegate exact source actors to a worker session and publish a cited summary for the controller. Raw evidence remains on the worker path; source changes invalidate cached descendants. It preserves External taint and enforces byte/lease/task budgets. Run the provider-free example:
+
+```sh
+cargo run --release --offline -p ciagomem-engine --example memory_orchestration
+```
+
+See [the orchestration use case](USECASE.md#5-sub-agent-memory-orchestration-the-zero-token-waste-pattern). Model execution, namespace/network SDK integration and durable task recovery remain planned; summaries still consume model tokens.
+
 ## Current release and target architecture
 
 This checkout contains five library crates, runnable examples and adversarial tests. A production server/container/CLI, runtime BFBS collections, general document arrays, complete durable application replay and external Go/TypeScript/Rust clients remain target milestones. The [capability matrix](MASTER_SPECIFICATION.md#1411-ground-truth-capability-matrix-and-ordered-implementation-roadmap) defines their dependencies. No registry image or SDK publication is established here.

@@ -99,3 +99,7 @@ When Ciagomem is used as an AI Agent memory store, every record carries a privat
 ### 3.3 Local Zero-Copy `SealedExportWindow` (`memfd`)
 For local agent processes running on the same Linux host, Ciagomem can bypass socket payload copying by passing a read-only file descriptor over Unix Domain Sockets (`SOCK_SEQPACKET` + `SCM_RIGHTS`). The memory window is backed by a kernel-sealed `memfd` (`F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_FUTURE_WRITE | F_SEAL_SEAL`) and verified against `mprotect` write-upgrade attacks before exposure.
 R11 access-word sidecars are implemented and cost 8 bytes per allocated slot outside the registered backing. The 64-byte CoreSlotMeta, TinyLFU/segmented CLOCK, document overlay, networking and Left-Right publication described above remain planned. See specification 16 for abandonment retention and pin-token ownership.
+
+## Current bounded memory orchestration component
+
+MemoryBroker privately owns the reference Engine, using scoped source/output leases and existing authorization/Label/journal paths. It captures source digests once, propagates revision invalidation through summary descendants and assembles ordered byte-bounded context with citations. The host supplies trusted credential verification and worker/model isolation; namespace/family services, automatic hybrid search and persisted task recovery remain planned. This path uses complete Record images, not the target delta tail. See specification18 for costs and boundaries.

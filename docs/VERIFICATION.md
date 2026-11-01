@@ -1,3 +1,13 @@
+# Memory orchestration implementation — 1 November 2026
+
+Primary-source security/cost research was recorded before runtime changes in [MEMORY_ORCHESTRATION_RESEARCH.md](MEMORY_ORCHESTRATION_RESEARCH.md). The new bounded MemoryBroker integrates existing Engine/Label/journal paths; specification18 and the USECASE blueprint distinguish current code from target service/SDK/delta features.
+
+Fresh verification: **181 default and209 all-feature release tests passed**. This includes15 memory-broker integration tests and one new opaque-lease compile-fail test. Three native io_uring bodies explicitly skipped in the all-feature nocapture run. Formatting, whitespace and workspace/documentation validators passed. All-target/all-feature Clippy completed with warnings; no warning-free gate is claimed.
+
+The provider-free example processed22037 raw log bytes into210 context bytes including citation framing, retaining External integrity. These are deterministic example byte counts, not actual model tokens, billed cost savings or latency measurements. Raw logs and source fingerprints are in review/orchestration. The previous measurements below are historical. No paid model, remote worker sandbox, provider tokenizer/quality evaluation, persisted broker restart, Miri/model checking/fuzzing, ARM or power-cut qualification was executed.
+
+---
+
 # Documentation contract completion — 1 November 2026
 
 Both full specifications are synchronized. Section17 and the ten user guides distinguish current libraries from planned host/SDK services. Documentation-only changes preserve runtime source and storage layouts.

@@ -415,3 +415,11 @@ cargo run --release --offline -p ciagomem-engine --example quickstart
 ```
 
 The SDK examples above are future M4–M5 acceptance workflows. They require SchemaCatalog, transport/auth/dedup and complete journal integration first. Conditional commands require the negotiated feature in specification 17.3. No package install or persistence guarantee follows from an example.
+
+## Current: scoped worker memory handoff
+
+```sh
+cargo run --release --offline -p ciagomem-engine --example memory_orchestration
+```
+
+This provider-free example uses MemoryBroker and existing actor images. A worker reads only leased sources, publishes cited text and hands the controller a bounded context. Source changes invalidate descendants; unsigned output enters frame data through evidence_label(), never as automatic Policy/Fact authority. General BFBS/delta arrays, network SDKs and durable tasks remain target work. See specification18.

@@ -1398,6 +1398,7 @@ This matrix supplements the review-resolution matrix; **target** is a required m
 | Multi-family collections / `FamilyIndex` | Tenant-scoped reference indexes and actor IDs; no durable named collection directory including cold members | M2: family-tagged actor-key registry, cold+resident directory, epoch-consistent scans and rebuild |
 | Arrays / delta compaction | Scalar `Record` plus separate embeddings; parser has an Append AST form but no general typed document-vector execution | M3: typed vectors, bounded overlay/compaction/promotion, compact WAL replay and schema-aware indexes |
 | Wire protocol framing / durable retries | Rust libraries; no deployed request server, no persisted client mutation ledger | M4: bounded UDS/TLS codecs, family-bound authentication, crash-safe dedup and typed result framing |
+| Worker memory orchestration | Bounded in-process MemoryBroker with scoped leases, cited summaries, revision invalidation and byte budgets; no model runner or durable task recovery | Host/namespace/provider integration and persisted task-state gates in section18 |
 | Rust client | Current embedded quickstart is runnable with non-durable MemoryJournal; no `ciagomem-client` | M5a: published client and durable embedded node adapter with equivalent acceptance tests |
 | Go / TS SDKs | Not implemented or published | M5b: generated-root verification, lossless types, client-state persistence and interoperability fixtures |
 | Integrated durability / deletion | WAL/checkpoint/security components and reference in-memory journal; full reactor/replay/repair missing | Required before M4 durable ACKs or any production database claim |
@@ -2104,3 +2105,93 @@ Existing verification and the following future suites form the build checklist. 
 | release_and_operations | Real published artifact install, readiness after replay, shutdown with genuine CQEs, native FD adapter disposal, qualified restart/rollback and signed manifest compatibility |
 
 Benchmark warm-up, dataset, schema/vector sizes, registered/resident/concurrent counts, read/write mix, key skew, hit rate, durability mode, batching, resource caps, hardware/kernel/CPU affinity, frequency/power policy and commit-ack boundary must be recorded. Report throughput plus p50/p99/p99.99 and confidence/sample counts separately for resident read, already-published export getter, export construction/IPC, cold load, local durable commit and quorum commit. Differential index tests compare identical authorized results with pushdown on/off. Run sustained ramps long enough to expose thermal throttling, GC/checkpoint/compaction and spool pressure;60 seconds is a smoke ramp, not sufficient durability or capacity qualification. Latency targets in earlier sections are objectives; none prove a million simultaneously active users, universal cost savings or sub-microsecond durable/network writes.
+
+## 18. Sub-agent memory orchestration and hybrid context assembly
+
+### 18.1 Purpose and economics
+
+The "Zero-Token Waste Pattern" means avoiding unnecessary repetition in the expensive main agent's context. It does **not** mean zero inference tokens or zero cost. The worker reads allowed evidence, applies deterministic preprocessing or a suitable model, publishes a compact summary, and hands the orchestrator a reference. The orchestrator reads only an authorized context slice unless an explicit evidence-verification escalation is needed. Model names, prices and guaranteed percentage savings are not part of this contract.
+
+```text
+Main agent -- scoped delegation/budgets --> Worker
+     ^                                      |
+     |                                      | approved files/logs/history
+     |                                      | parse, extract, summarize
+     |                                      v
+     +-- bounded cited context <-- Ciagomem memory broker/store
+                   ^              | sources, digests, labels, TTL
+                   +-- prior notes/frames + exact/text/vector candidates
+```
+
+Evidence-to-summary compression is useful only if it preserves task quality and reduces total measured cost. Define baseline_cost as actual main input/output, tools and storage cost for the same workload; hybrid_cost includes main input/output, worker input/output, embedding/indexing, retrieval, provider caching, retries, verification and orchestration/storage cost. Savings=(baseline_cost-hybrid_cost)/baseline_cost, only when baseline_cost>0. Never equate a reduction in main input tokens with total token or monetary savings. Worker parallelism may increase total usage and queue latency. Reuse source-versioned summaries across turns only while fresh and authorized; cap worker fanout, calls, retries and output before invoking a model. Prefer deterministic filtering/deduplication and cached summaries when sufficient.
+
+Research and threat decisions are recorded in [MEMORY_ORCHESTRATION_RESEARCH.md](docs/MEMORY_ORCHESTRATION_RESEARCH.md). Primary evidence: [Anthropic multi-agent engineering](https://www.anthropic.com/research/multi-agent-research-system), [context engineering](https://www.anthropic.com/research/effective-context-engineering-for-ai-agents), [CaMeL](https://arxiv.org/abs/2503.18813) and [source/sink prompt-injection defenses](https://openai.com/index/designing-agents-to-resist-prompt-injection/). These sources motivate the design; they do not certify Ciagomem or supply its performance measurements.
+
+### 18.2 Implemented Rust component and authority boundary
+
+`ciagomem-engine::memory::MemoryBroker<J>` is a bounded **in-process reference implementation**, owning an existing Engine and using its actor FlatBuffer images, journal, authorization and labels. It is not a model runtime, network server, scheduler, sandbox or file reader. No new dependency, persistent header field, unsafe code or CiaQL grammar change is required for this component. Sections14–17 remain the target host/collection/SDK contract, not completed features.
+
+The broker binds one tenant incarnation, controller session, audience and random broker ID. VerifiedMacaroon inputs must have been validated by the trusted host against its configured issuer and authorization context; arbitrary co-resident Rust code can issue/verify values with its own keys, so the type alone is not an issuer boundary. A model receives only scoped host tool wrappers, never native constructors or signing access. A distinct verified worker session receives an opaque local WorkerLease for exact source ActorRefs and a fresh output ActorRef. The broker privately owns the Engine: worker callers cannot use general Engine put/query/journal access through it. The trusted host must not retain another unrestricted authority path or give the worker an issuer key. Workers in an untrusted process must receive only broker-mediated transport APIs; Rust type privacy is not an OS sandbox or an authenticated remote capability codec.
+
+API sequence:
+
+1. `new(engine, controller, limits)` checks current token/boot/expiry, controller read+write rights and limits.
+2. `ingest(record, controller)` admits trusted-adapter-supplied source records. It performs no path/URL access. External files/logs receive External labels. Reserved memory-output IDs cannot be overwritten through ingestion.
+3. `delegate(output, sources, worker, controller)` validates both session scopes, source readers/full incarnations, unique source/output IDs, quotas and deadline. It captures each verified source image's SHA256 digest once. The output must not already exist or belong to another live task.
+4. `read_sources(lease, worker)` returns only those authorized current snapshots under the configured source-read/image-byte bounds. These inputs go to the worker, never automatically to the main model.
+5. `publish(lease, summary, worker)` constructs a summary Record with structured source refs/digests and a derived label. The summary is data, never evaluated CiaQL. Journal commit precedes task publication. Identical live-task retries return the same MemoryRef without another write; changed summary retries return Duplicate.
+6. `result(lease, controller)` learns a publication reference after a lost completion message. It is reconciliation metadata, not proof the referenced content is still fresh.
+7. `read_context(refs, byte_budget, controller)` checks published state, scopes, source validity and TTL, deduplicates repeated refs, and packs whole summaries in the supplied priority order. The returned ContextSlice contains untrusted text, propagated Label, structured source citations and an omitted count. Framing/citation bytes count against the byte limit. A budget too small for every item returns Budget; no partial UTF-8/string truncation occurs.
+8. `forget(lease, controller)` journal-deletes an existing output before releasing task metadata/reservation. Pending tasks can be cancelled without publishing data. Failed journal cleanup retains the task so it can be retried.
+
+| Bound | Default | Constructor ceiling |
+| --- | ---: | ---: |
+| Live pending+published tasks | 64 | 1024 |
+| Sources per task | 16 | 32 |
+| Source image bytes per fetch/task | 1048576 | 16777216 |
+| Source reads per task | 1 | 16 |
+| Summary UTF-8 bytes | 4096 | 16384 |
+| Serialized context bytes | 8192 | 65536 |
+| Context references per call | 8 | 64 |
+| Worker lease duration, ns | 300000000000 | 300000000000 |
+| Summary TTL, ns | 900000000000 | 3600000000000 |
+
+All bounds must be nonzero. Engine row/field/image/index/journal limits apply additionally and can reject earlier. Task limits are per broker; the host must bound broker instances, model work and outstanding response/snapshot ownership per tenant. Returned Arc snapshots can retain memory in caller code; this library cannot enforce process RSS against a hostile caller holding arbitrary Rust values. Output bytes are not provider tokens. A trusted provider tokenizer/billing adapter must enforce actual token/cost budgets including system prompts, tools and output reservations; never trust a worker-reported usage count alone.
+
+### 18.3 Freshness, concurrency and failure behavior
+
+Broker mutation is owner-serialized. Only trusted ingestion or publication/forget can change its privately held Engine. A successful source ingest conservatively marks every dependent task stale, including transitive summary descendants, even if a rewrite is byte-identical. A failed journal operation does not invalidate the old visible state. Delegation rejects stale/expired parent summaries; derived summary TTL is capped by the earliest source-summary TTL. Forget invalidates descendants before removing the parent reservation. Thus context reads validate revision fences without rehashing raw multi-page input on each main turn; initial source digests remain immutable citation evidence.
+
+External file changes are unknown until the trusted ingestion adapter reports a new source revision. A filesystem path is not a version proof. Target adapters must bind immutable object/version ID, content hash, allowed root, byte/line range, parser version and extraction configuration; verify them before ingestion. Do not claim freshness for unreported external changes. Source deletion/incarnation changes must use the same invalidation path before visibility/reclamation; the current broker exposes controlled ingestion/forget, not arbitrary deletion/query mutation.
+
+Pending publication is visible only after Engine journal success; a matching retry checks scope/expiry before returning its prior reference. Broker state transitions are Pending->Published or removal by Forget, never two different published summaries for one task. Worker leases use the Engine's trusted nondecreasing clock and an absolute deadline bounded by current worker/controller token expiry and any source-summary expiry; token renewal cannot extend that deadline. Expired tasks remain charged until controller cleanup. Summary expiration is separate from task deadline. A late journal completion may be committed even if the client deadline elapsed: reconcile, never automatically issue a different semantic job as if the first had aborted.
+
+The current broker/task table, cache and live-task retry state are volatile. MemoryJournal is non-durable. A supplied Journal is responsible for its actual boundary, and this change does not provide the durable node replay/dedup driver. After restart, the new random broker ID invalidates old leases/references; there is no automatic restoration of task metadata from summary images. Target production recovery must atomically journal task identity/state, source manifest, publication version, result/idempotency record and cancellation progress before acknowledging durable outcomes. Persist/refuse replay according to14.6/17.6; never turn current in-process idempotency into an exactly-once-across-restart claim.
+
+### 18.4 Provenance, scratch isolation and prompt-injection containment
+
+Worker origin and integrity are different properties. Logs, arbitrary files, scraped pages and Q-LLM text are External. Derived output inherits the minimum source integrity, source-category union and reader-set intersection using existing Label::derived. A model designated "worker" cannot select its own Label or promote External evidence to AgentDerived. All-trusted parents may yield derived AgentDerived metadata, but derivation clears issuer authority: that is not a signed Fact/Policy admission. Existing content-bound attestation/endorsement and single-use frame/tool permit requirements still apply. No wrapper, Markdown delimiter or summary format proves an instruction harmless.
+
+ContextSlice.evidence_label() explicitly downgrades unsigned derived metadata to External while preserving source categories and reader intersection, allowing the existing Var/data admission path to verify the exact assembled text. It never creates a Fact or action permit. Read summaries as data in a permitted low-trust memory-frame slot; never concatenate them into system policy, ActiveIntent or trusted playbooks. ContextSlice.label plus its exact content must pass the existing appropriate admission path; Fact/Policy/sensitive tool actions require their stronger evidence and permits. Trusted fixed policy/user instructions remain separate from retrieved evidence. A malicious summary can still affect model reasoning; source/sink enforcement restricts effects, not every erroneous inference. Grounding/completeness needs evaluation and explicit source inspection for high-impact decisions.
+
+Target deployments isolate raw evidence, worker scratchpads, published agent memories and user application data into separately authorized namespace/family scopes. Share memory by explicit broker-mediated publication/authority, not a tenant-wide scan token. The current broker enforces tenant/session/exact-source/output isolation; it does not implement the future namespace/family Macaroon caveats or SchemaCatalog. Cross-namespace copying requires an explicit authenticated export/endorsement/declassification design, not simply storing a common actor ID.
+
+Workers receive only the allowed evidence reader and scoped publisher. Filesystem/network/tool adapters require allowlisted immutable resources, no symlink/traversal escape, bounded decompression/tokenization, redacted secrets and no arbitrary code/command execution. Source citations are references, not an instruction to auto-fetch arbitrary URLs. A Markdown summary can be stored as a bounded scalar string. File materialization is an optional hardened trusted export adapter, not arbitrary worker writes into project/policy directories.
+
+### 18.5 Hybrid retrieval, delta arrays and prior memory frames
+
+Combine three layers: trusted fixed constraints/intent; compact validated prior notes or task summaries; just-in-time evidence retrieval when new information or uncertainty warrants it. Existing seqlock snapshots, Label joins and frame/action admission primitives remain the lower-level enforcement. File parsing, decompression, model/API calls and large-source hashing must be scheduled outside latency-critical reactor work. The current reference broker hashes bounded source images synchronously at delegation and is not a qualified hot-reactor service; a production adapter should capture trusted ingestion fingerprints under bounded staging/tick work. The implemented broker takes explicit MemoryRefs in host-chosen rank order and returns a bounded slice; it does not run an automatic named-family hybrid search planner.
+
+Target `agent_scratch`, `agent_memory` and task/history families use14's BFBS catalog and typed CRUD. A summary is a scalar searchable field, one compact document per episode/task; do not pass a `[string]` history vector as a scalar SEARCH field. Exact key/ref filters precede bounded BM25 and optional SQ8/exact vector reranking. Apply namespace/family/session scope and source revision/TTL checks before ranking, not after exposing candidates. Search results remain candidates until the broker validates current authority/freshness and assembles the context budget. Match embedding dimension/model version and tokenizer/extraction version in cache identity.
+
+A cache key binds tenant/namespace, task objective digest, full source manifest/revisions, extraction prompt/parser/model version, embedding version, requested output shape and policy epoch. Invalidate on source/permission/policy changes; never reuse a better-privileged user's summary for another principal. The current broker's explicit job identity does not implement this semantic cache directory or model-call coalescing.
+
+The target worker writes scalar updates and bounded history refs with compact delta operations such as `push_bounded`; it cannot mutate a generated FlatBuffers vector in place. Overlay records, scratch compaction, class promotion, CAS version checks and WAL/result ledger follow14–17. The current reference broker publishes complete fixed-format Record images and does not implement delta tails or general arrays. It reduces main-context repetition; it does not make model inference/local IPC/commits sub-microsecond. Markdown text, scalar summaries and optional vector embeddings still obey extent and retention limits; raw archives belong in a bounded external evidence store.
+
+### 18.6 Acceptance, operations and cost qualification
+
+`ciagomem-engine/tests/memory.rs` covers scoped sessions, forged/cross-broker leases/refs, publication conflicts, journal rejection, byte/source/read/task budgets, Unicode packing, source revision and transitive invalidation, parent TTL, forget and taint propagation. The runnable `memory_orchestration` example uses deterministic error-line extraction as the cheapest worker baseline; it performs no external model/API call. Its byte counts are not token/cost/latency measurements.
+
+Before a production service claim, add persisted task-state/restart failure injection, multiple worker lease fencing, real capability/namespace transport integration, source-adapter path/decompression attacks, secret/PII leakage tests, stale-cache/permission revocation, malicious-summary tool-exfiltration attempts, grounding/factual recall evaluations, provider usage verification, cost/fanout/deadline admission and memory retention pressure. Include adversarial summaries that forge delimiters, citations or policy instructions; reject authority escalation even when text is plausible.
+
+Collect actual worker/main input and output tokens (including cached rates and retries), model/tool calls, extraction/citation quality, stale/omitted contexts, context bytes, lease expiry/retries, journal failures, provider queue/runtime and total p50/p99 end-to-end latency. Test cold and warm caches, changed-source invalidation, repeated turns and tasks with little compressible context. Compare direct main access, deterministic preprocessing, single-worker and hybrid retrieval at equivalent answer quality. Neither "90%+" nor a universal70–90% reduction is promised. If delegation costs more or loses required evidence, choose a cheaper direct/preprocessing path or escalate within an explicit budget.

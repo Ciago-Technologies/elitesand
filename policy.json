@@ -4,28 +4,25 @@
   "verification_depth": "impact",
   "delegation": "none",
   "reason_codes": [
-    "complete-documentation-contracts",
-    "preserve-audited-runtime",
-    "verified-artifact-cleanup"
+    "research-before-orchestration-implementation",
+    "bounded-worker-memory-handoff",
+    "preserve-provenance-and-audit-invariants"
   ],
   "allowed_write_scope": [
     "ciagomem-slae/** (excluding vendor and .git)",
     "ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md",
-    "ciagomem-documentation-review.zip",
-    "README.md (only after preserving unique content)",
-    "Ciagomem-Self-Audit-R10.md",
-    "ciagomem-r10-fixed-review.zip",
-    "ciagomem-r11-fixed-review.zip",
-    "ciagomem-self-audit-evidence.zip",
-    "New File/** (only after evidence preservation)"
+    "ciagomem-orchestration-review.zip",
+    "ciagomem-documentation-review.zip (superseded outgoing bundle only)"
   ],
   "acceptance": [
-    "both full specifications identical and preserve audited layouts and code listing",
-    "unified target grammar, configuration, auth, diagnostics, retries, deployment and use-case acceptance contracts documented",
-    "all ten root user guides distinguish runnable APIs from planned features",
-    "documentation, workspace and format validators pass; runnable quickstart succeeds",
-    "remove obsolete outgoing bundles and verified redundant inputs, retain source/vendor/audit evidence",
-    "one current review ZIP contains both specs, updated guides and checksum inventory"
+    "primary-source security/cost research recorded before runtime changes",
+    "bounded engine-integrated broker scopes worker sources/output/session and rechecks source freshness",
+    "External inputs never promoted by summarization; derived labels and context budgets enforced",
+    "publication retry/collision/expiry/journal failure covered by adversarial tests",
+    "current Rust handoff example runs without external model credentials",
+    "both specifications and USECASE distinguish implemented broker from planned host/SDK/delta services",
+    "default/all-feature release tests, formatting, Clippy and document/workspace gates run",
+    "current ZIP includes both full specifications, research, implementation and evidence"
   ],
   "project_invariants": [
     "five-crate acyclic workspace",
