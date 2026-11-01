@@ -98,6 +98,7 @@ pub struct Label {
     issuer: Option<[u8; 32]>,
     scope: Option<(u128, u128, u128)>,
     expires_at: u64,
+    proof: Option<SignedProvenance>,
 }
 impl Label {
     pub fn external(sources: u64, mut readers: Vec<u128>) -> Result<Self, &'static str> {
@@ -114,6 +115,7 @@ impl Label {
             issuer: None,
             scope: None,
             expires_at: u64::MAX,
+            proof: None,
         })
     }
     pub fn attested(
@@ -140,7 +142,172 @@ impl Label {
         l.issuer = Some(key.to_bytes());
         l.scope = Some((tenant, session, boot_epoch));
         l.expires_at = proof.claims.expires_at;
+        l.proof = Some(proof.clone());
         Ok(l)
+    }
+    /// Authenticate opaque label metadata for trusted local recovery, bound to exact image bytes.
+    /// The key belongs to the host, never to clients or model workers.
+    pub fn seal_checkpoint(&self, key: &impl Prf, image: &[u8]) -> Vec<u8> {
+        let mut out = b"CLB2".to_vec();
+        out.push(self.integrity as u8);
+        out.extend(self.sources.to_le_bytes());
+        out.push(self.readers.len() as u8);
+        for reader in &self.readers {
+            out.extend(reader.to_le_bytes());
+        }
+        for value in [self.digest, self.issuer] {
+            out.push(value.is_some() as u8);
+            if let Some(value) = value {
+                out.extend(value);
+            }
+        }
+        out.push(self.scope.is_some() as u8);
+        if let Some((tenant, session, boot)) = self.scope {
+            for value in [tenant, session, boot] {
+                out.extend(value.to_le_bytes());
+            }
+        }
+        out.extend(self.expires_at.to_le_bytes());
+        out.push(self.proof.is_some() as u8);
+        if let Some(proof) = &self.proof {
+            out.extend(proof.signature);
+            out.push(proof.claims.readers.len() as u8);
+            for reader in &proof.claims.readers {
+                out.extend(reader.to_le_bytes());
+            }
+        }
+        let digest = content_digest(image);
+        let tag = key.mac256(
+            b"ciagomem/label-checkpoint/v1",
+            &[out.as_slice(), &digest].concat(),
+        );
+        out.extend(tag);
+        out
+    }
+    /// Restores metadata only after authenticating the image and complete opaque label.
+    /// Old boot/session scope is preserved, so restart does not renew attestation authority.
+    pub fn open_checkpoint(
+        key: &impl Prf,
+        image: &[u8],
+        sealed: &[u8],
+    ) -> Result<Self, &'static str> {
+        let invalid = || "invalid label checkpoint";
+        if sealed.len() < 32 || sealed.len() > 512 {
+            return Err(invalid());
+        }
+        let (body, tag) = sealed.split_at(sealed.len() - 32);
+        let digest = content_digest(image);
+        if !ct_eq(
+            tag,
+            &key.mac256(b"ciagomem/label-checkpoint/v1", &[body, &digest].concat()),
+        ) {
+            return Err(invalid());
+        }
+        fn take<'a>(input: &mut &'a [u8], n: usize) -> Result<&'a [u8], &'static str> {
+            if input.len() < n {
+                return Err("short label checkpoint");
+            }
+            let (value, rest) = input.split_at(n);
+            *input = rest;
+            Ok(value)
+        }
+        let mut input = body;
+        if take(&mut input, 4)? != b"CLB2" {
+            return Err(invalid());
+        }
+        let integrity = match take(&mut input, 1)?[0] {
+            0 => Integrity::External,
+            1 => Integrity::AgentDerived,
+            2 => Integrity::UserDirect,
+            3 => Integrity::Policy,
+            _ => return Err(invalid()),
+        };
+        let sources = u64::from_le_bytes(take(&mut input, 8)?.try_into().unwrap());
+        let count = take(&mut input, 1)?[0] as usize;
+        if count > 4 {
+            return Err(invalid());
+        }
+        let mut readers = Vec::with_capacity(count);
+        for _ in 0..count {
+            readers.push(u128::from_le_bytes(
+                take(&mut input, 16)?.try_into().unwrap(),
+            ));
+        }
+        if readers.windows(2).any(|v| v[0] >= v[1]) {
+            return Err(invalid());
+        }
+        let mut optional = [None, None];
+        for value in &mut optional {
+            *value = match take(&mut input, 1)?[0] {
+                0 => None,
+                1 => Some(take(&mut input, 32)?.try_into().unwrap()),
+                _ => return Err(invalid()),
+            };
+        }
+        let scope = match take(&mut input, 1)?[0] {
+            0 => None,
+            1 => Some((
+                u128::from_le_bytes(take(&mut input, 16)?.try_into().unwrap()),
+                u128::from_le_bytes(take(&mut input, 16)?.try_into().unwrap()),
+                u128::from_le_bytes(take(&mut input, 16)?.try_into().unwrap()),
+            )),
+            _ => return Err(invalid()),
+        };
+        let expires_at = u64::from_le_bytes(take(&mut input, 8)?.try_into().unwrap());
+        let proof = match take(&mut input, 1)?[0] {
+            0 => None,
+            1 => {
+                let signature = take(&mut input, 64)?.try_into().unwrap();
+                let n = take(&mut input, 1)?[0] as usize;
+                if n > 4 {
+                    return Err(invalid());
+                }
+                let mut signed_readers = Vec::new();
+                for _ in 0..n {
+                    signed_readers.push(u128::from_le_bytes(
+                        take(&mut input, 16)?.try_into().unwrap(),
+                    ));
+                }
+                let (tenant, session, boot_epoch) = scope.ok_or_else(invalid)?;
+                let claims = ciagomem_crypto::Provenance {
+                    tenant,
+                    session,
+                    boot_epoch,
+                    integrity: integrity as u8,
+                    sources,
+                    readers: signed_readers,
+                    digest: optional[0].ok_or_else(invalid)?,
+                    expires_at,
+                };
+                let proof = SignedProvenance { claims, signature };
+                let verifier = AttestationVerifier::from_bytes(optional[1].ok_or_else(invalid)?)
+                    .map_err(|_| invalid())?;
+                let mut canonical = proof.claims.readers.clone();
+                canonical.sort_unstable();
+                canonical.dedup();
+                if canonical != readers || !proof.verify_signature(&verifier) {
+                    return Err(invalid());
+                }
+                Some(proof)
+            }
+            _ => return Err(invalid()),
+        };
+        if proof.is_none() && optional[0].is_some() && optional[1].is_some() {
+            return Err(invalid());
+        }
+        if !input.is_empty() {
+            return Err(invalid());
+        }
+        Ok(Self {
+            integrity,
+            sources,
+            readers,
+            digest: optional[0],
+            issuer: optional[1],
+            scope,
+            expires_at,
+            proof,
+        })
     }
     pub fn integrity(&self) -> Integrity {
         self.integrity
@@ -173,6 +340,7 @@ impl Label {
                 None
             },
             expires_at: self.expires_at.min(b.expires_at),
+            proof: None,
         }
     }
     pub fn derived(content: &[u8], parents: &[Label]) -> Self {
@@ -412,6 +580,7 @@ pub fn label_pllm_output(context: &[Label]) -> Label {
     };
     let mut out = rest.iter().fold(first.clone(), |a, b| a.join(b));
     out.integrity = out.integrity.min(Integrity::AgentDerived);
+    out.proof = None;
     out.digest = None;
     out.issuer = None;
     out.scope = None;

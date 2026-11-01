@@ -1,0 +1,5 @@
+mesh::tests::a_new_doorbell_cannot_strand_data_behind_the_cached_tail: 1000 bounded independent runs passed
+mesh::tests::grid_delivers_fifo_per_lane_without_loss_under_concurrency: 25 bounded independent runs passed
+VERDICT: PASS
+
+VERDICT: PASS

@@ -1,0 +1,50 @@
+{
+  "review/service/package.log.gz": {
+    "uncompressed_sha256": "81680da4da99b680f2be2f4df0e17f35335591f5f90920a4fa95a186e192126d",
+    "uncompressed_bytes": 327859
+  },
+  "review/service/help.log.gz": {
+    "uncompressed_sha256": "a75ba4d55601db2ef225e3aa54a4d774fcb3dc2250e3da56441b7625f56d8245",
+    "uncompressed_bytes": 286173
+  },
+  "review/service/all.log.gz": {
+    "uncompressed_sha256": "bce3182ced57bbd85020b526525e3d41b91c9f2887295e3b5d4bf63a0cb0758e",
+    "uncompressed_bytes": 323230
+  },
+  "review/service/default.log.gz": {
+    "uncompressed_sha256": "e4df4822d3c29495fc6e6a18c20a5477bd9908541066b6d2c0a6595eab390aa0",
+    "uncompressed_bytes": 320172
+  },
+  "review/service/clippy.log.gz": {
+    "uncompressed_sha256": "f870a7c692ccca640df945c6cf54d717875e6f2bfd543a85b842be5fcf3494d7",
+    "uncompressed_bytes": 332938
+  },
+  "review/single-node/example.log.txt.gz": {
+    "uncompressed_sha256": "f1e102a3296da797eaab5225e700797b9e41d290471581db9947f807b83a0682",
+    "uncompressed_bytes": 285256
+  },
+  "review/single-node/extracted-tests.log.txt.gz": {
+    "uncompressed_sha256": "ab6ee79230031d6d812b86954fbf76dc7f83ba94c648f4fa4b0eed39b7245e37",
+    "uncompressed_bytes": 323543
+  },
+  "review/single-node/default.log.txt.gz": {
+    "uncompressed_sha256": "59b68f0ff9eec2bb1d29e5dc8e6c363ac084890ed0d0b70f60de783988a8446d",
+    "uncompressed_bytes": 316263
+  },
+  "review/single-node/clippy.log.txt.gz": {
+    "uncompressed_sha256": "42bbc80201b10411162b7afa848069adcc147a1eed062dd734e052cbf4af349e",
+    "uncompressed_bytes": 328477
+  },
+  "review/single-node/all.log.txt.gz": {
+    "uncompressed_sha256": "070c1f494c00701a196e47f56381bce27c9579ed229b0eb995c1465b36d8761b",
+    "uncompressed_bytes": 319334
+  },
+  "review/single-node/repeat.log.txt.gz": {
+    "uncompressed_sha256": "d413bca94f95db4b8e019e70ebd43b026c035d52d8176a760d658fab1f456e43",
+    "uncompressed_bytes": 31911
+  },
+  "review/single-node/before-lock-fix.log.txt.gz": {
+    "uncompressed_sha256": "9ff08374d9eabe9c353ea6789d0759f29ab4b325ce28b7eb8110e7b554964096",
+    "uncompressed_bytes": 297854
+  }
+}

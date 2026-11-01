@@ -1,3 +1,9 @@
+# Current implementation boundary — durable worker integration
+
+Specification19 and all ten guides now distinguish MemoryJournal from the implemented DurableJournal/FileLog/Host path. Record, scalar/text/vector indexes, links and deletion jobs recover from authenticated batches/checkpoints; queue credentials are rechecked and logical credits include retained replies. Native writes are an explicit option on the final owner thread, while remaining metadata/checkpoint I/O is synchronous. The production nonblocking network/reactor and retry ledger remain gates. Historical source/test evidence below is retained under its original revision.
+
+---
+
 # Scaling audit patches applied — 1 November 2026
 
 Six documentation patches close viral-actor read distribution, analytical view progress/retention, parked cold-fault resource safety, gateway/backend memory ownership, measured hot-set density and workload-specific concurrency/replacement acceptance. They extend15.3 and15.13–15.18 without changing layouts, grammar or runtime code. All ten guides reflect the contracts. The standalone whitepaper mirrors MASTER_SPECIFICATION.md.
@@ -36,3 +42,7 @@ The current embedded quickstart succeeded. Fresh workspace release tests passed1
 All obsolete outgoing R10/R11/self-audit ZIPs were removed. Unique self-audit evidence was extracted and checksum-verified; original R10 incoming patch/report entries matched their preserved audit digests before removal. The stale parent README was preserved before deletion; the root self-audit report matched the existing archived copy. The empty input directory and regenerable target/cache directories were removed. Source, vendor, Git and historical review evidence remain. The cleanup manifest records fingerprints and evidence locations.
 
 The documentation revision used ciagomem-documentation-review.zip as its outgoing share bundle; the later orchestration revision supersedes it with ciagomem-orchestration-review.zip. It includes the complete standalone whitepaper at archive root, the same content as MASTER_SPECIFICATION.md, all guides, runtime sources, vendor and review evidence. It excludes Git, build caches and secrets outside the repository. No code fixes or production host/SDK implementation are implied by these documentation changes.
+
+## Current single-node service update
+
+The historical documentation-only status above is superseded by specification19–20. The current workspace includes DurableJournal/checkpoints, an atomic client receipt ledger, fixed-Record TLS/mTLS reactor/server CLI and source Rust client/IdentityFile. Guides and the capability matrices now distinguish those APIs from target BFBS/arrays/Go/TypeScript/cluster work. The refreshed ciagomem-single-node-review.zip contains both full specifications, all source/tests, vendored Rust dependencies and current raw verification evidence. Hardware qualification and published SDK/container releases are not implied.

@@ -19,6 +19,19 @@ pub struct Links {
     count: usize,
 }
 impl Links {
+    #[cfg(unix)]
+    pub(crate) fn edges(&self) -> Vec<Edge> {
+        self.incoming
+            .iter()
+            .flat_map(|(&target, values)| {
+                values.iter().map(move |(&dependent, &on_delete)| Edge {
+                    dependent,
+                    target,
+                    on_delete,
+                })
+            })
+            .collect()
+    }
     pub fn count(&self) -> usize {
         self.count
     }

@@ -1,0 +1,3 @@
+ciagomem-server serve DATA_DIR AUTH_KEY STORAGE_KEY CERT_PEM KEY_PEM CA_PEM PRINCIPALS BIND [--portable-loopback]
+ciagomem-server issue-token AUTH_KEY OUTPUT TENANT SESSION PEER_UID BOOT_EPOCH CLIENT_ID EXPIRES_UNIX_NS
+All integers are decimal; key files are exactly 32 raw bytes, mode 0600. PRINCIPALS lines: SHA256_LEAF_CERT_HEX PEER_UID. Audience=7, key epoch=1. Native Linux io_uring + CPU affinity are mandatory unless loopback test mode is explicitly selected.

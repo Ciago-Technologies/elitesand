@@ -1,6 +1,8 @@
 # Security, capabilities and AI governance
 
-**Current:** capability/provenance/export primitives and reference Engine authorization. **Target:** a complete authenticated service, namespace/family policy, production clock, transport and operational key management. [Specification17.4](MASTER_SPECIFICATION.md#174-capability-types-clocks-and-target-codec) defines the target codec and clock behavior. Component tests are not proof that arbitrary host applications integrate them correctly.
+> **Single-node service update:** Linux TLS1.3/mTLS reactor hosting and durable client retries are implemented in the fixed-Record profile. See [specification20](MASTER_SPECIFICATION.md#20-implemented-single-node-tls-reactor-and-durable-client-retries) and [source deployment](INSTALL.md#run-the-current-single-node-service). BFBS families, Go/TypeScript SDKs and the distributed runtime remain target work; hardware qualification remains required.
+
+**Current:** capability/provenance/export primitives, Engine authorization and the protocol3 TLS/mTLS service with ClientId-bound retries and a Unix-nanosecond daemon clock. **Target:** namespace/family policy, integrated revocation/key management and the complete distributed transport. [Specification17.4](MASTER_SPECIFICATION.md#174-capability-types-clocks-and-target-codec) defines the target codec and clock behavior. Component tests are not proof that arbitrary host applications integrate them correctly.
 
 ## Implemented capability primitives
 
@@ -61,3 +63,15 @@ Query Workers receive bounded immutable snapshots/manifest generations with full
 Remote segment references are controlled logical IDs, not arbitrary client URLs. Apply tenant quotas, bounded reads/decompression, authenticated storage credentials, digest/format verification and manifest-generation retention. A stale index cannot reveal revoked data or resurrect a tombstone. Left-Right publication retains guarded reclamation and permission checks; untrusted local processes still use sealed exports/framed bytes. These are target integration controls under15.13–15.17, not a completed host sandbox.
 
 Remote hot publications require current serving authority and request visibility, not just a matching placement epoch. Unreachable endpoints cannot promise instant revocation; they must fail closed without valid authorization proof. Named-version reads, read-your-writes and linearizable latest reads are distinct contracts. Publication guards protect lifetime, not authority, and a slot pin does not freeze mutable bytes.
+
+## Authenticated recovery metadata
+
+CLB2 label checkpoints retain and verify original signed provenance as well as a storage MAC tied to image bytes. Restart preserves old attestation scope/expiry; it does not renew trust. The storage MAC key is a trusted host secret and cannot replace the provenance issuer signature. WAL acknowledgement anchors are local CRC-protected persistence metadata; they are not rollback-resistant external anchors. The current Rust host verifies raw tokens before admission and after queued deferral; the embedding adapter must supply real peer credentials.
+
+## Implemented service security boundary
+
+The Linux service accepts TLS1.3 only, requires a CA-verified client certificate and maps its exact DER-leaf SHA256 fingerprint to an operator-configured UID. The signed Macaroon must match that UID, tenant/session, audience/key epoch, current boot, expiry and client ID at admission and execution. Session tickets/early data are disabled. OpenSSL3.5 LTS >=3.5.9 is a required system dependency; keep it patched. Certificate revocation refresh and automatic root rotation remain external operator responsibilities; replace credentials/allowlist and restart as needed.
+
+Wire images can assert only External data for the authenticated tenant. Read-only QUERY rejects mutations, links and exports. Every network mutation uses a durable request key and exact full actor incarnation/CAS token. Retry lookup follows authentication; cached success cannot bypass expiry or boot checks. Reusing a key with changed semantics rejects. Expired receipts keep durable client high-water marks; corruption/uncertain I/O fails closed rather than creating an empty/new store.
+
+Keep data directories and identity files private, retain separate32-byte auth/storage keys and provision only capabilities to application workers. TLS and authenticated WAL/checkpoint metadata do not encrypt storage at rest or prevent whole-store snapshot rollback. The current Rust API is trusted embedded code; it is not a hostile-plugin sandbox. The service profile does not expose the target sealed-export FD adapter. See specification20 for bounds and the remaining physical storage/backup qualification gates.

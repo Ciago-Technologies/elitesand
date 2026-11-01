@@ -77,6 +77,21 @@ def main():
     assert (ROOT / 'ciagomem-engine/examples/memory_orchestration.rs').exists()
     workflow = (ROOT / '.github/workflows/rust.yml').read_text()
     assert 'python3 scripts/validate_documentation.py' in workflow
+    service = spec.split('## 20. Implemented single-node TLS reactor and durable client retries', 1)[1]
+    assert struct.calcsize('<HBBHIII') == 18
+    assert struct.calcsize('<BBH8sIQQ16s16s16sII') == 88
+    assert struct.calcsize('<HBBIQ16s') == 32
+    for required in ['CMEB0002', 'CMEB0001', 'CIDFILE1', 'RetryTooOld', 'ClientId',
+                     '3.5.9', 'not a per-actor increment', 'High-water marks do not automatically expire',
+                     'same TLS/authentication/framing/reactor implementation']:
+        assert required in service, ('service contract missing', required)
+    wire = (ROOT / 'ciagomem-engine/src/wire.rs').read_text()
+    for constant, value in [('HEADER',18),('PREFIX',88),('RESPONSE',32)]:
+        assert f'pub const {constant}: usize = {value};' in wire
+    assert 'pub const VERSION: u8 = 3;' in wire
+    assert (ROOT / 'ciagomem-engine/src/bin/ciagomem-server.rs').exists()
+    assert (ROOT / 'ciagomem-engine/examples/network_client.rs').exists()
+    assert 'Install pinned TLS provider' in workflow
     print('Checked full specification mirror, consolidated grammar, wire sizes, budgets, guide status/links and CI gate.')
     print('VERDICT: PASS')
 

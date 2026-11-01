@@ -20,8 +20,27 @@ pub enum Change {
     Put(Snapshot),
     Delete(ActorRef),
     Link(Edge),
-    BeginDelete { job: u64, plan: Vec<ActorRef> },
-    DeleteProgress { job: u64, cursor: u64 },
+    BeginDelete {
+        job: u64,
+        plan: Vec<ActorRef>,
+    },
+    DeleteProgress {
+        job: u64,
+        cursor: u64,
+    },
+    #[cfg(unix)]
+    Receipt(crate::retry::Receipt),
+    #[cfg(unix)]
+    ClientHighWater {
+        tenant: u128,
+        client: u64,
+        sequence: u64,
+    },
+    #[cfg(unix)]
+    DocumentVersion {
+        actor: ActorRef,
+        version: u64,
+    },
 }
 #[derive(Debug, Clone)]
 pub struct Batch {
@@ -78,6 +97,7 @@ struct Stored {
     slot: u32,
     snapshot: Snapshot,
     charge: usize,
+    version: u64,
 }
 #[derive(Default)]
 struct Shard {
@@ -89,13 +109,13 @@ struct Shard {
     bytes: usize,
 }
 pub struct Engine<J: Journal> {
-    boot_epoch: u128,
+    pub(crate) boot_epoch: u128,
     clock: Arc<dyn ciagomem_core::Clock + Send + Sync>,
     last_now: std::sync::atomic::AtomicU64,
     shards: Vec<Shard>,
-    limits: Limits,
-    journal: J,
-    sequence: u64,
+    pub(crate) limits: Limits,
+    pub(crate) journal: J,
+    pub(crate) sequence: u64,
     links: Links,
     deleting: BTreeSet<ActorRef>,
     jobs: BTreeMap<u64, DeleteJob>,
@@ -260,6 +280,25 @@ impl<J: Journal> Engine<J> {
             .get(&id)
             .ok_or(Error::MissingActor)
     }
+    pub(crate) fn contains_actor_id(&self, id: u64) -> bool {
+        self.stored(id).is_ok()
+    }
+    pub fn document_version(&self, actor: ActorRef, token: &VerifiedMacaroon) -> Result<u64> {
+        self.snapshot(actor, token)?;
+        Ok(self.stored(actor.id)?.version)
+    }
+    pub(crate) fn check_version(
+        &self,
+        actor: ActorRef,
+        version: u64,
+        token: &VerifiedMacaroon,
+    ) -> Result<()> {
+        if version == 0 || self.document_version(actor, token)? != version {
+            Err(Error::StaleReference)
+        } else {
+            Ok(())
+        }
+    }
     pub fn snapshot(&self, actor: ActorRef, token: &VerifiedMacaroon) -> Result<Snapshot> {
         self.authorize(token)?;
         let s = self.stored(actor.id)?;
@@ -293,7 +332,7 @@ impl<J: Journal> Engine<J> {
             snapshot,
         }
     }
-    fn commit(&mut self, changes: Vec<Change>) -> Result<()> {
+    pub(crate) fn commit(&mut self, changes: Vec<Change>) -> Result<()> {
         let seq = self.sequence.checked_add(1).ok_or(Error::Overflow)?;
         self.journal.commit(&Batch {
             sequence: seq,
@@ -302,7 +341,7 @@ impl<J: Journal> Engine<J> {
         self.sequence = seq;
         Ok(())
     }
-    fn prepare(&self, record: Record) -> Result<(Snapshot, usize)> {
+    pub(crate) fn prepare(&self, record: Record) -> Result<(Snapshot, usize)> {
         if record.schema_version > self.schemas.latest() {
             return Err(Error::MissingSchema);
         }
@@ -337,7 +376,7 @@ impl<J: Journal> Engine<J> {
             cost,
         ))
     }
-    fn install(&mut self, snapshot: Snapshot, cost: usize) {
+    pub(crate) fn install(&mut self, snapshot: Snapshot, cost: usize) {
         let shard_id = self.owner_core(snapshot.record.actor.id);
         let shard = &mut self.shards[shard_id];
         let old = shard.rows.remove(&snapshot.record.actor.id);
@@ -369,6 +408,7 @@ impl<J: Journal> Engine<J> {
                 slot,
                 snapshot,
                 charge: cost,
+                version: self.sequence,
             },
         );
     }
@@ -1299,5 +1339,169 @@ impl<J: Journal> Engine<J> {
             self.jobs.remove(&job);
         }
         Ok(result)
+    }
+}
+
+impl<J: Journal> Engine<J> {
+    #[cfg(unix)]
+    pub(crate) fn replay_batch(&mut self, batch: Batch) -> Result<()> {
+        if batch.sequence != self.sequence.checked_add(1).ok_or(Error::Overflow)? {
+            return Err(Error::InvalidImage);
+        }
+        self.sequence = batch.sequence;
+        self.restore_changes(&batch.changes, false)?;
+        Ok(())
+    }
+    #[cfg(unix)]
+    pub(crate) fn checkpoint_batch(&self) -> Batch {
+        let mut changes: Vec<_> = self
+            .shards
+            .iter()
+            .flat_map(|s| {
+                s.rows.values().flat_map(|v| {
+                    [
+                        Change::Put(v.snapshot.clone()),
+                        Change::DocumentVersion {
+                            actor: v.snapshot.record.actor,
+                            version: v.version,
+                        },
+                    ]
+                })
+            })
+            .collect();
+        changes.extend(self.links.edges().into_iter().map(Change::Link));
+        for (&job, state) in &self.jobs {
+            changes.push(Change::BeginDelete {
+                job,
+                plan: state.pending.iter().copied().collect(),
+            });
+            changes.push(Change::DeleteProgress {
+                job,
+                cursor: state.cursor,
+            });
+        }
+        Batch {
+            sequence: self.sequence,
+            changes,
+        }
+    }
+    #[cfg(unix)]
+    pub(crate) fn restore_checkpoint(&mut self, batch: Batch) -> Result<()> {
+        if self.sequence != 0 || self.accounted_bytes() != 0 {
+            return Err(Error::InvalidImage);
+        }
+        self.sequence = batch.sequence;
+        self.restore_changes(&batch.changes, true)?;
+        Ok(())
+    }
+    #[cfg(unix)]
+    fn restore_changes(&mut self, changes: &[Change], checkpoint: bool) -> Result<()> {
+        let mut removed = Vec::new();
+        for change in changes {
+            match change {
+                Change::Receipt(_) | Change::ClientHighWater { .. } => {}
+                Change::DocumentVersion { actor, version } => {
+                    if !checkpoint || *version == 0 || *version > self.sequence {
+                        return Err(Error::InvalidImage);
+                    }
+                    let core = self.owner_core(actor.id);
+                    let stored = self.shards[core]
+                        .rows
+                        .get_mut(&actor.id)
+                        .ok_or(Error::InvalidImage)?;
+                    if stored.snapshot.record.actor != *actor {
+                        return Err(Error::InvalidImage);
+                    }
+                    stored.version = *version;
+                }
+                Change::Put(s) => {
+                    if self.deleting.contains(&s.record.actor) {
+                        return Err(Error::InvalidImage);
+                    }
+                    let (snapshot, cost) = self.prepare((*s.record).clone())?;
+                    self.install(snapshot, cost);
+                }
+                Change::Delete(actor) => {
+                    if checkpoint || self.stored(actor.id)?.snapshot.record.actor != *actor {
+                        return Err(Error::InvalidImage);
+                    }
+                    let core = self.owner_core(actor.id);
+                    let shard = &mut self.shards[core];
+                    let old = shard.rows.remove(&actor.id).ok_or(Error::InvalidImage)?;
+                    let index = shard
+                        .index
+                        .get_mut(&old.snapshot.record.tenant)
+                        .ok_or(Error::InvalidImage)?;
+                    index.remove(old.slot, &old.snapshot.record);
+                    if index.all.is_empty() {
+                        shard.index.remove(&old.snapshot.record.tenant);
+                    }
+                    shard.bytes -= old.charge;
+                    shard.by_slot.remove(&old.slot);
+                    shard.free.push(old.slot);
+                    self.links.remove_actor(*actor);
+                    self.deleting.remove(actor);
+                    removed.push(*actor);
+                }
+                Change::Link(e) => {
+                    let a = &self.stored(e.dependent.id)?.snapshot.record;
+                    let b = &self.stored(e.target.id)?.snapshot.record;
+                    if a.actor != e.dependent || b.actor != e.target || a.tenant != b.tenant {
+                        return Err(Error::InvalidImage);
+                    }
+                    if !self.links.contains(e.dependent, e.target)
+                        && self.links.count() >= self.limits.rows_per_core * self.shards.len() * 4
+                    {
+                        return Err(Error::Budget);
+                    }
+                    self.links.add(*e);
+                }
+                Change::BeginDelete { job, plan } => {
+                    if plan.is_empty()
+                        || self.jobs.contains_key(job)
+                        || plan.len() > self.limits.cascade_rows.saturating_sub(self.deleting.len())
+                    {
+                        return Err(Error::InvalidImage);
+                    }
+                    let tenant = self.stored(plan[0].id)?.snapshot.record.tenant;
+                    for actor in plan {
+                        let r = &self.stored(actor.id)?.snapshot.record;
+                        if r.actor != *actor || r.tenant != tenant || !self.deleting.insert(*actor)
+                        {
+                            return Err(Error::InvalidImage);
+                        }
+                    }
+                    self.jobs.insert(
+                        *job,
+                        DeleteJob {
+                            tenant,
+                            cursor: 0,
+                            pending: plan.clone().into(),
+                        },
+                    );
+                }
+                Change::DeleteProgress { job, cursor } => {
+                    let state = self.jobs.get_mut(job).ok_or(Error::InvalidImage)?;
+                    if !checkpoint {
+                        if state.cursor.checked_add(1) != Some(*cursor)
+                            || removed.len() > state.pending.len()
+                        {
+                            return Err(Error::InvalidImage);
+                        }
+                        for actor in &removed {
+                            if state.pending.pop_front() != Some(*actor) {
+                                return Err(Error::InvalidImage);
+                            }
+                        }
+                        removed.clear();
+                    }
+                    state.cursor = *cursor;
+                    if state.pending.is_empty() {
+                        self.jobs.remove(job);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }

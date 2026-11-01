@@ -243,6 +243,16 @@
       "filename": "ciagomem-orchestration-review.zip",
       "sha256": "788bf7675e3179c354e3e3fe7f9e0befb8b46760d98e290106e9d91efc0d3328",
       "reason": "Regenerated in place after staleness correction; pre-fix reproductions preserved in review/staleness."
+    },
+    {
+      "filename": "ciagomem-orchestration-review.zip",
+      "sha256": "b5c9cdea2b15dc1f67944754ae6a81b80879b764cf02cd2f28a2326b31e4853a",
+      "reason": "Superseded by ciagomem-single-node-review.zip; historical orchestration/staleness evidence retained under review."
+    },
+    {
+      "filename": "ciagomem-single-node-review.zip",
+      "sha256": "d542e2bce8cfd0d7ccddda81db3548f6ddd0a2bb865264cc1ac415b0ac8a1277",
+      "reason": "Pre-network worker bundle superseded in place by the TLS/durable-retry service bundle; historical evidence retained under review/single-node."
     }
   ]
 }

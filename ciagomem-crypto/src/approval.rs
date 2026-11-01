@@ -67,12 +67,17 @@ impl Provenance {
         out
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedProvenance {
     pub claims: Provenance,
     pub signature: [u8; 64],
 }
 impl SignedProvenance {
+    /// Verify the original signed claims without renewing scope, content binding or expiry.
+    pub fn verify_signature(&self, key: &AttestationVerifier) -> bool {
+        key.verify(&self.claims.message(), &self.signature)
+    }
+
     pub fn verify(
         &self,
         key: &AttestationVerifier,

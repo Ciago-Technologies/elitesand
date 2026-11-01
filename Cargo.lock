@@ -55,7 +55,9 @@ version = "0.3.0"
 dependencies = [
  "ciagomem-core",
  "ciagomem-ql",
+ "ciagomem-wal",
  "flatbuffers",
+ "libc",
  "roaring",
  "wide",
 ]

@@ -2,9 +2,12 @@
 name = "ciagomem-engine"
 version = "0.3.0"
 edition = "2024"
+rust-version = "1.89"
 license-file = "../LICENSE"
 
 [dependencies]
+libc = "0.2"
+ciagomem-wal = { path = "../ciagomem-wal" }
 ciagomem-core = { path = "../ciagomem-core" }
 ciagomem-ql = { path = "../ciagomem-ql" }
 roaring = "0.10.12"

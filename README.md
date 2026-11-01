@@ -1,5 +1,7 @@
 # Ciagomem — SLAE
 
+> **Single-node service update:** Linux TLS1.3/mTLS reactor hosting and durable client retries are implemented in the fixed-Record profile. See [specification20](MASTER_SPECIFICATION.md#20-implemented-single-node-tls-reactor-and-durable-client-retries) and [source deployment](INSTALL.md#run-the-current-single-node-service). BFBS families, Go/TypeScript SDKs and the distributed runtime remain target work; hardware qualification remains required.
+
 Ciagomem is an actor-oriented Rust storage project for application state and AI memory. Its target combines custom schema families, transactional mutations, text/vector retrieval and provenance controls. Users, sessions, orders, telemetry and agent memories are all intended workloads; gaming and wallets are examples.
 
 ## Start using the current Rust engine
@@ -34,9 +36,9 @@ See [the orchestration use case](USECASE.md#5-sub-agent-memory-orchestration-the
 
 ## Current release and target architecture
 
-This checkout contains five library crates, runnable examples and adversarial tests. A production server/container/CLI, runtime BFBS collections, general document arrays, complete durable application replay and external Go/TypeScript/Rust clients remain target milestones. The [capability matrix](MASTER_SPECIFICATION.md#1411-ground-truth-capability-matrix-and-ordered-implementation-roadmap) defines their dependencies. No registry image or SDK publication is established here.
+This checkout contains five library crates, runnable examples and adversarial tests. The Linux server/issuer CLI and source Rust client are available in the fixed-Record profile. Container releases, runtime BFBS collections, general document arrays, repair integration, fully asynchronous actor scheduling and published Go/TypeScript/Rust SDKs remain target milestones. The [capability matrix](MASTER_SPECIFICATION.md#1411-ground-truth-capability-matrix-and-ordered-implementation-roadmap) defines their dependencies. No registry image or SDK publication is established here.
 
-The embedded engine offers reference scalar queries/mutations, text/vector indexing, relationship/deletion logic and authorization components. Its MemoryJournal does not provide restart-safe application storage. WAL, io_uring and checkpoint libraries are separate components awaiting full host integration. Production deployment requires those dependencies and failure qualification; earlier benchmark results do not establish million-user capacity or guaranteed latency.
+The embedded engine offers reference scalar queries/mutations, text/vector indexing, relationship/deletion logic and authorization components. Its MemoryJournal does not provide restart-safe application storage. DurableJournal joins WAL/checkpoint/replay and a durable retry ledger through a storage owner, with a separate pinned TLS/io_uring network reactor. Production deployment requires native hardware and failure qualification; earlier benchmark results do not establish million-user capacity or guaranteed latency.
 
 ## Documentation
 
@@ -75,3 +77,22 @@ Each storage node retains a complete16-GiB budget; gateway/query/replica hosts a
 The next implementation priority is the existing single-node durability/recovery, bounded authenticated host and consistent index-publication path. Broad SQL/time-series/graph engines remain extended scope.
 
 The scaling audit additionally requires distributed viral-actor reads, bounded asynchronous view maintenance with consistent cuts, and parked cold faults with reserved completion resources. Full requirements and workload-specific database replacement gates are in specification15.13–15.18; a10–30% hot population and pooled connections do not remove non-arena memory costs.
+
+## Run the durable embedded host
+
+```sh
+cargo run --release --offline -p ciagomem-engine --example durable_host
+```
+
+The example persists a mutation, checkpoints and reads the recovered value after reopening with a fresh boot epoch. It uses a private temporary store and random in-memory demo keys. Native io_uring must be explicitly enabled on the final storage-owner thread; ordinary example mode uses buffered writes plus sync_data. This example exercises the embedded host. The separate fixed-Record TLS service and durable retry workflow are described below.
+
+## Run the single-node service
+
+```sh
+cargo build --release --offline -p ciagomem-engine --bin ciagomem-server
+./target/release/ciagomem-server --help
+```
+
+Linux and OpenSSL3.5 LTS (>=3.5.9, including development libraries) are required. Follow [INSTALL](INSTALL.md#run-the-current-single-node-service) to provision TLS principals, persistent keys, data and client identity. Native mode requires two allowed CPUs and io_uring; explicit loopback test mode keeps TLS/authentication/durable retries enabled. The runnable [Rust network client](ciagomem-engine/examples/network_client.rs) stages a request on disk before sending and resumes the same intent after a disconnect/restart. Source API: [client.rs](ciagomem-engine/src/client.rs).
+
+This profile serves bounded fixed ActorImages and scalar CiaQL operations. BFBS families, general arrays, cluster replication and analytical worker isolation remain target work. Tests do not certify power-loss durability, million-user capacity or network latency.

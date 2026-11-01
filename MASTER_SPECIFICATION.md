@@ -31,6 +31,7 @@ Historical remediation evidence includes the [R10 verification report](review/r1
 16. [R11 ownership and pin lifetimes](#16-r11-self-audit-remediation-cpudma-ownership-and-pin-lifetimes)
 17. [Application and operator contract](#17-complete-application-and-operator-documentation-contract)
 18. [Sub-agent memory orchestration](#18-sub-agent-memory-orchestration-and-hybrid-context-assembly)
+19. [Implemented durable worker integration](#19-implemented-single-node-durable-worker-integration)
 
 ## 1. Scope and review disposition
 
@@ -626,6 +627,12 @@ impl<T> core::ops::Deref for CachePadded<T> {
 
 #[cfg(target_os = "linux")]
 pub mod destination;
+
+#[cfg(target_os = "linux")]
+pub mod tls;
+
+#[cfg(target_os = "linux")]
+pub mod reactor;
 ```
 
 <!-- END REVIEWED CORE SOURCE -->
@@ -1401,11 +1408,11 @@ This matrix supplements the review-resolution matrix; **target** is a required m
 | Runtime `SchemaCatalog` / BFBS | Fixed generated actor image; one `Schemas` transition family per Engine; no runtime reflection catalog | M1: bounded BFBS verifier, durable descriptors/family bindings, compatibility rules and recovery |
 | Multi-family collections / `FamilyIndex` | Tenant-scoped reference indexes and actor IDs; no durable named collection directory including cold members | M2: family-tagged actor-key registry, cold+resident directory, epoch-consistent scans and rebuild |
 | Arrays / delta compaction | Scalar `Record` plus separate embeddings; parser has an Append AST form but no general typed document-vector execution | M3: typed vectors, bounded overlay/compaction/promotion, compact WAL replay and schema-aware indexes |
-| Wire protocol framing / durable retries | Rust libraries; no deployed request server, no persisted client mutation ledger | M4: bounded UDS/TLS codecs, family-bound authentication, crash-safe dedup and typed result framing |
+| Wire protocol framing / durable retries | Protocol3 TLS/mTLS service, bounded frames and atomic durable receipt/high-water ledger (§20) | M4: qualify native profile; add UDS and target family-bound protocol/interoperability |
 | Worker memory orchestration | Bounded in-process MemoryBroker with scoped leases, cited summaries, revision invalidation and byte budgets; no model runner or durable task recovery | Host/namespace/provider integration and persisted task-state gates in section18 |
-| Rust client | Current embedded quickstart is runnable with non-durable MemoryJournal; no `ciagomem-client` | M5a: published client and durable embedded node adapter with equivalent acceptance tests |
+| Rust client | Embedded MemoryJournal/DurableJournal and source engine::client with IdentityFile; no published ciagomem-client crate | M5a: published family-aware SDK and full interoperability/fault qualification |
 | Go / TS SDKs | Not implemented or published | M5b: generated-root verification, lossless types, client-state persistence and interoperability fixtures |
-| Integrated durability / deletion | WAL/checkpoint/security components and reference in-memory journal; full reactor/replay/repair missing | Required before M4 durable ACKs or any production database claim |
+| Integrated durability / deletion | DurableJournal/GroupCommitLog, checkpoints/index/link/delete-job replay, TLS frontend and durable retry ledger | Sections19–20 define current evidence; native device/repair/rollback/backup qualification remains |
 | Multi-node active load scaling | Core mesh components and migration/replication design direction; no complete distributed server | M6: placement, replicas/consensus, routing epochs, resharding, failure recovery and SLO qualification |
 | Gateway routing / admission | No external gateway or running host; core SPSC/credit primitives exist | M4/M6: principal-bound multiplexing, aggregate bounded lanes and epoch-fenced placement under15.13 |
 | Hub-and-Spoke query isolation / hot publication | Reference Engine executes synchronously; Left-Right host publication absent | Budgeted immutable snapshot workers and reclaimed hot views under15.14–15.15 |
@@ -2187,13 +2194,13 @@ Sections14–17 together define the target implementation checklist. Section 17 
 
 | Surface | Current checkout | Required delivery gate |
 | --- | --- | --- |
-| Embedded Rust engine | Runnable reference engine, fixed Record representation, MemoryJournal | Integrated node journal/replay before application durability claims |
+| Embedded Rust engine | Fixed Record, MemoryJournal or DurableJournal with replay/checkpoint (§19–20) | Native power-cut/storage qualification |
 | User BFBS families, arrays and conditional SDK mutations | Target contracts | M1–M4 reflection, identity, document path and fault-tested journal integration |
-| Client server/CLI/container/Go/TS clients | Not shipped by this workspace | M4–M5 interoperable codecs, authentication, durable retries and release manifests |
-| Node configuration, TLS, session multiplexing, diagnostics endpoint | Target host behavior | Host startup validation, quotas, request-time authorization and operations tests |
+| Client server/CLI/container/Go/TS clients | Linux server/issuer CLI and source Rust client (§20); no container/Go/TS release | Native service qualification; target family protocol and published cross-language SDKs |
+| Node configuration, TLS, session multiplexing, diagnostics endpoint | CLI/TLS multiplexing, quotas and request-time auth (§20); target diagnostics/config service | Host hardware qualification and remaining operator interfaces |
 | Cluster and warm restart | Planned | M6 consensus/fencing, cross-log recovery and section 15 failure suites |
 
-User guides must label target-only sections before commands or examples. A hypothetical image/package name is not evidence that an artifact exists. README/INSTALL lead with the runnable Rust quickstart; EXAMPLES separates current embedded calls from target client APIs. No document may translate an SLO objective into an observed guarantee. Case-sensitive API names and CiaQL are preserved; canonical product spelling is Ciagomem.
+Go/TypeScript clients and a published container image are not shipped. User guides must label target-only sections before commands or examples. A hypothetical image/package name is not evidence that an artifact exists. README/INSTALL lead with the runnable Rust quickstart; EXAMPLES separates current embedded calls from target client APIs. No document may translate an SLO objective into an observed guarantee. Case-sensitive API names and CiaQL are preserved; canonical product spelling is Ciagomem.
 
 ### 17.2 Unified target CiaQL application grammar
 
@@ -2489,3 +2496,137 @@ The target worker writes scalar updates and bounded history refs with compact de
 Before a production service claim, add persisted task-state/restart failure injection, multiple worker lease fencing, real capability/namespace transport integration, source-adapter path/decompression attacks, secret/PII leakage tests, stale-cache/permission revocation, malicious-summary tool-exfiltration attempts, grounding/factual recall evaluations, provider usage verification, cost/fanout/deadline admission and memory retention pressure. Include adversarial summaries that forge delimiters, citations or policy instructions; reject authority escalation even when text is plausible.
 
 Collect actual worker/main input and output tokens (including cached rates and retries), model/tool calls, extraction/citation quality, stale/omitted contexts, context bytes, lease expiry/retries, journal failures, provider queue/runtime and total p50/p99 end-to-end latency. Test cold and warm caches, changed-source invalidation, repeated turns and tasks with little compressible context. Compare direct main access, deterministic preprocessing, single-worker and hybrid retrieval at equivalent answer quality. Neither "90%+" nor a universal70–90% reduction is promised. If delegation costs more or loses required evidence, choose a cheaper direct/preprocessing path or escalate within an explicit budget.
+
+## 19. Implemented single-node durable worker integration
+
+This section records the new **embedded integration**, not a production server release. It supersedes earlier blanket statements that the reference Engine has only MemoryJournal or no durable application replay. MemoryJournal remains unchanged and non-durable. Sections14–18's production reactor, transport, identity-anchor, distributed and multi-model exit criteria remain open.
+
+### 19.1 Current storage and publication boundary
+
+Engine<DurableJournal> opens a trusted private Unix directory with an exclusive OS file lock. It uses the existing GroupCommitLog and32-byte EnvelopeV2, with a versioned authenticated application batch payload `CMEB0001`. The batch includes a sequence and complete Record FlatBuffer images, deletes, links, deletion plans and deletion cursors. It is not the target compact delta/SDK-ledger format in14.6. There is one serialized log for the embedded engine; its logical shards are not separate pinned reactor threads. No SlotHeader, SlotHandle, actor extent, word-atomic seqlock or A/B lifecycle layout changes.
+
+The buffered driver completes positional writes and sync_data on the storage worker before feeding the genuine completed-write result into GroupCommitLog. On Linux, enable_uring explicitly selects existing UringIo writes with their persistence flags; initialization failure does not silently fall back. Construct native engines on their final owner thread using Host::spawn_with. Startup recovery, superblock/acknowledgement persistence and full-state checkpoints still use blocking file operations. This is not the fully asynchronous production reactor: a storage-worker commit can delay other requests on that worker and carries no200-ns service guarantee.
+
+A journal commit returns success only after log completion and persistence of both acknowledgement-anchor copies. Existing engine mutation paths then install records and update authoritative reference indexes before returning results. Admission/size failures leave the visible record/index unchanged. An I/O failure fences the driver; its outcome may be indeterminate and must not be treated as proof of rollback. The anchor detects recovery stopping before an acknowledged LSN. It is CRC-protected local metadata, not an external rollback-resistant identity anchor or a defense against an administrator rewriting all storage copies.
+
+### 19.2 Recovery, checkpointing and labels
+
+Recovery bounds log payload memory, checks application batch authentication and contiguous engine sequence, restores complete records and rebuilds scalar/text/SQ8 reference indexes before readiness. Link integrity, tombstoned deletion closures, pending jobs and deletion cursors are replayed with their records. Trusted application upcaster code must be supplied before replay of newer schema versions; function pointers are not serialized. Wrong keys, invalid images, missing required checkpoints, unusable checkpoint copies and acknowledged-history gaps fail closed. Existing zero-length files are not treated as a newly created store. Quiescent shutdown explicitly unlocks the file description to avoid fork/exec inheritance delaying reopen; pending native I/O retains the ownership descriptor and backing until process exit rather than permitting a competing writer.
+
+A full-state checkpoint contains records, relationships and remaining deletion state in authenticated `CMCP0001` framing. It is written to a new staging file, synced, atomically renamed to an alternating checkpoint path, and its directory is synced before WAL truncation is persisted. An interrupted uncommitted staging file is removed only after successful recovery under the exclusive log owner. A stale fallback checkpoint can be used only if retained WAL covers its missing history. Corruption without coverage requires repair; there is no automatic replica repair service. Checkpoints are explicit operations; an application must schedule them before the bounded WAL fills. Full WAL or retained replay bytes at the configured recovery budget return bounded backpressure rather than discarding history; checkpoint state must also fit its configured encoded-size limit.
+
+Opaque label checkpoints use `CLB2`, authenticate metadata against the exact actor image, and retain the original signed provenance. Restoring an issuer/content-bound trusted label requires verification of the original Ed25519 signature in addition to the storage MAC; an attacker-chosen storage key cannot create such authority. Original tenant/session/boot/content/expiry scope is preserved, not renewed by restart. Derived labels do not gain attestation authority. The host must protect storage/authentication keys and trusted directories; payload encryption and external rollback protection are not implemented by this codec.
+
+### 19.3 Bounded authenticated host
+
+host::Host owns one engine on a storage worker. Its typed Client submits Put, Query, Delete, Link, BeginDelete, AdvanceDelete and Checkpoint requests through a bounded channel. Configured global request/byte and per-tenant request credits are reserved before acceptance, including response credits retained until the reply is released. Busy at admission means not accepted. The byte figures are logical accounting limits, not a qualified whole-process RSS bound; caller-owned records/snapshots, allocator overhead, indexes and OS resources need additional host accounting.
+
+Raw Macaroons are checked against the configured issuer, audience, key epoch, boot, peer context and a nondecreasing clock before admission and again on execution after queueing. The trusted embedding/transport adapter supplies actual peer identity; clients must not be allowed to assert OS credentials. Query execution separately checks stage permissions. Recovery/configuration failure prevents readiness. Shutdown closes admission and drains accepted work. Disconnected callers do not roll back committed effects.
+
+Section20 now integrates this host with a TLS TCP reactor and durable request/result ledger. QUIC, SOCK_SEQPACKET, BFBS catalogs, key rotation service, provider sandbox, replica failover and automatic tenant repair remain target work. Heavy reference queries still execute on the storage worker; full analytical Hub-and-Spoke isolation remains planned. Legacy embedded operations without execute_retry still require application reconciliation after lost replies.
+
+### 19.4 Reproducible checks and remaining qualification
+
+Run `cargo run --release --offline -p ciagomem-engine --example durable_host`. The provider-free example uses a private temporary directory and in-memory random demo keys, writes100 credits, mutates to75, checkpoints, reopens with a fresh boot epoch and reads75. It deletes its temporary store afterward. Production deployments need durable external key/identity configuration rather than this demo lifecycle. Current storage integration requires Rust1.89 or newer.
+
+The durable integration tests include a separate process that exits without Rust destructors after an acknowledged write; its parent reopens the store. They also exercise restart/index recovery, cascade cursor restoration, ring reclamation, acknowledged corruption, wrong keys, damaged checkpoints, exclusive ownership, journal admission failure, label integrity/provenance, interrupted staging, bounded replies, expired/wrong peer credentials, queued expiry and startup failure. Native io_uring availability is reported explicitly; a skipped native test does not qualify native storage.
+
+Before a production database claim, qualify the section20 reactor/transport and retry implementation on native hardware, and complete identity/catalog and repair integration, native device and power-cut fault matrix, rollback-resistant anchors, backup/restore and whole-node resource enforcement. The15.13–15.18 architecture and its performance/density goals remain target contracts; this worker integration does not establish million-user capacity or a nanosecond request SLO.
+
+
+## 20. Implemented single-node TLS reactor and durable client retries
+
+### 20.1 Delivered profile and preserved invariants
+
+This section updates the current-status statements in sections14,17 and19. The workspace now ships a Linux `ciagomem-server` executable, bounded nonblocking TLS frontend, native io_uring socket-readiness backend, fixed-Record Rust client and crash-safe client intent file. These integrate the existing single-owner reference engine and authenticated WAL/checkpoint recovery. The daemon pins the network and storage owners to two distinct allowed CPUs and requires Linux6.0+ with native io_uring by default; startup failure never silently selects another backend. An explicit portable mode is restricted to loopback for testing. TLS, capability checks, durability and retry semantics remain enabled in that mode.
+
+This is the **implemented fixed-Record single-node service profile**, not completion of the target BFBS-family/array/cluster protocol. Its protocol version is3, deliberately distinct from the target application1 and cluster2 profiles. It does not reinterpret their layouts. SlotHeader128/align64, ExtentHeader128, the five4–64KiB classes and reserved class bits, Boehm word-atomic SeqLock, full SlotHandle, EnvelopeV2, CaMeL and SealedExportWindow are unchanged. No client sequence, route or cluster metadata is inserted into SlotHeader. Current client receipts live in an authenticated journal sidecar reconstructed before readiness.
+
+| Surface | Implemented now | Remaining target/qualification |
+| --- | --- | --- |
+| Network owner | TLS1.3/mTLS TCP, multiplexed stream IDs, bounded incremental framing, io_uring PollAdd/PollRemove, CPU affinity, timeouts and drain | Native host/network fault and sustained-load qualification; QUIC and SOCK_SEQPACKET/SCM_RIGHTS adapters |
+| Storage owner | Reference Engine, synchronized or native WAL writes, authenticated checkpoints/replay, index reconstruction, checkpoint on WAL/replay-budget pressure | Fully asynchronous per-core actor scheduler, admission/eviction/repair integration and power-cut qualification |
+| Rust client | Source API in engine::client, stable pending intent and receipt persistence | Published standalone SDK; Go/TypeScript interoperability |
+| Retry state | Atomic effect+receipt WAL batch, durable client high-water marks, bounded TTL receipt cache | Explicit client retirement/administration and distributed dedup migration |
+| Schemas/query workers | Existing fixed ActorImage scalar/text/vector fields and bounded reference queries | Arbitrary BFBS families, arrays/delta-tail compaction, asynchronous analytical workers |
+
+The network owner never waits on a storage ticket. The storage worker currently serializes reference queries, checkpoints and durable writes, including native CQE waits; heavy queries can delay other storage requests within their work bounds. This is not the complete thread-per-core Hub-and-Spoke runtime of15.18, and does not establish its local200ns objective or million-request/user density.
+
+### 20.2 TLS, peer authentication and readiness
+
+Use system OpenSSL **3.5 LTS, patch9 or newer in that branch**, with development/link libraries available at build and runtime. TLS construction checks the runtime version and fails closed outside that baseline. TLS min=max1.3; peer chain verification is mandatory on both sides. Clients additionally verify the requested hostname/SNI. The server requires a client certificate and maps the SHA256 fingerprint of its exact DER leaf certificate to a configured peer UID. Possession of another certificate signed by the same CA is insufficient without that mapping. Changing a certificate requires an explicit principal-map rollout. Certificate verification is not a capability grant: the Macaroon must still bind tenant, session, mapped UID, audience, key epoch, boot, expiry and client ID.
+
+Early data and server session tickets are disabled. Chain depth is bounded8 and the certificate-list limit is65,536 bytes. Each TLS session has one owner. Nonblocking write retries retain the exact plaintext buffer until OpenSSL completes that write. No sensitive token, root key, document or plaintext frame is logged. Certificates and issuer/root keys require external provisioning and rotation; the daemon's `issue-token` command is an operator utility, not a public authentication endpoint. The service uses audience7/key-epoch1; rotating roots requires a controlled restart and renewed tokens.
+
+Readiness follows exclusive WAL ownership, authenticated replay/index/receipt reconstruction, native I/O initialization, CPU pinning, TLS/principal validation and listener/reactor startup. A fresh random128-bit BootEpoch is announced in READY and HELLO; callers renew capabilities after restart. The daemon evaluates capability timestamps as Unix nanoseconds with a process-local nondecreasing high-water clock. This is distinct from embedded examples using process-relative MonotonicClock. Persisted receipt high-water marks, not timestamps, prevent re-execution after cache expiry or restart. Protect the clock, key files and storage directory; restoring an entire old store/anchor/key snapshot is not rollback-resistant recovery.
+
+The installed provider was chosen after checking [OpenSSL3.5 release/security notes](https://www.openssl-library.org/news/openssl-3.5-notes/index.html). CI pins3.5.9 with the publisher's SHA256; operators must keep this supported branch patched. No FIPS certification is asserted. Certificate revocation/identity service integration remains external: use controlled short-lived certificates and restart with a changed allowlist/root as needed; automatic OCSP/CRL refresh is not implemented.
+
+### 20.3 Protocol3 framing and fixed-Record CRUD
+
+All integers are explicitly little-endian; no native struct transmutation is used. Every frame has the existing **18-byte** header: magic:u16 at0 (`0xC1A0`), version:u8 at2 (=3), op:u8 at3, flags:u16 at4, stream_id:u32 at6, payload_len:u32 at10, header_crc32c:u32 at14. The CRC covers bytes0..14; TLS supplies payload integrity. Stream0 is invalid. Request flags are0; response bit0 is set and bit1 denotes a nonzero status. Unknown flag bits, CRC/version errors, oversize headers and duplicate outstanding stream IDs close that connection before acceptance. Partial and multiple coalesced frames are supported. Stream IDs remain owned until their response is fully sent.
+
+HELLO op1 has an empty payload and is permitted only after TLS principal authorization. Its response reports BootEpoch, audience, frame/stream bounds and fixed-profile feature bits0..3 (read/query, local durability, durable retry and CAS). Non-HELLO requests have this **88-byte prefix**, followed by token, UTF-8 key and operation body:
+
+| Offset | Bytes | Field / requirement |
+| --- | ---: | --- |
+| 0 | 1 | request_format=3 |
+| 1 | 1 | requested_durability=1 (LocalDurable only) |
+| 2 | 2 | capability byte length,1..16,384 |
+| 4 | 8 | namespace/family/schema slots, all zero in fixed profile |
+| 12 | 4 | key length,0..1,024 |
+| 16 | 8 | signed client_id, nonzero |
+| 24 | 8 | client_seq, nonzero only for writes |
+| 32 | 16 | tenant incarnation, nonzero |
+| 48 | 16 | expected server BootEpoch |
+| 64 | 16 | expected actor incarnation; zero only when no point actor exists |
+| 80 | 4 | request timeout in milliseconds,1..300,000 |
+| 84 | 4 | operation body length |
+
+The capability codec is bounded version1: version:u8, caveat_count:u8, repeated tag:u8/length:u16/value, then HMAC-SHA256 signature32. Maximum32 caveats; unknown tags/widths/trailing bytes reject. Tags0..7 retain Tenant, ExpiresAt, PeerUid, Ops, KeyEpoch, Audience, Session and BootEpoch; tag8 adds ClientId:u64. ClientId attenuation cannot change the original client identity. Decoding is not authentication; signature and all conjunctive caveats are verified before admission and again after queueing. Namespace/family capabilities of the target protocol are not implied here.
+
+Each body starts with format:u8=1. A point key is the canonical nonzero decimal ActorRef.id, with its full128-bit incarnation in the prefix. CREATE uses no key/incarnation and returns a server-generated nonzero random64-bit ID plus random128-bit incarnation; supplied image identity fields are placeholders, never authority to select an existing identity.
+
+| Op | Body after format byte | Effect / return |
+| ---: | --- | --- |
+| 4 CREATE | image_len:u32, verified ActorImage bytes | Admit scalar document; receipt includes ActorRef as id:u64/incarnation:u128 |
+| 5 REPLACE | expected_version:u64, image_len:u32, image | Replace an existing full ActorRef at the exact version; missing actors are not implicitly created |
+| 6 READ | minimum_version:u64 | Authorized full verified ActorImage plus current opaque document version;0 requests current state |
+| 7 MUTATE | expected_version:u64, text_len:u32, CiaQL UTF-8 | Atomic point Filters followed by one final Mutate only; source ID must match full prefix ActorRef |
+| 8 DELETE | expected_version:u64 | Existing logical deletion/restrict/cascade rules; terminal durable receipt |
+| 9 QUERY | text_len:u32, CiaQL UTF-8; no point prefix key | Read-only existing parser stages: Filter, Similarity, Project, GroupBy, Reduce, Take and SearchBm25 |
+
+All lengths must consume the frame exactly. Image length<=65,344 and text length<=65,536; engine row/field/vector/work bounds also apply. Client images must be External, sources=1 and have exactly the authenticated tenant as reader; trusted provenance cannot be asserted in a wire image. REPLACE must match its image's full identity and tenant. Query cannot smuggle mutation/link/export side effects; unsupported stages return14. Existing query authorization applies, including tenant-operator requirements for scans. No arbitrary BFBS, named key registry, array syntax, cross-actor transaction, physical per-actor A/B wipe or automatic repair is added by this profile.
+
+The response prefix is32 bytes: status:u16, durability:u8, result_kind:u8, body_len:u32, sequence:u64, BootEpoch:u128. Kind0 is an error/control result;1 is a durable receipt;2 a document;3 projected rows;4 HELLO. A receipt body is tenant:u128/client:u64/client_seq:u64/digest32/result bytes. CREATE result is24 bytes; other write results are empty. A terminal failure receipt is still durable (durability=1); an error without receipt has durability0. Query rows are count:u32 followed by length:u32/ActorImage pairs; these are projections, not authoritative stored documents. Projection metadata may use zero actor/tenant sentinels when no actor exists and must never be accepted as input state. Score/joins are not serialized by this profile. Point reads carry their version in sequence; mutation receipts carry the global application commit sequence, **not a per-actor increment and not a physical WAL LSN**. Compare returned versions as opaque exact CAS tokens, never compute expected_version+1.
+
+### 20.4 Atomic durable retry state machine
+
+A signed `(tenant_incarnation, client_id, client_seq)` names one immutable semantic intent. The digest is SHA256 over the domain `ciagomem/write-command/v1`, operation type, full target identity, expected version and canonical ActorImage or exact CiaQL bytes. Authentication tokens, transport stream IDs, deadlines and BootEpoch are excluded so a renewed token/new connection can retry the same intent. A changed body/query/version with the same key returns9 IdempotencyConflict. Different CiaQL whitespace is a different intent.
+
+1. Authenticate and recheck current boot/expiry/peer/client scope before looking up results.
+2. If an unexpired receipt exists, return the identical persisted result before checking current actor existence/version. A previously successful DELETE must never affect a later actor incarnation.
+3. Otherwise require client_seq=durable_high_water+1. Sequence<=high_water returns10 RetryTooOld; a gap returns11 SequenceGap. Expiring a result never clears that high-water mark.
+4. Validate scope/CAS and prepare effects before publishing. Append effect changes and the terminal receipt to **one authenticated CMEB0002 batch inside EnvelopeV2**. Terminal CAS/predicate/semantic failures append receipt-only batches; authorization failures create no receipt or sequence advancement. Budget/Busy or uncertain journal failures do not consume the sequence or invent a result.
+5. Publish actor/index effects only after WAL persistence plus the acknowledgement anchor completes. Lost replies do not roll back effects. Uncertain storage errors fence the log; restart/recovery is required before reconciliation.
+6. Checkpoints persist high-water marks, retained receipts and per-document versions before truncation. Recovery reconstructs all three before readiness. Old CMEB0001 data-only batches remain readable; writers emit0002.
+
+Current defaults:4,096 persistent clients globally and1,024 per tenant;16,384 retained receipts globally/4,096 per tenant;16MiB logical receipt credits globally/4MiB per tenant;24-hour receipt retention using server time. Expiry is indexed; admission does not scan every retained receipt. Exhaustion returns15 DedupCapacity without new acceptance. High-water marks do not automatically expire: applications must pool persistent client identities, not create one for each end user/request. Explicit retired-client lifecycle/migration is future work. Logical credits exclude allocator/map overhead; protect the process additionally with cgroups and measured limits.
+
+Status5 denotes CAS/stale identity;6 includes ConditionFailed;8 Busy is bounded backpressure;9 conflicting intent;10 RetryTooOld;11 SequenceGap;12 invalid image;13 Indeterminate/storage failure;14 unsupported profile;15 dedup capacity. Status3 is permission denied. A terminal kind1 result may be a failure; the SDK consumes its sequence only after persisting it. Busy or an auth/transport error without a receipt leaves the original pending intent unresolved. Do not submit a compensating/new debit simply because an ACK was lost.
+
+### 20.5 Client IdentityFile and operator workflow
+
+`engine::client::IdentityFile` owns an exclusive OS lock, persistent random nonzero client_id, next sequence, at most one exact pending intent and its last terminal result. Files use CIDFILE1, bounded lengths and CRC32C in a private directory. CRC detects accidental corruption, not a hostile local owner. State updates use0600 create-new staging, file sync, atomic rename and parent-directory sync. Corrupt existing state fails closed; it is never silently treated as a new identity. Only a valid locked state allows stale staging cleanup. An I/O failure poisons that identity object until reopen.
+
+`prepare_write` fsyncs the intent before network submission. `write` prepares and submits; on disconnect/timeout retain the identity file, reconnect/HELLO, renew the capability for the announced BootEpoch with the **same client ID**, then call `resume`. The server returns the prior receipt or executes the still-new intent once. Validate receipt tenant/client/sequence/digest, then fsync the terminal result and increment before clearing pending. A crash after result persistence is reconciled through `last_result`. Any incomplete exchange poisons the connection; reconnect instead of associating delayed responses with new requests. Never delete or clone an active identity file to escape RetryTooOld/Indeterminate; a new identity requires application-level reconciliation first. Exactly-once **effect for a retained identity history** does not imply exactly-once packet delivery or protection against restoring an entire old backup.
+
+Build/run instructions and real-source API examples are in INSTALL and examples/network_client.rs. The daemon validates raw32-byte private auth/storage keys (must differ), private data directory, TLS credentials, bounded fingerprint-to-UID allowlist and bind address. It emits public readiness/boot data only. Unknown arguments fail. Portable mode is explicitly test-only loopback. Native owner affinity and ring errors prevent readiness. SIGTERM/SIGINT stop new network admission and drain accepted tickets/responses within the network drain budget; storage ownership then drains before exit. A kernel/device operation that never completes can still require supervisor termination; a deadline does not authorize freeing live DMA memory. Keep data/keys/client identity across restarts, renew boot-scoped capabilities and qualify native device behavior before use with critical data.
+
+### 20.6 Bounds, verification and release qualification
+
+Library caps:256 network connections,128 streams per connection,1MiB frames,4,096 mapped principals. The daemon selects64 connections,32 streams and128MiB logical network credits, plus Host's32 global/8 per-tenant requests and64MiB logical request/response credits. TLS/connection reserves are charged before retention; each accepted request reserves response bytes, and Host reply credits remain owned until the response is sent or dropped. Partial-frame, handshake, request, idle and drain deadlines bound slow peers. Per-tick accept/read/parse/write work is bounded. Overload returns Busy before Host acceptance; malformed/duplicate stream floods close their connection. These are gateway-backend service limits, not a million-direct-socket configuration or a qualified whole-process RAM bound.
+
+The daemon's reference defaults are one storage shard,10,000 rows/64MiB logical actor budget,64MiB WAL ring and64MiB encoded recovery/checkpoint budget. Checkpoint on WAL/replay-budget pressure occurs before retrying a not-yet-applied write. State that cannot fit checkpoint/replay limits fails with backpressure; limits are not an unlimited persistent dataset claim. DurableJournal currently logs complete changed ActorImages, not the future compact array-delta format. Replication, encryption-at-rest, external rollback anchors, online repair, robust backup/restore and asynchronous analytical isolation remain separate qualification/delivery gates.
+
+Executable tests cover mTLS hostname/allowlist rejection, current boot and signed ClientId, fragmented/coalesced/multiplexed framing, CRC/duplicate streams, slow peers, exhausted credits, CAS/terminal failures, receipt expiry/high-water retention, per-tenant quota isolation, IdentityFile corruption/exclusive ownership, lost ACK/restart with renewed tokens, readonly-query side-effect rejection and issuer file permissions. TCP listeners and native io_uring bodies explicitly report unavailable-kernel/sandbox skips. Connected Unix stream pairs exercise the **same TLS/authentication/framing/reactor implementation**; they do not count as executed TCP or native I/O qualification. CI additionally installs the pinned TLS provider before the existing formatting, validation, default/all-feature, Clippy and progress gates. Performance, Miri/fuzzing, ARM runtime and physical power-cut/NVMe qualification require separate evidence; none follows from passing these tests.

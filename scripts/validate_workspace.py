@@ -14,7 +14,7 @@ packages = {p["name"]: p for p in metadata["packages"]}
 graph = {n: {d["name"] for d in p["dependencies"] if d["name"] in packages}
          for n, p in packages.items()}
 assert not packages["ciagomem-ql"]["dependencies"], "parser reaches storage or crypto"
-assert graph["ciagomem-engine"] == {"ciagomem-core", "ciagomem-ql"}
+assert graph["ciagomem-engine"] == {"ciagomem-core", "ciagomem-ql", "ciagomem-wal"}
 engine_deps = {d["name"] for d in packages["ciagomem-engine"]["dependencies"]}
 assert {"roaring", "flatbuffers", "wide"} <= engine_deps
 assert all("ciagomem-engine" not in deps for n,deps in graph.items() if n != "ciagomem-engine")
@@ -78,7 +78,9 @@ assert {f"R11-{i}" for i in range(1, 5)} <= set(re.findall(r"R11-\d+", r11))
 assert "pub(crate) fn header(" in slot and "pub(crate) fn payload(" in slot
 r11_evidence = json.loads((root / "docs/r11-evidence.json").read_text())
 for name, digest in r11_evidence["files"].items():
-    assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest, name
+    # Preserve the historical validator verbatim; the live DAG now includes engine -> WAL.
+    evidence_path = "review/r11/before/validate_workspace.py.txt" if name == "scripts/validate_workspace.py" else name
+    assert hashlib.sha256((root / evidence_path).read_bytes()).hexdigest() == digest, name
 workflow = (root / ".github/workflows/rust.yml").read_text()
 for command in ["cargo fmt --all -- --check", "python3 scripts/validate_workspace.py",
                 "cargo test --release --offline --workspace -- --nocapture",

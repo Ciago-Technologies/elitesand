@@ -1,5 +1,7 @@
 # CiaQL reference
 
+> **Single-node service update:** Linux TLS1.3/mTLS reactor hosting and durable client retries are implemented in the fixed-Record profile. See [specification20](MASTER_SPECIFICATION.md#20-implemented-single-node-tls-reactor-and-durable-client-retries) and [source deployment](INSTALL.md#run-the-current-single-node-service). BFBS families, Go/TypeScript SDKs and the distributed runtime remain target work; hardware qualification remains required.
+
 **Current:** bounded actor-profile parser and reference executor. **Target:** schema-bound collection/array profile in [specification 17.2](MASTER_SPECIFICATION.md#172-unified-target-ciaql-application-grammar). The complete target grammar is authoritative; do not treat its examples as accepted by the current parser.
 
 ## Current actor profile
@@ -11,7 +13,7 @@ After loading actors and authorizing a session as in the [complete quickstart](c
 @1 select {credits: state.credits}
 ```
 
-The parser also has ACTOR, TX/TX_ACTORS and SCAN ACTORS sources, typed filtering/projection/grouping, search/similarity, relationship and frame/operator AST forms. Executor support and authorization are separate from parsing success. General arrays, runtime BFBS families and network mutation commands are not implemented by having an Append AST variant.
+The parser also has ACTOR, TX/TX_ACTORS and SCAN ACTORS sources, typed filtering/projection/grouping, search/similarity, relationship and frame/operator AST forms. Executor support and authorization are separate from parsing success. General arrays and runtime BFBS families are not implemented by having an Append AST variant. The protocol3 service supports existing scalar point mutations through durable retry/CAS (§20).
 
 The current lexer/parser allocates bounded tokens/AST collections. It does not promise zero allocations. Current source limits are64 KiB text,16,384 tokens,32 stages, nesting16, MAX_LIST=256,4096 vector dimensions and2..64 TX actors. Inspect parser and executor errors instead of assuming every syntactically accepted value is executable.
 

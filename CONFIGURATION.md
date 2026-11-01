@@ -1,5 +1,7 @@
 # Configuration and memory planning
 
+> **Single-node service update:** Linux TLS1.3/mTLS reactor hosting and durable client retries are implemented in the fixed-Record profile. See [specification20](MASTER_SPECIFICATION.md#20-implemented-single-node-tls-reactor-and-durable-client-retries) and [source deployment](INSTALL.md#run-the-current-single-node-service). BFBS families, Go/TypeScript SDKs and the distributed runtime remain target work; hardware qualification remains required.
+
 **Current:** the Rust crates use constructor/config structures, including Engine Limits, LifecycleConfig and WAL LogConfig. There is no server consuming the environment variables below. **Target:** the host contract in specification 17.5, with validation before listener readiness or LSN assignment.
 
 ## Current local configuration
@@ -78,3 +80,13 @@ The existing profile is16 GiB, not decimal16 GB. Colocated query workers must fi
 One million pending requests at a hypothetical1 KiB of state each already require about0.954 GiB before payloads and transport overhead. One million4-KiB export pages require3.815 GiB before descriptor/mapping costs; the existing64-MiB export cap remains16,384 windows. Exceeding any budget reduces admission, never silently borrows the contingency region. A configuration must declare accepted outstanding capacity, sustainable throughput/SLO and failure reserve per node; user count alone does not size a cluster.
 
 For the density objective,10–30% hot is a measured actor/byte working set, not a guaranteed capacity percentage. At300,000 resident64-KiB actors, extents alone require18.311 GiB. Account for cold identity catalogs as well as hot state. A stateless gateway still owns transient connections; database pooled sockets, transport, authentication and I/O buffers remain charged inside16 GiB. Reserve cold-fault continuation/staging/completion capacity before admission.
+
+## Current durable worker configuration
+
+Use LogConfig with TailMode::Pad and file0; the driver rejects invalid sizes, oversized buffers and unsupported modes. max_recovery_bytes bounds collected WAL payloads and encoded checkpoint size; snapshot/index reconstruction and staging need additional memory. HostLimits bounds logical requests, request/response credits and per-tenant admitted count. Full WAL backpressures until an explicit authenticated Checkpoint completes. Store files and keys in trusted private directories; there is no environment-variable daemon loader in this implementation.
+
+## Current executable configuration
+
+The shipped fixed-Record Linux daemon uses positional CLI configuration, not the target CIAGOMEM_* environment table. Its validated serve arguments are data directory, raw auth/storage key paths, server certificate/key/CA, private client-fingerprint allowlist and numeric bind address. The optional `--portable-loopback` flag explicitly selects test-only poll/synchronized-file I/O; native mode requires two allowed CPUs and genuine io_uring. TLS and durable retries stay enabled in both modes. Full commands: [INSTALL](INSTALL.md#run-the-current-single-node-service).
+
+Current fixed defaults:64 backend connections,32 streams each,1MiB frames,128MiB logical network credits,5s handshake/partial-frame,60s idle,10s network drain; Host32 tickets/8 per tenant and64MiB request+reply credits. Storage is one reference shard,10,000 rows/64MiB logical actor budget,64MiB WAL and encoded checkpoint/replay bound. Checkpoint is attempted on WAL/replay-pressure before retrying a write known not to have applied. Receipt defaults are4,096 clients/1,024 per tenant and16,384 receipts/4,096 per tenant,16MiB/4MiB logical receipt credits and24h retention. High-water marks persist after cache expiry. These bounded integration defaults do not claim a complete16GiB deployment budget or a million-client allowance.

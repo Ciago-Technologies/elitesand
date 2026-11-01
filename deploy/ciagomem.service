@@ -1,0 +1,30 @@
+[Unit]
+Description=Ciagomem single-node fixed-Record service
+After=network.target
+
+[Service]
+Type=simple
+User=ciagomem
+Group=ciagomem
+StateDirectory=ciagomem
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/ciagomem
+ExecStart=/usr/local/bin/ciagomem-server serve /var/lib/ciagomem /etc/ciagomem/auth.key /etc/ciagomem/storage.key /etc/ciagomem/server.pem /etc/ciagomem/server.key /etc/ciagomem/ca.pem /etc/ciagomem/principals 127.0.0.1:7443
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=90
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/ciagomem
+LimitNOFILE=1024
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

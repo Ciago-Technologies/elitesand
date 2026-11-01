@@ -1,6 +1,8 @@
 # Ciagomem — SLAE: System Architecture & Internals
 
-> **Implementation status:** This guide includes target architecture and acceptance API examples. Current runnable integration is the [embedded Rust quickstart](ciagomem-engine/examples/quickstart.rs), using non-durable MemoryJournal. Runtime BFBS families, general arrays, network SDKs/server and distributed services remain milestones in specification 14.11. Section 17 is the complete target application/operations contract; target examples are not runnable SDK releases or measured performance guarantees.
+> **Single-node service update:** Linux TLS1.3/mTLS reactor hosting and durable client retries are implemented in the fixed-Record profile. See [specification20](MASTER_SPECIFICATION.md#20-implemented-single-node-tls-reactor-and-durable-client-retries) and [source deployment](INSTALL.md#run-the-current-single-node-service). BFBS families, Go/TypeScript SDKs and the distributed runtime remain target work; hardware qualification remains required.
+
+> **Implementation status:** This guide includes target architecture and acceptance API examples. Current runnable integration is the [embedded Rust quickstart](ciagomem-engine/examples/quickstart.rs), using non-durable MemoryJournal. The fixed-Record Linux server and source Rust client now provide durable integration (§20). Runtime BFBS families, general arrays, Go/TypeScript SDKs and distributed services remain milestones in specification 14.11. Section 17 is the complete target application/operations contract; target examples are not runnable SDK releases or measured performance guarantees.
 
 
 This document details the internal engineering architecture of **Ciagomem — SLAE (v3.0; implemented R11 primitives plus planned layers)**. Ciagomem is designed around the **RUM Conjecture** (Read, Update, Memory overhead), utilizing specialized physical representations for resident hot state, durable write-ahead logging, and cold checkpointed extents.
@@ -98,7 +100,7 @@ When Ciagomem is used as an AI Agent memory store, every record carries a privat
 
 ### 3.3 Local Zero-Copy `SealedExportWindow` (`memfd`)
 For local agent processes running on the same Linux host, Ciagomem can bypass socket payload copying by passing a read-only file descriptor over Unix Domain Sockets (`SOCK_SEQPACKET` + `SCM_RIGHTS`). The memory window is backed by a kernel-sealed `memfd` (`F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_FUTURE_WRITE | F_SEAL_SEAL`) and verified against `mprotect` write-upgrade attacks before exposure.
-R11 access-word sidecars are implemented and cost 8 bytes per allocated slot outside the registered backing. The 64-byte CoreSlotMeta, TinyLFU/segmented CLOCK, document overlay, networking and Left-Right publication described above remain planned. See specification 16 for abandonment retention and pin-token ownership.
+R11 access-word sidecars are implemented and cost 8 bytes per allocated slot outside the registered backing. The 64-byte CoreSlotMeta, TinyLFU/segmented CLOCK, document overlay, full distributed networking and Left-Right publication described above remain planned. The bounded single-node TLS frontend is implemented separately (§20). See specification 16 for abandonment retention and pin-token ownership.
 
 ## Current bounded memory orchestration component
 

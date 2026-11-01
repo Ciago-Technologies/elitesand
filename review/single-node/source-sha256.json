@@ -1,0 +1,13 @@
+{
+  "ciagomem-core/src/security.rs": "3fd1e73323a151857bb273265afa3f7d5ad6a03a57c3df7cc66904bac58ecc8f",
+  "ciagomem-crypto/src/approval.rs": "1a2643eaec9a0c61bb73c1b7abb06ee4ee0a842a8658cbb822de2a955851b296",
+  "ciagomem-wal/src/driver.rs": "292f92151ec3b524424147a6289f2834c7d4033ee5f7bc135de57621a68fd9ce",
+  "ciagomem-engine/src/persistence.rs": "bd66a6b4a5900d32234affd368cff838c1a609b74af0e6d645704fc48b212b6d",
+  "ciagomem-engine/src/host.rs": "24067a053c62d9582cc536644076e454b2a33487d7c7c0b8426ada1426958bbb",
+  "ciagomem-engine/src/runtime.rs": "45ff0a191f2c0e6e531611bc2fa4952064b70324a5c5b21e6b0ee5ce5d7210c1",
+  "ciagomem-engine/src/links.rs": "8f5a8215c64bc021562773685ca831072844ab949b12cea7966c4f1bcf862070",
+  "ciagomem-engine/tests/durable.rs": "f039915ad1e9bffbe7b0a0d1640050e160d54a206fc1da49d33768b277232099",
+  "ciagomem-engine/examples/durable_host.rs": "b947225815dd1a520c762f6270898b09ec1a89dd6be5e54cd304c970d79ab9a8",
+  "MASTER_SPECIFICATION.md": "46881ac9d6fe12fa899364af230dd08d9f35fbd7d509d4367777e7de955f4d81",
+  "scripts/validate_workspace.py": "63ced29be285dbed5cefc4f10b00e8326da497cf1c6bd5d6da9c8d8a814d0048"
+}

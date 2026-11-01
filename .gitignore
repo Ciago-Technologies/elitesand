@@ -1,2 +1,7 @@
 /target/
 
+
+# Regenerable validators and private paths used by the source deployment guide.
+/scripts/__pycache__/
+/ciagomem-service/
+/ciagomem-client/

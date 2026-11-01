@@ -4,21 +4,23 @@
   "verification_depth": "impact",
   "delegation": "none",
   "reason_codes": [
-    "apply-six-scaling-audit-patches",
-    "documentation-only-commit",
-    "push-requested-by-user"
+    "durable-client-retry-ledger",
+    "authenticated-bounded-network-reactor",
+    "finish-single-node-service-and-push"
   ],
   "allowed_write_scope": [
     "ciagomem-slae/** (excluding vendor and .git)",
     "ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md",
     "ciagomem-orchestration-review.zip",
-    "ciagomem-documentation-review.zip (superseded outgoing bundle only)"
+    "ciagomem-documentation-review.zip (superseded outgoing bundle only)",
+    "ciagomem-single-node-review.zip"
   ],
   "acceptance": [
-    "Both complete specifications match byte-for-byte and define epoch-fenced routing, bounded admission, snapshot query workers, tier manifests and all 15 modalities",
-    "All affected current user guides preserve implemented/target distinctions and qualify density/latency/concurrency claims",
-    "Existing documentation/workspace validators and diff checks pass; runtime/source and historical evidence remain untouched",
-    "Stage only documentation/policy changes; commit and attempt normal push without force; report network failures honestly"
+    "Mutations and retry outcomes persist in the same authenticated WAL batch; reboot/lost ACK cannot execute the same intent twice",
+    "Bounded TLS1.3/mTLS reactor, strict framing, principal mapping, backpressure and graceful shutdown have adversarial socket tests",
+    "Persistent client identity state preserves exact pending bytes across disconnect/restart; conflicts and old sequences fail closed",
+    "Full default/all-feature release suites, document/workspace checks and packaged offline build pass; unavailable hardware checks are explicit",
+    "Commit the completed single-node work and push normally without force; report remaining hardware/cluster qualification honestly"
   ],
   "project_invariants": [
     "five-crate acyclic workspace",

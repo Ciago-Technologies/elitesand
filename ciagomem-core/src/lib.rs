@@ -78,3 +78,9 @@ impl<T> core::ops::Deref for CachePadded<T> {
 
 #[cfg(target_os = "linux")]
 pub mod destination;
+
+#[cfg(target_os = "linux")]
+pub mod tls;
+
+#[cfg(target_os = "linux")]
+pub mod reactor;

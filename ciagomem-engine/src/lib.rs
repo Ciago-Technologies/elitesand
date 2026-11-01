@@ -38,5 +38,29 @@ pub enum Error {
     Journal,
     Parse,
     InvalidQuery,
+    AlreadyExists,
+    IdempotencyConflict,
+    RetryTooOld,
+    SequenceGap,
+    DedupCapacity,
+    ConditionFailed,
 }
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(unix)]
+pub mod persistence;
+
+#[cfg(unix)]
+pub mod host;
+
+#[cfg(unix)]
+pub mod retry;
+
+#[cfg(unix)]
+pub mod wire;
+
+#[cfg(target_os = "linux")]
+pub mod network;
+
+#[cfg(target_os = "linux")]
+pub mod client;

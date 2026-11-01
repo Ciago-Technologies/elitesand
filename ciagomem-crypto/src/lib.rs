@@ -60,6 +60,7 @@ pub enum Caveat {
     Audience(u64),
     Session(u128),
     BootEpoch(u128),
+    ClientId(u64),
     Unknown(Vec<u8>),
 }
 fn encode(c: &Caveat) -> Vec<u8> {
@@ -72,6 +73,7 @@ fn encode(c: &Caveat) -> Vec<u8> {
         Caveat::Audience(v) => [vec![5], v.to_le_bytes().to_vec()].concat(),
         Caveat::Session(v) => [vec![6], v.to_le_bytes().to_vec()].concat(),
         Caveat::BootEpoch(v) => [vec![7], v.to_le_bytes().to_vec()].concat(),
+        Caveat::ClientId(v) => [vec![8], v.to_le_bytes().to_vec()].concat(),
         Caveat::Unknown(v) => [vec![255], v.clone()].concat(),
     }
 }
@@ -107,8 +109,12 @@ pub struct VerifiedMacaroon {
     audience: u64,
     boot_epoch: u128,
     expires_at: u64,
+    client_id: Option<u64>,
 }
 impl VerifiedMacaroon {
+    pub fn client_id(&self) -> Option<u64> {
+        self.client_id
+    }
     pub fn expires_at(&self) -> u64 {
         self.expires_at
     }
@@ -164,6 +170,7 @@ impl Macaroon {
         let (mut t, mut e, mut p, mut o, mut epoch) = (false, false, false, false, false);
         let mut ops = u64::MAX;
         let mut expires_at = u64::MAX;
+        let mut client_id = None;
         let (mut session, mut audience, mut boot) = (false, false, false);
         for c in &self.caveats {
             let ok = match c {
@@ -201,6 +208,11 @@ impl Macaroon {
                     boot = true;
                     *v != 0 && *v == ctx.boot_epoch
                 }
+                Caveat::ClientId(v) => {
+                    let valid = *v != 0 && client_id.is_none_or(|old| old == *v);
+                    client_id = Some(*v);
+                    valid
+                }
                 Caveat::Unknown(_) => false,
             };
             if !ok {
@@ -217,6 +229,7 @@ impl Macaroon {
             audience: ctx.audience,
             boot_epoch: ctx.boot_epoch,
             expires_at,
+            client_id,
         })
     }
 }
@@ -238,5 +251,128 @@ mod tests {
     fn provider_domain_separation() {
         let k = KeyedPrf([1; 32]);
         assert_ne!(k.mac256(b"a", b"bc"), k.mac256(b"ab", b"c"));
+    }
+}
+
+impl Macaroon {
+    /// Bounded capability wire codec. Signature verification remains mandatory after decoding.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, CaveatError> {
+        if self.caveats.len() > 32 {
+            return Err(CaveatError::TooMany);
+        }
+        let mut out = vec![1, self.caveats.len() as u8];
+        for caveat in &self.caveats {
+            let bytes = encode(caveat);
+            if bytes.len() > 16300 {
+                return Err(CaveatError::TooMany);
+            }
+            out.push(bytes[0]);
+            out.extend(((bytes.len() - 1) as u16).to_le_bytes());
+            out.extend(&bytes[1..]);
+        }
+        out.extend(self.signature);
+        if out.len() > 16384 {
+            return Err(CaveatError::TooMany);
+        }
+        Ok(out)
+    }
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CaveatError> {
+        if bytes.len() < 34 || bytes.len() > 16384 || bytes[0] != 1 || bytes[1] > 32 {
+            return Err(CaveatError::Denied);
+        }
+        let end = bytes.len() - 32;
+        let mut pos = 2;
+        let mut caveats = Vec::new();
+        for _ in 0..bytes[1] {
+            if pos + 3 > end {
+                return Err(CaveatError::Denied);
+            }
+            let tag = bytes[pos];
+            let len = u16::from_le_bytes(bytes[pos + 1..pos + 3].try_into().unwrap()) as usize;
+            pos += 3;
+            if len > end - pos {
+                return Err(CaveatError::Denied);
+            }
+            let v = &bytes[pos..pos + len];
+            pos += len;
+            let c = match (tag, len) {
+                (0, 16) => Caveat::Tenant(u128::from_le_bytes(v.try_into().unwrap())),
+                (1, 8) => Caveat::ExpiresAt(u64::from_le_bytes(v.try_into().unwrap())),
+                (2, 4) => Caveat::PeerUid(u32::from_le_bytes(v.try_into().unwrap())),
+                (3, 8) => Caveat::Ops(u64::from_le_bytes(v.try_into().unwrap())),
+                (4, 8) => Caveat::KeyEpoch(u64::from_le_bytes(v.try_into().unwrap())),
+                (5, 8) => Caveat::Audience(u64::from_le_bytes(v.try_into().unwrap())),
+                (6, 16) => Caveat::Session(u128::from_le_bytes(v.try_into().unwrap())),
+                (7, 16) => Caveat::BootEpoch(u128::from_le_bytes(v.try_into().unwrap())),
+                (8, 8) => Caveat::ClientId(u64::from_le_bytes(v.try_into().unwrap())),
+                _ => return Err(CaveatError::Denied),
+            };
+            caveats.push(c);
+        }
+        if pos != end {
+            return Err(CaveatError::Denied);
+        }
+        Ok(Self {
+            caveats,
+            signature: bytes[end..].try_into().unwrap(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    #[test]
+    fn capability_codec_preserves_signature_and_rejects_malformed_tlvs() {
+        let token = Macaroon::issue(
+            &KeyedPrf([3; 32]),
+            vec![Caveat::ClientId(42), Caveat::Tenant(11)],
+        )
+        .unwrap();
+        let bytes = token.to_bytes().unwrap();
+        let decoded = Macaroon::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.caveats, token.caveats);
+        assert_eq!(decoded.signature, token.signature);
+        for end in 0..bytes.len() {
+            assert!(Macaroon::from_bytes(&bytes[..end]).is_err());
+        }
+        let mut unknown = bytes.clone();
+        unknown[2] = 254;
+        assert!(Macaroon::from_bytes(&unknown).is_err());
+        let mut surplus = bytes.clone();
+        surplus.push(0);
+        assert!(Macaroon::from_bytes(&surplus).is_err());
+    }
+    #[test]
+    fn client_binding_cannot_be_attenuated_to_another_client() {
+        let key = KeyedPrf([3; 32]);
+        let mut token = Macaroon::issue(
+            &key,
+            vec![
+                Caveat::Tenant(1),
+                Caveat::ExpiresAt(100),
+                Caveat::PeerUid(2),
+                Caveat::Ops(1),
+                Caveat::KeyEpoch(1),
+                Caveat::Audience(1),
+                Caveat::Session(1),
+                Caveat::BootEpoch(1),
+                Caveat::ClientId(42),
+            ],
+        )
+        .unwrap();
+        let ctx = RequestCtx {
+            tenant_incarnation: 1,
+            key_epoch: 1,
+            now_ns: 1,
+            op_bit: 1,
+            peer_uid: 2,
+            session: 1,
+            audience: 1,
+            boot_epoch: 1,
+        };
+        assert_eq!(token.verify(&key, &ctx).unwrap().client_id(), Some(42));
+        token.attenuate(Caveat::ClientId(43)).unwrap();
+        assert!(matches!(token.verify(&key, &ctx), Err(CaveatError::Denied)));
     }
 }

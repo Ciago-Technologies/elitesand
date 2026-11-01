@@ -1,6 +1,8 @@
 # Production Use Cases & Architecture Blueprints
 
-> **Implementation status:** This guide includes target architecture and acceptance API examples. Current runnable integration is the [embedded Rust quickstart](ciagomem-engine/examples/quickstart.rs), using non-durable MemoryJournal. Runtime BFBS families, general arrays, network SDKs/server and distributed services remain milestones in specification 14.11. Section 17 is the complete target application/operations contract; target examples are not runnable SDK releases or measured performance guarantees.
+> **Single-node service update:** Linux TLS1.3/mTLS reactor hosting and durable client retries are implemented in the fixed-Record profile. See [specification20](MASTER_SPECIFICATION.md#20-implemented-single-node-tls-reactor-and-durable-client-retries) and [source deployment](INSTALL.md#run-the-current-single-node-service). BFBS families, Go/TypeScript SDKs and the distributed runtime remain target work; hardware qualification remains required.
+
+> **Implementation status:** This guide includes target architecture and acceptance API examples. Current runnable integration is the [embedded Rust quickstart](ciagomem-engine/examples/quickstart.rs), using non-durable MemoryJournal. The fixed-Record Linux server and source Rust client now provide durable integration (§20). Runtime BFBS families, general arrays, Go/TypeScript SDKs and distributed services remain milestones in specification 14.11. Section 17 is the complete target application/operations contract; target examples are not runnable SDK releases or measured performance guarantees.
 
 
 Ciagomem — SLAE is designed to replace fragmented multi-database architectures (such as running PostgreSQL + Redis + Pinecone + Kafka simultaneously) with a single, unified actor data plane.

@@ -1,5 +1,7 @@
 # Debugging, diagnostics and safe retries
 
+> **Single-node service update:** Linux TLS1.3/mTLS reactor hosting and durable client retries are implemented in the fixed-Record profile. See [specification20](MASTER_SPECIFICATION.md#20-implemented-single-node-tls-reactor-and-durable-client-retries) and [source deployment](INSTALL.md#run-the-current-single-node-service). BFBS families, Go/TypeScript SDKs and the distributed runtime remain target work; hardware qualification remains required.
+
 **Current:** typed Rust parser/engine errors, simulator failure injection and validation scripts. **Target:** network status codes, IdentityFile, debug/logger options and structured remote diagnostics in specification 17.6. No current @ciagomem/sdk publication is established here.
 
 ## Debug the current checkout
@@ -58,3 +60,15 @@ Distinguish offered requests, admitted outstanding work, queued-only gateway req
 A stale placement epoch requires authenticated route refresh and retry of the same intent; no gateway may create a new mutation sequence simply to reroute. Busy before acceptance is backpressure; a lost ACK or timeout after acceptance is uncertain and follows the existing reconciliation rules. With worker saturation, defer/shed new jobs and preserve genuine CQE progress. Missing/corrupt committed segment references are repair events, not absent actors. The service and these telemetry endpoints remain target integration.
 
 Distinguish cold-fault park time, device completion, validation, replay and runnable delay. Track analytical contiguous coverage, missing changes and retained WAL bytes per stream/lineage. A later observed LSN is not proof of gap-free processing. A cancelled request retains device-owned buffers until genuine completion/qualified teardown; SQ pressure must not stop CQE progress.
+
+## Durable worker outcomes
+
+AdmissionError::Busy means the Rust worker did not accept the request. Error::Budget may also identify WAL capacity or oversized batches before publication. Error::Journal can be indeterminate after an I/O/anchor failure: stop writes and reconcile by reopening verified storage; never blindly repeat a debit. InvalidImage during recovery requires key/schema/history investigation rather than recreating the store. The protocol3 network adapter maps these outcomes as described below; automatic repair is not provided.
+
+## Network and client retry diagnostics
+
+Check the daemon's READY address, boot_epoch and mode. Native startup failure is an error, not a fallback notice. Verify allowed CPU affinity, io_uring access, OpenSSL3.5 LTS >=3.5.9, private key/data permissions, certificate chain/hostname and allowlisted client DER fingerprint. Match PeerUid/audience7/key-epoch1/boot/client ID in the capability. A valid CA-signed but unmapped certificate is denied.
+
+Protocol3 statuses:3 PermissionDenied,5 CAS/stale reference,6 invalid/ConditionFailed,8 Busy,9 IdempotencyConflict,10 RetryTooOld,11 SequenceGap,12 invalid image,13 Indeterminate,14 Unsupported and15 DedupCapacity. A kind1 receipt is a durable terminal outcome even on failure; Connection persists it before advancing IdentityFile. An error without a receipt leaves pending state. Correct current auth/profile/capacity, reconnect after any incomplete exchange and resume **the same saved intent**. On restart renew boot-scoped auth for the same client ID. A changed expected version/query is a new intent only after the previous one is reconciled.
+
+Keep the identity file and its lock; corruption and competing owners are rejected. Read last_result after a client crash that may have persisted its receipt already. RetryTooOld has a durable high-water marker but no retained result: never automatically repeat the operation with a new identity/sequence. Reconcile application state/operator evidence. Do not log tokens, root keys or raw frame payloads. A TLS framing violation closes only that peer; bounded overload must not be interpreted as a committed failure. Record native hardware skips separately from successful portable/TLS tests.

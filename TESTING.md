@@ -1,79 +1,84 @@
-# Testing and qualification
+# Debugging, diagnostics and safe retries
 
-**Current:** run the Rust workspace and document checks below. **Target:** schema/SDK/container and production failure suites in specification 14.12,15.12 and17.8. No ephemeral published server container is provided by this checkout.
+> **Single-node service update:** Linux TLS1.3/mTLS reactor hosting and durable client retries are implemented in the fixed-Record profile. See [specification20](MASTER_SPECIFICATION.md#20-implemented-single-node-tls-reactor-and-durable-client-retries) and [source deployment](INSTALL.md#run-the-current-single-node-service). BFBS families, Go/TypeScript SDKs and the distributed runtime remain target work; hardware qualification remains required.
 
-## Current checks
+**Current:** typed Rust parser/engine errors, simulator failure injection and validation scripts. **Target:** network status codes, IdentityFile, debug/logger options and structured remote diagnostics in specification 17.6. No current @ciagomem/sdk publication is established here.
 
-From `ciagomem-slae/`:
+## Debug the current checkout
 
 ```sh
-cargo test --release --offline --workspace
-cargo test --release --offline --workspace --all-features
-cargo fmt --all -- --check
-cargo clippy --offline --workspace --all-targets --all-features
+cargo run --release --offline -p ciagomem-engine --example quickstart
+cargo test --release --offline -p ciagomem-core --test r11_regressions -- --nocapture
 python3 scripts/validate_workspace.py
 python3 scripts/validate_documentation.py
-python3 scripts/check_mesh_progress.py
-cargo run --release --offline -p ciagomem-engine --example quickstart
 ```
 
-All-feature tests include optional historical vulnerability demonstrations. Clippy warnings are currently visible, not a warning-free gate. Run hardware-related tests with `--nocapture` and count bodies reporting SKIPPED separately from Cargo harness successes. Simulator tests do not qualify DMA, NVMe power-loss persistence or ARM execution.
+The parser exposes byte spans through ParseError.at/end. Report them against the exact original UTF-8 string, not character counts or a normalized query. A successful parse does not imply execution or permission. `WriterActive`, `Reassigned`, `WriterBusy`, `NotYetDurable` and repair events are different paths; do not flatten them into corruption.
 
-## Target schema and application tests
+## Target SDK logger and diagnostic extension
 
-After installing the application-pinned qualified compiler:
+The future SDK accepts debug plus bounded structured error/warn/debug callbacks. Fields include trace/request ID, operation/status, duration and authorized version/LSN/catalog metadata. Debug must not dump raw frames. Redact tokens/signatures, keys, raw documents/schemas, query literals, tool arguments, full primary keys and identity-file pending bytes. Callback failure and log backpressure cannot block CQEs or change a committed outcome.
 
-```sh
-flatc --conform schemas/app_schema.v1.fbs schemas/app_schema.v2.fbs
-```
+V1 wire errors contain bounded text detail; exact remote spans are not encoded automatically. Structured diagnostic_v1 negotiates result_kind6, code, primary/related UTF-8 spans and a bounded message. Validate all spans before exposing them. An SDK may preserve local parser spans without pretending an arbitrary text server error has a structured span.
 
-This is a developer precheck; it does not replace bounded BFBS/document verification, catalog compatibility, upcaster correctness, resource quotas or replay tests. Use explicit stable field IDs; deprecate removed fields; append compatible optional fields. Do not change scalar types/defaults or struct layouts in place. Test rejected migrations and exact class boundaries as well as valid upgrades.
+## Target crash-safe client identity
 
-Future clients use fresh authorized test namespaces and exclusive temporary identity journals. Reuse the same identity for retry/restart tests; creating a new identity would hide duplication defects. Test concurrent stale versions, conditional balance rejection, arithmetic overflow, arrays at capacity, corrupt schema/root offsets, cross-family authorization and link/delete races.
+IdentityFile has an exclusive process lock and a random nonzero client_id. Persist sequence, semantic digest and exact pending operation before sending; persist terminal result before clearing it. Validate checksums and directory-fsync boundaries. Recovery retransmits the identical semantic request with the same sequence; authentication/routing may renew without changing that digest. Never share one writable identity file among processes or silently recreate a corrupt file.
 
-## Required future suites
+## Target outcomes
 
-| Suite group | Required evidence |
+| Outcome | Correct response |
 | --- | --- |
-| Application grammar | Every target reference example; invalid operators/aliases/types; byte spans and bounds |
-| Conditional CRUD | Same-version races, terminal result recovery, lost ACK and no duplicate debit |
-| Configuration | Precedence, invalid/unknown settings, memory arithmetic, TLS/clock/anchor readiness failures |
-| Capability codec | Cross-language known answers, attenuation, malformed lengths, scope widening, clock/key/boot changes |
-| SDK retries/diagnostics | Partial frames, identity-file crash boundaries, Busy/Indeterminate/RetryTooOld, redaction/logger failure |
-| General workloads | CRUD/session/SaaS/AI/telemetry models, transfer conservation, cascades and exact retrieval checks |
-| Release/operations | Actual image/client installation, graceful genuine CQEs, backup/recovery, upgrades and native export adapter |
+| PermissionDenied3 | Renew through trusted issuer when appropriate; maintain identity during reconciliation |
+| VersionConflict5 | Terminal; read/recompute, then allocate a new intent/sequence |
+| ConditionFailed, status6 | Business predicate false; no partial change; changed arguments require a new intent |
+| Busy8 | Bounded jittered backoff; retain original pair/digest; a lost response may still need reconciliation |
+| IdempotencyConflict9 | Stop; same sequence was used with different semantics |
+| RetryTooOld10 | Outcome may be unavailable. Reconcile through business history/IDs; never automatically repeat using a fresh client_id |
+| SequenceGap11 | Recover missing pending state; do not skip sequence |
+| NeedsRepair12 | Preserve evidence and require verified A/B/WAL recovery; never recreate as empty |
+| Indeterminate13 or disconnect | Timeout is not abort proof; retain and retry exact original intent |
+| UnsupportedFeature14 | Explicit failure; do not downgrade consistency |
+| DedupCapacity15 | Respect admission/quota; alternate identities must not bypass the limit |
 
-These are implementation requirements, not claims that corresponding tests already exist. Match each milestone to executable acceptance tests before marking it delivered.
+The target24-hour result-retention default is not an unlimited retry guarantee. Retain high-water decisions after pruning.300-second approval TTL is unrelated. A new business operation after conflict must follow a reconciled terminal outcome, not merely a transport timeout.
 
-## Performance qualification
+## Repair and observability
 
-Record schemas/vector dimensions, dataset, key skew, registered/resident/concurrent counts, read/write mix, hit rate, durability, batching, resource caps, compiler, CPU/kernel/storage, affinity and frequency policy. Report throughput and p50/p99/p99.99 with sample counts. Measure separately:
+No automatic repair service or replica backup restorer ships today. A future operator must verify identity, image epoch, checkpoint and WAL coverage before restoring. NeedsRepair is not always a whole-core fence. Distinguish damaged selected copies from cold absence and preserve original files/logs.
 
-- Resident engine snapshot, including R11 guard work.
-- Getter access to an already-published immutable export.
-- Export materialization/FD transfer and full request latency.
-- Cold fault/read/replay and admission under pressure.
-- Qualified local WAL persistence ACK and current-term quorum ACK.
+Target metrics include active_sessions_total, eviction/dwell/generation headroom, export bytes, migration pause, route mismatch, WAL/archive pressure and CQE latency. Use bounded node/core/class/result labels and sampled hashed identities, not per-user metric cardinality. Existing local logs are evidence, not a running telemetry endpoint.
 
-Earlier specification figures (resident200 ns, published getter300 ns, local durable50 µs and cold fault250 µs) are objectives requiring workload/hardware evidence, not release guarantees. Network durable latency is not an in-memory lookup measurement. Differential pushdown tests must return identical authorized results.60-second ramps are smoke evidence only; sustained qualification must expose checkpoint/compaction, spool pressure, throttling and failure recovery.
+## Current MemoryBroker errors and reconciliation
 
-See [recorded verification](docs/VERIFICATION.md) for observed local results and skipped checks. Miri/model checking, fuzzing, ARM and real power-cut/storage qualification require their own evidence.
+The Rust broker returns Engine Error variants, not target network status numbers. Permission covers invalid role/session/boot/expiry; StaleReference covers invalidated/missing job/source lifetimes; Budget covers task/source/read/output/context caps; Duplicate covers conflicting publication/output; Journal means publication/cleanup did not succeed through the adapter. For a lost worker message, use result with the original lease and controller scope. Repeated identical live-job publish returns its reference without another journal write only while non-stale and within publication TTL. Invalidated or expired publications return StaleReference. result retains historical completion metadata; read_context independently revalidates freshness. forget is explicit retention cleanup and invalidates descendants. After process restart old broker refs are invalid; no task recovery service is supplied.
 
-## Current orchestration tests
+## Target routing and query-worker pressure diagnostics
+
+Distinguish offered requests, admitted outstanding work, queued-only gateway requests, completed requests/sec, active sessions and physical connections. Export bounded-cardinality ingress/payload/output occupancy, Busy counts, per-core queue age, worker jobs/snapshot bytes/pin age, publication-retired bytes, spill/cache pressure and per-stream index progress. Report routing/worker/I/O/commit time separately from the resident point read.
+
+A stale placement epoch requires authenticated route refresh and retry of the same intent; no gateway may create a new mutation sequence simply to reroute. Busy before acceptance is backpressure; a lost ACK or timeout after acceptance is uncertain and follows the existing reconciliation rules. With worker saturation, defer/shed new jobs and preserve genuine CQE progress. Missing/corrupt committed segment references are repair events, not absent actors. The service and these telemetry endpoints remain target integration.
+
+Distinguish cold-fault park time, device completion, validation, replay and runnable delay. Track analytical contiguous coverage, missing changes and retained WAL bytes per stream/lineage. A later observed LSN is not proof of gap-free processing. A cancelled request retains device-owned buffers until genuine completion/qualified teardown; SQ pressure must not stop CQE progress.
+
+## Durable worker outcomes
+
+AdmissionError::Busy means the Rust worker did not accept the request. Error::Budget may also identify WAL capacity or oversized batches before publication. Error::Journal can be indeterminate after an I/O/anchor failure: stop writes and reconcile by reopening verified storage; never blindly repeat a debit. InvalidImage during recovery requires key/schema/history investigation rather than recreating the store. The protocol3 network adapter maps these outcomes as described below; automatic repair is not provided.
+
+## Network and client retry diagnostics
+
+Check the daemon's READY address, boot_epoch and mode. Native startup failure is an error, not a fallback notice. Verify allowed CPU affinity, io_uring access, OpenSSL3.5 LTS >=3.5.9, private key/data permissions, certificate chain/hostname and allowlisted client DER fingerprint. Match PeerUid/audience7/key-epoch1/boot/client ID in the capability. A valid CA-signed but unmapped certificate is denied.
+
+Protocol3 statuses:3 PermissionDenied,5 CAS/stale reference,6 invalid/ConditionFailed,8 Busy,9 IdempotencyConflict,10 RetryTooOld,11 SequenceGap,12 invalid image,13 Indeterminate,14 Unsupported and15 DedupCapacity. A kind1 receipt is a durable terminal outcome even on failure; Connection persists it before advancing IdentityFile. An error without a receipt leaves pending state. Correct current auth/profile/capacity, reconnect after any incomplete exchange and resume **the same saved intent**. On restart renew boot-scoped auth for the same client ID. A changed expected version/query is a new intent only after the previous one is reconciled.
+
+Keep the identity file and its lock; corruption and competing owners are rejected. Read last_result after a client crash that may have persisted its receipt already. RetryTooOld has a durable high-water marker but no retained result: never automatically repeat the operation with a new identity/sequence. Reconcile application state/operator evidence. Do not log tokens, root keys or raw frame payloads. A TLS framing violation closes only that peer; bounded overload must not be interpreted as a committed failure. Record native hardware skips separately from successful portable/TLS tests.
+
+## TLS reactor and durable client checks
 
 ```sh
-cargo test --release --offline -p ciagomem-engine --test memory
-cargo run --release --offline -p ciagomem-engine --example memory_orchestration
+cargo test --release --offline -p ciagomem-engine --test network --test retries -- --nocapture
+cargo test --release --offline -p ciagomem-core reactor::tests -- --nocapture
+cargo run --release --offline -p ciagomem-engine --bin ciagomem-server -- --help
 ```
 
-These exercise the in-process scoped broker, taint/reader propagation, transitive invalidation, TTL/rollback, input/output packing, publication retries and journal rejection. They do not call paid models, prove summary grounding, measure token savings or establish restart-safe task recovery. Specification18 lists the remaining service, adapter, provider and adversarial requirements.
-
-## Target horizontal and Hub-and-Spoke acceptance
-
-Use specification15.18 as the acceptance checklist. Test route-cache staleness during migration, shared-stream principal/result isolation, SPSC producer ownership, aggregate queue caps, pre-admission Busy, lost ACK reconciliation and continued CQE progress under floods. Exercise stalled query workers, snapshot/pin deadlines, cancellation with outstanding I/O, spill exhaustion, publication reclamation, policy revocation and durable/read-your-writes visibility.
-
-Crash-test every segment upload/manifest/WAL publication boundary and verify orphan cleanup, missing-object repair, backup retention, index rebuild/lag and delete visibility. Heavy SQL/ANN/scans must run alongside point traffic while recording reactor tail-latency interference, not just average query speed. Immutable per-actor snapshots alone must not pass a global snapshot-isolation test.
-
-A one-million-outstanding-request result must report all gateway/storage/query/replica nodes, accepted versus queued/rejected counts, request size/mix, completion rate and latency, hot working set, durability and resource usage. Gateways consume separately measured resources; storage nodes obey the complete16-GiB profile. Include sustained overload and node failure. The<=200ns objective remains a small local read, never a gateway/durable/query benchmark. Compare cost and actual model token usage only at equivalent correctness, availability and quality. These suites are planned; this documentation update does not execute them.
-
-The audit acceptance additions in15.18 require500,000 reads of one actor with slow consumers and publication updates; same-actor write overload; stalled analytical consumers/WAL pressure; cold-read storms with SQ exhaustion; and gateway failure after acceptance. Count one fanout query as one client operation plus its internal tasks. Validate full historical cuts, not just index watermarks>=requested positions. Database replacement is qualified against actual Redis/PostgreSQL/vector/time-series workload semantics.
+OpenSSL3.5 LTS >=3.5.9 and its CLI are required; fixtures generate temporary CA/server/client credentials. Tests exercise the actual TLS/framing/reactor via connected Unix streams when this sandbox denies TCP listeners. The real TCP and native io_uring tests report explicit skips for unavailable facilities. Lost-ACK tests commit a request without completing its local identity journal, reopen server and identity, reject old boot auth, renew it and recover the original receipt without a duplicate effect. Other cases cover CAS/terminal failure, malformed/fragmented/multiplexed frames, slow peers, quotas, identity corruption/locking and private issuer output. Socket-pair evidence is not native TCP/NVMe power-cut evidence. The CI provider-install build itself is verified when the pushed workflow runs, not by local provider availability.
