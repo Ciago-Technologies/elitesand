@@ -8,7 +8,6 @@
     "ciagomem-core/src/lifecycle.rs": "38dcee96424a427a968e43a832d7cff19ba21289d09b66d7fbf44a75a5b4917f",
     "tests/r11_regressions.rs": "936179da61448620b4accbe5eecbc222fdfe9bcbdb8bfcf0185ad53e090c622e",
     "tests/v30_regressions.rs": "5456564458a6fae2d330ecd6ecd0b2c41ab108964c8690366e16e2cee6753434",
-    ".github/workflows/rust.yml": "5ba69059c87a552b7bde2f5cc8f058a766d4bcd30ca5ce86ed282a8e94b685ed",
     "scripts/validate_workspace.py": "c3156233c23e8025713b6aa5177de5acc423b5049551592c1047ebe9372dac84",
     "scripts/validate_spec_contract.py": "b4487a216cc6d827237f2fb7b89a1c29a663910752cfeef7ade2135263e49638",
     "review/r11/before/README.md": "48a2638cfcd6b912927aa3a18d2b302113aeac6ee0d333b3442f0629e0b012fa",
@@ -25,7 +24,9 @@
     "review/r11/local/validation.log.txt": "4fc794f2fe044cfbda3439c4d49e18d1c2fa74059f7d21d55c657a54a8b437be",
     "review/r11/local/wal-visible.log.txt": "98d629ff6b5e59ab8016ad1d0efef58d58b21b897b328733222920b37422c20c",
     "review/r11/local/extracted-tests.log.txt": "924ab803f9f6700bbf3ede1bd3073300639845b747e4130487a29bbd1146ab12",
-    "review/r11/local/extracted-validation.log.txt": "4fc794f2fe044cfbda3439c4d49e18d1c2fa74059f7d21d55c657a54a8b437be"
+    "review/r11/local/extracted-validation.log.txt": "4fc794f2fe044cfbda3439c4d49e18d1c2fa74059f7d21d55c657a54a8b437be",
+    "review/r11/before/rust-workflow.yml.txt": "5ba69059c87a552b7bde2f5cc8f058a766d4bcd30ca5ce86ed282a8e94b685ed"
   },
-  "extracted_all_features_passed": 193
+  "extracted_all_features_passed": 193,
+  "documentation_note": "Historical R11 workflow preserved verbatim before adding the documentation contract gate; runtime source evidence is unchanged."
 }

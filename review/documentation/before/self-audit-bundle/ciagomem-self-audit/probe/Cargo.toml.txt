@@ -1,0 +1,51 @@
+[package]
+name="ciagomem-self-probes"
+version="0.1.0"
+edition="2024"
+[dependencies]
+ciagomem-core={path="../../ciagomem-slae/ciagomem-core"}
+
+[patch.crates-io]
+hmac = { path = "../../ciagomem-slae/vendor/hmac-0.12.1" }
+sha2 = { path = "../../ciagomem-slae/vendor/sha2-0.10.9" }
+digest = { path = "../../ciagomem-slae/vendor/digest-0.10.7" }
+crypto-common = { path = "../../ciagomem-slae/vendor/crypto-common-0.1.6" }
+block-buffer = { path = "../../ciagomem-slae/vendor/block-buffer-0.10.4" }
+generic-array = { path = "../../ciagomem-slae/vendor/generic-array-0.14.7" }
+typenum = { path = "../../ciagomem-slae/vendor/typenum-1.17.0" }
+version_check = { path = "../../ciagomem-slae/vendor/version_check-0.9.5" }
+cpufeatures = { path = "../../ciagomem-slae/vendor/cpufeatures-0.2.17" }
+subtle = { path = "../../ciagomem-slae/vendor/subtle-2.6.1" }
+roaring = { path = "../../ciagomem-slae/vendor/roaring-0.10.12" }
+wide = { path = "../../ciagomem-slae/vendor/wide-0.7.33" }
+flatbuffers = { path = "../../ciagomem-slae/vendor/flatbuffers-25.2.10" }
+bytemuck = { path = "../../ciagomem-slae/vendor/bytemuck-1.21.0" }
+byteorder = { path = "../../ciagomem-slae/vendor/byteorder-1.5.0" }
+safe_arch = { path = "../../ciagomem-slae/vendor/safe_arch-0.7.4" }
+rustc_version = { path = "../../ciagomem-slae/vendor/rustc_version-0.4.1" }
+semver = { path = "../../ciagomem-slae/vendor/semver-1.0.25" }
+ed25519-dalek = { path = "../../ciagomem-slae/vendor/ed25519-dalek-2.1.1" }
+curve25519-dalek = { path = "../../ciagomem-slae/vendor/curve25519-dalek-4.1.3" }
+ed25519 = { path = "../../ciagomem-slae/vendor/ed25519-2.2.3" }
+signature = { path = "../../ciagomem-slae/vendor/signature-2.2.0" }
+zeroize = { path = "../../ciagomem-slae/vendor/zeroize-1.8.1" }
+curve25519-dalek-derive = { path = "../../ciagomem-slae/vendor/curve25519-dalek-derive-0.1.1" }
+fiat-crypto = { path = "../../ciagomem-slae/vendor/fiat-crypto-0.2.9" }
+serde = { path = "../../ciagomem-slae/vendor/serde-1.0.217" }
+serde_derive = { path = "../../ciagomem-slae/vendor/serde_derive-1.0.217" }
+rand_core = { path = "../../ciagomem-slae/vendor/rand_core-0.6.4" }
+pkcs8 = { path = "../../ciagomem-slae/vendor/pkcs8-0.10.2" }
+spki = { path = "../../ciagomem-slae/vendor/spki-0.7.3" }
+der = { path = "../../ciagomem-slae/vendor/der-0.7.9" }
+const-oid = { path = "../../ciagomem-slae/vendor/const-oid-0.9.6" }
+base64ct = { path = "../../ciagomem-slae/vendor/base64ct-1.6.0" }
+getrandom = { path = "../../ciagomem-slae/vendor/getrandom-0.2.15" }
+wasi = { path = "../../ciagomem-slae/vendor/wasi-0.11.0+wasi-snapshot-preview1" }
+syn = { path = "../../ciagomem-slae/vendor/syn-2.0.87" }
+bitflags = { path = "../../ciagomem-slae/vendor/bitflags-2.13.2" }
+cfg-if = { path = "../../ciagomem-slae/vendor/cfg-if-1.0.5" }
+io-uring = { path = "../../ciagomem-slae/vendor/io-uring-0.7.15" }
+libc = { path = "../../ciagomem-slae/vendor/libc-0.2.191" }
+proc-macro2 = { path = "../../ciagomem-slae/vendor/proc-macro2-1.0.86" }
+quote = { path = "../../ciagomem-slae/vendor/quote-1.0.36" }
+unicode-ident = { path = "../../ciagomem-slae/vendor/unicode-ident-1.0.12" }

@@ -1,15 +1,18 @@
 # Developer Guide: Schemas, SDKs & CiaQL Examples
 
-This guide walks through the complete developer workflow in **CiagoMem — SLAE**: designing a FlatBuffers schema, registering it with the engine, performing zero-copy CRUD operations across TypeScript, Go, and Rust, and writing advanced **CiaQL** pipelines.
+> **Implementation status:** This guide includes target architecture and acceptance API examples. Current runnable integration is the [embedded Rust quickstart](ciagomem-engine/examples/quickstart.rs), using non-durable MemoryJournal. Runtime BFBS families, general arrays, network SDKs/server and distributed services remain milestones in specification 14.11. Section 17 is the complete target application/operations contract; target examples are not runnable SDK releases or measured performance guarantees.
+
+
+This guide walks through the complete developer workflow in **Ciagomem — SLAE**: designing a FlatBuffers schema, registering it with the engine, performing zero-copy CRUD operations across TypeScript, Go, and Rust, and writing advanced **CiaQL** pipelines.
 
 ---
 
-## 1. Defining & Compiling Your Schema
+## 1. Target: Defining & Compiling Your Schema
 
-CiagoMem does not use slow, dynamically parsed JSON documents or rigid SQL `CREATE TABLE` statements. Instead, every collection (**Family**) is backed by a strictly typed FlatBuffers schema.
+In the target application profile, every collection (**Family**) is backed by a strictly typed FlatBuffers schema.
 
 ### Step 1.1: Create `app_schema.fbs`
-Every field in your root table **must** declare an explicit, contiguous `(id: N)` attribute. Note that FlatBuffers uses `long` for 64-bit signed integers (`i64`) and `[float32]` for vector embeddings.
+Every field in your root table **must** declare an explicit, contiguous `(id: N)` attribute. Note that FlatBuffers uses `long` for 64-bit signed integers (`i64`) and `[float]` for vector embeddings.
 
 ```flatbuffers
 namespace ciagomem.app;
@@ -19,7 +22,7 @@ table UserProfile {
   email: string (id: 1);
   credits: long = 0 (id: 2);
   tags: [string] (id: 3);
-  memory_embeddings: [float32] (id: 4);
+  memory_embeddings: [float] (id: 4);
 }
 
 root_type UserProfile;
@@ -30,7 +33,7 @@ file_identifier "USER";
 Run `flatc` outside the database server during your build or CI/CD pipeline:
 
 ```bash
-# 1. Generate the binary reflection schema (.bfbs) for CiagoMem server registration
+# 1. Generate the binary reflection schema (.bfbs) for Ciagomem server registration
 flatc --binary --schema -o build app_schema.fbs
 
 # 2. Generate language-specific zero-copy accessors
@@ -38,7 +41,7 @@ flatc --ts -o generated/ts app_schema.fbs
 flatc --go -o generated/go app_schema.fbs
 flatc --rust -o generated/rust app_schema.fbs
 ```
-*The `build/app_schema.bfbs` file is ingested by CiagoMem at runtime (`REGISTER_SCHEMA`), allowing the server to validate offsets, enforce field bounds, and execute CiaQL queries without recompiling the database.*
+*The `build/app_schema.bfbs` file is ingested by Ciagomem at runtime (`REGISTER_SCHEMA`), allowing the server to validate offsets, enforce field bounds, and execute CiaQL queries without recompiling the database.*
 
 ---
 
@@ -163,9 +166,9 @@ import (
 	"os"
 	"time"
 
-	app "[example.com/ciagomem-demo/generated/go/ciagomem/app](https://example.com/ciagomem-demo/generated/go/ciagomem/app)"
-	ciagomem "[github.com/Ciago-Technologies/ciagomem-go](https://github.com/Ciago-Technologies/ciagomem-go)"
-	flatbuffers "[github.com/google/flatbuffers/go](https://github.com/google/flatbuffers/go)"
+	app "example.com/ciagomem-demo/generated/go/ciagomem/app"
+	ciagomem "github.com/Ciago-Technologies/ciagomem-go"
+	flatbuffers "github.com/google/flatbuffers/go"
 )
 
 func main() {
@@ -328,7 +331,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## 5. CiaQL Language Reference & Advanced Patterns
 
 ### 5.1 Array & Bounded Ring-Buffer Mutations
-CiagoMem supports high-speed array operations that append directly to the 8-byte-aligned delta tail without rewriting the base FlatBuffer:
+Ciagomem supports high-speed array operations that append directly to the 8-byte-aligned delta tail without rewriting the base FlatBuffer:
 
 | CiaQL Syntax | Operation | Behavior |
 | :--- | :--- | :--- |
@@ -384,7 +387,7 @@ scan family("agent_memories")
 To evolve `users` from Version 1 to Version 2:
 1. Append new optional fields with new `(id: N)` attributes in `app_schema.v2.fbs` (never change existing field types or reuse retired IDs; mark removed fields `deprecated`).
 2. Compile `app_schema.v2.bfbs` and call `client.alterSchema("users", 2, bfbsBytes)`.
-3. **Zero-Downtime Lazy Upcasting:** Existing Version 1 actors remain untouched on disk. When read, CiagoMem projects them into Version 2 with default values on the fly. When next mutated, the owner core compacts and upgrades the actor into a native Version 2 FlatBuffer.
+3. **Zero-Downtime Lazy Upcasting:** Existing Version 1 actors remain untouched on disk. When read, Ciagomem projects them into Version 2 with default values on the fly. When next mutated, the owner core compacts and upgrades the actor into a native Version 2 FlatBuffer.
 
 ---
 
@@ -405,3 +408,10 @@ All SDK methods map server responses to these canonical status codes:
 | `9` | `IdempotencyConflict` | Retried `client_seq` was sent with a different payload digest. Bug in client caller. |
 | `13` | `Indeterminate` | Connection dropped or storage fenced after submission. Retry with exact same `IdentityFile` state to learn outcome. |
 | `17` | `ActorMoved` | Cluster placement epoch changed. SDK automatically updates route cache and retries target node. |
+## Current runnable workflow
+
+```sh
+cargo run --release --offline -p ciagomem-engine --example quickstart
+```
+
+The SDK examples above are future M4–M5 acceptance workflows. They require SchemaCatalog, transport/auth/dedup and complete journal integration first. Conditional commands require the negotiated feature in specification 17.3. No package install or persistence guarantee follows from an example.

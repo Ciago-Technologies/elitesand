@@ -71,5 +71,163 @@
   "cleanup_note": "R9 input contents verified against naming-normalized review/r9 copies before deletion. Regenerable target build cache removed; current R10 input originals and unrelated files retained.",
   "removed_build_caches": [
     "ciagomem-slae/target"
-  ]
+  ],
+  "documentation_cleanup": {
+    "date": "2026-11-01",
+    "reason": "Superseded outgoing bundles and redundant input copies; original evidence retained and checked before removal.",
+    "preserved": {
+      "review/documentation/before/parent-README.md.txt": "b7e4c5a2d872cd73742ff1fb77ad437b73930eb364f4c11d4c5a2abd292db941"
+    },
+    "removed": {
+      "README.md": {
+        "sha256": "b7e4c5a2d872cd73742ff1fb77ad437b73930eb364f4c11d4c5a2abd292db941",
+        "evidence": "review/documentation/before/parent-README.md.txt"
+      },
+      "Ciagomem-Self-Audit-R10.md": {
+        "sha256": "12f5cab50bfaef68a7be9d0c470e7f2366833db1fa95d79ce78fba9e8668d62b",
+        "evidence": "review/r11/before/audit.md"
+      },
+      "ciagomem-self-audit-evidence.zip": {
+        "sha256": "bc1e0b2e4233c5c0839b2bef3dcc9c5a6299d5b6f6780f19b05341f57fcf6e7c",
+        "members": {
+          "ciagomem-self-audit/Ciagomem-Self-Audit-R10.md": {
+            "sha256": "12f5cab50bfaef68a7be9d0c470e7f2366833db1fa95d79ce78fba9e8668d62b",
+            "preserved_as": "review/r11/before/audit.md"
+          },
+          "ciagomem-self-audit/README.md": {
+            "sha256": "7f73c1495b788491dff10fed8b4cc86c412ef3bcda4520a9acc25fb62beb82d6",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/README.md.txt"
+          },
+          "ciagomem-self-audit/SHA256SUMS": {
+            "sha256": "4dc65f493c6b14a12c7f3be95c0ec523fab7c236119d2eba7d8b4f4372b610b6",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/SHA256SUMS.txt"
+          },
+          "ciagomem-self-audit/logs/ciagomem-self-all.log": {
+            "sha256": "785ee97a737600fa46332fb9ed0865518d68690ffc6348ca47740490f60d47ca",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/logs/ciagomem-self-all.log.txt"
+          },
+          "ciagomem-self-audit/logs/ciagomem-self-clippy.log": {
+            "sha256": "efd94631dec57d8849040ccbd118c93782d734095757d4c2d36fe2ea30f4a5f7",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/logs/ciagomem-self-clippy.log.txt"
+          },
+          "ciagomem-self-audit/logs/ciagomem-self-default.log": {
+            "sha256": "c222a365b5dbcefc589980ad0b631b8d0bd23e35f5bcdf61c2b8bc7073a28638",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/logs/ciagomem-self-default.log.txt"
+          },
+          "ciagomem-self-audit/logs/ciagomem-self-format.log": {
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "preserved_as": "review/r11/local/format.log.txt"
+          },
+          "ciagomem-self-audit/logs/ciagomem-self-mesh.log": {
+            "sha256": "e2e437c2709f1929d3296bf94923744c343c3e16326981a4103f069314799af3",
+            "preserved_as": "review/r10/local/mesh.log.txt"
+          },
+          "ciagomem-self-audit/logs/ciagomem-self-portable.log": {
+            "sha256": "cd4077f87689271d4d8b2bed0eb9bf5229d1b0910cfab0723a6eb4860838bea5",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/logs/ciagomem-self-portable.log.txt"
+          },
+          "ciagomem-self-audit/logs/ciagomem-self-probes.log": {
+            "sha256": "b10ab47a643c9adfd50f35399b8e9529a040a67ff94680af06fa6b7e71786370",
+            "preserved_as": "review/r11/before/probes.log.txt"
+          },
+          "ciagomem-self-audit/logs/ciagomem-self-r10-core.log": {
+            "sha256": "0744bae0eb9c8bc79805278cbf70f7052ad3deef546a4b6b2f85ea9db18a6f12",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/logs/ciagomem-self-r10-core.log.txt"
+          },
+          "ciagomem-self-audit/logs/ciagomem-self-r10-wal.log": {
+            "sha256": "aa916b88d8341542c94099dc7c5010b20e26bd5970b2c7fbb14e5e47849b6676",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/logs/ciagomem-self-r10-wal.log.txt"
+          },
+          "ciagomem-self-audit/logs/ciagomem-self-validation.log": {
+            "sha256": "5dfa09697ccfd2188698d40d5e84f188026f552a24808c6859b1aff7acd9e43a",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/logs/ciagomem-self-validation.log.txt"
+          },
+          "ciagomem-self-audit/probe/Cargo.lock": {
+            "sha256": "dd1acf2c8b38f3675a7d224bed9e54270549b40399fa1833311beaf7468b4389",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/probe/Cargo.lock.txt"
+          },
+          "ciagomem-self-audit/probe/Cargo.toml": {
+            "sha256": "8744f9091148d0b07dababb496e5403de52a11c90153e8be34d69a178abf0652",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/probe/Cargo.toml.txt"
+          },
+          "ciagomem-self-audit/probe/src/lib.rs": {
+            "sha256": "9577e9069e77935693ff0e58815fbb0b432161fbda49a9ad74d7967bbd746f24",
+            "preserved_as": "review/r11/before/probes.rs.txt"
+          },
+          "ciagomem-self-audit/source-commit.txt": {
+            "sha256": "5c181df55994253ffd636b8dad892921fac87bb676a982012d469f8a03e79392",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/source-commit.txt.txt"
+          },
+          "ciagomem-self-audit/source-sha256.json": {
+            "sha256": "83c54d141065d9d3e3ea7295269f698617723f5ed343181b9826dfa7372448f1",
+            "preserved_as": "review/r11/before/source-sha256.json"
+          },
+          "ciagomem-self-audit/toolchain.txt": {
+            "sha256": "497cbd3e3b348cbf6bb2f9b24885b066a027120850403ad7eee119934868e0ff",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/toolchain.txt.txt"
+          },
+          "ciagomem-self-audit/working-tree-status.txt": {
+            "sha256": "4110afbd93d23e4fd1c91966b9e9bb330793ea71199a2a98096e8a3667fbc6ee",
+            "preserved_as": "review/documentation/before/self-audit-bundle/ciagomem-self-audit/working-tree-status.txt.txt"
+          }
+        }
+      },
+      "New File/ciagomem-r10-fix-patch.zip": {
+        "sha256": "a23a04e8e64377ca2c46fecffc1787de88252286725cac47ee1e6b96f7320aa7",
+        "evidence": "docs/r10-evidence.json",
+        "original_members": {
+          "ciagomem-r10-fix-patch/CiagoMem-SLAE-R9-Remediation-Verification.md": "65011f19f4d06418f2acb486ad2e6add81e76f02cc0c2f8d40950a75888832a3",
+          "ciagomem-r10-fix-patch/README.md": "21ee8a131b44685b189d8a3a742b14fb91f12fd24e6aa503e9906db0a63e5e56",
+          "ciagomem-r10-fix-patch/probes/core/r10_uring.rs": "01a7dba6fa78aad753ee2bf07a65932035296298c936d3b6ff84a8f1cb5188d9",
+          "ciagomem-r10-fix-patch/probes/core/r10_safe_review.rs": "dcd91b06c0c245a77af3a2d18bb22155ee9ce9a8ec48266280d6def3b9b179f7",
+          "ciagomem-r10-fix-patch/probes/core/r10_review.rs": "a07bbc3e4200e3b345e5f0be7fb1d1ea00e60e4552c86987836d5301b6993ed5",
+          "ciagomem-r10-fix-patch/probes/wal/r10_uring.rs": "cc5e46a2f64ec81df08dea9cf5327eb9b745ac1b4c110f5fd85cfb5db7f803ea",
+          "ciagomem-r10-fix-patch/probes/wal/r10_review.rs": "24de05df7f54daf4e5d45ccf5d176e85fccbbf84ef5b12d89b8fb9e070a92b9f",
+          "ciagomem-r10-fix-patch/patched-files/ciagomem-wal/tests/r5_wal.rs": "fe6748bec193a9800e33f98b462a50bd4feef55d9063e8da0b805cc0618b965b",
+          "ciagomem-r10-fix-patch/patched-files/ciagomem-wal/tests/r9_recovery.rs": "59088eccde6e1c448345a58d5db71b5603ed673f3d9efe2340a2fd8c6a050a20",
+          "ciagomem-r10-fix-patch/patched-files/ciagomem-wal/tests/r10_recovery.rs": "63d1739750b4e21fc84b765cecfd3f4ae4c659feea22f8722ad81000d9516c99",
+          "ciagomem-r10-fix-patch/patched-files/ciagomem-wal/src/gclog.rs": "2e2be5819fe128fd0bdeda1009a64b0d8178d1d2ecec4e82b5114c30869bff5b",
+          "ciagomem-r10-fix-patch/patched-files/ciagomem-core/Cargo.toml": "cbba4937804f0f1fa4594db8d13bdd2b7d850de88d0c65be8bcf6937a048c2ee",
+          "ciagomem-r10-fix-patch/patched-files/ciagomem-core/src/uring.rs": "c96cbc1e9b1f1c0b512ec1d9349986a006b94a30426c09805e238318aaac986c",
+          "ciagomem-r10-fix-patch/patched-files/ciagomem-core/src/io.rs": "4de875d1280cb1f5e25097fb9c3ad0583dc07b87bd3597f336b8ec3d2ecc9a5c",
+          "ciagomem-r10-fix-patch/patched-files/ciagomem-core/src/lifecycle.rs": "4408c663c061cc16b55ba45329d31c1613f2e48e9fb8638e9fdf077ff8c6ea3e",
+          "ciagomem-r10-fix-patch/patched-files/tests/r7_regressions.rs": "0062a5239190ae6fe91f216f6efb74d2f270cf4ee5d8fd00523df11d5d7319f4",
+          "ciagomem-r10-fix-patch/patched-files/tests/r10_regressions.rs": "edde149f29abb65ca4a44ded2bc713340396f05c7452b0bd9405ecb2b5f4e1b8",
+          "ciagomem-r10-fix-patch/patched-files/tests/r6_regressions.rs": "0202b5f248bc393841b9e331a7900cda929b195d4c7c7aa1f3dc6ec8e4d863be",
+          "ciagomem-r10-fix-patch/patched-files/tests/r9_regressions.rs": "bb90f771209cc9c0d0b7fa4536f8364f67b5500091e57fbe1ef1a94a013a3c3e",
+          "ciagomem-r10-fix-patch/patch/r10-fixes.diff": "5401ce35b7aca8240167a4f80d2db4726787065ce27558b76c9606a0a232f343",
+          "ciagomem-r10-fix-patch/logs/r10p_def.log": "ed0b61b3796e53544bc776415d13dbbc706d464b204c936ccf5cf43d8017dfad",
+          "ciagomem-r10-fix-patch/logs/r10p_all.log": "6e70c0a5eaaaed75c724fcd28c662cb8147156900e24ed48536436ec9d7e3169",
+          "ciagomem-r10-fix-patch/logs/r10_miri_probe_lc.log": "b9428365117ed2941cdd62b610479fe42ac2ebe42a9d98c0bac8c166f90011f5",
+          "ciagomem-r10-fix-patch/logs/r10_all.log": "a8896ceccafdae0f6a806bc9f42832bc5b02f91bfd4ba9d4df1058bd50dd470c",
+          "ciagomem-r10-fix-patch/logs/r10_miri_probe_simio.log": "2310e36221f412a78dfcc14379faff47111cf4bf608e65c93cd14359a177f9ed",
+          "ciagomem-r10-fix-patch/logs/r10_miri_wal.log": "81e8e8105e0116869a7a700abfbd360b21589ba04a3d5a274828bff4215872ab",
+          "ciagomem-r10-fix-patch/logs/r10_apply.log": "99610b83f31bd991efa3a57c4805887f09542445e94c033fe3d2b98fdd3619b4",
+          "ciagomem-r10-fix-patch/logs/r10_arm.log": "cfe7707e1d388cc069bd9f3d48b15d8e8916203d3e6e04150b38b656682a71f9",
+          "ciagomem-r10-fix-patch/logs/r10_miri_probe_wal.log": "b0f95c160e973552d8a7870f0da3b26459b28181bf2241acaabcd7504d64c17d",
+          "ciagomem-r10-fix-patch/logs/r10_miri_corelib.log": "35d91b5b24ce169059896d5d84e752860bc2a4ac60f63feb9b80600b3683a61d",
+          "ciagomem-r10-fix-patch/logs/r10_def.log": "fa7a2c85978e72355a388ee81e0ad50205c2bea9336317cf9952ea8d9380880b",
+          "ciagomem-r10-fix-patch/logs/r10_miri_core.log": "1b8204fcece811793b8371deb4ab72dc8b8b11c677ab2a0c05d4b483063f1ccd"
+        },
+        "member_names_note": "Original archive member names normalized to canonical project spelling; SHA256 values describe original bytes verified before deletion."
+      },
+      "New File/CiagoMem-SLAE R9 Remediation Verification (R10).md": {
+        "sha256": "65011f19f4d06418f2acb486ad2e6add81e76f02cc0c2f8d40950a75888832a3",
+        "evidence": "docs/r10-evidence.json"
+      },
+      "ciagomem-r10-fixed-review.zip": {
+        "sha256": "17884ba751ad43a86b24f15aea098d4a05b6183ccd4b040ffba25814011fd85f",
+        "reason": "Superseded review build; source and revision evidence retained in Git/review directories."
+      },
+      "ciagomem-r11-fixed-review.zip": {
+        "sha256": "dcc8640b22d1c581fa059aae2c7c14c82e98d0beafe09458745b6c8fc977ce22",
+        "reason": "Superseded review build; source and revision evidence retained in Git/review directories."
+      }
+    },
+    "removed_directories": [
+      "New File",
+      "ciagomem-slae/target",
+      "ciagomem-slae/scripts/__pycache__ (if present)"
+    ]
+  }
 }

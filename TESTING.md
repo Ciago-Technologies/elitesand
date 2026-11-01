@@ -1,106 +1,60 @@
-# Testing, Schema Conformance & Benchmarking
+# Testing and qualification
 
-This guide explains how to test your application against CiagoMem in local development and CI/CD pipelines, validate FlatBuffers schema evolution rules, and run reproducible latency benchmarks.
+**Current:** run the Rust workspace and document checks below. **Target:** schema/SDK/container and production failure suites in specification 14.12,15.12 and17.8. No ephemeral published server container is provided by this checkout.
 
----
+## Current checks
 
-## 1. Running Isolated Integration Tests in CI/CD
+From `ciagomem-slae/`:
 
-Because CiagoMem starts in milliseconds and supports isolated namespaces, you can spin up an ephemeral container in GitHub Actions or GitLab CI for end-to-end integration tests:
-
-```bash
-# Start an ephemeral CiagoMem test instance in development mode
-docker run -d --rm \
-  --name ciagomem-test \
-  -p 7443:7443 \
-  -e CIAGOMEM_MODE=development \
-  -e CIAGOMEM_ARENA_GIB=2 \
-  -e CIAGOMEM_REACTOR_CORES=2 \
-  ciagotech/ciagomem:v0.3.0
+```sh
+cargo test --release --offline --workspace
+cargo test --release --offline --workspace --all-features
+cargo fmt --all -- --check
+cargo clippy --offline --workspace --all-targets --all-features
+python3 scripts/validate_workspace.py
+python3 scripts/validate_documentation.py
+python3 scripts/check_mesh_progress.py
+cargo run --release --offline -p ciagomem-engine --example quickstart
 ```
 
-### Best Practices for Test Isolation
+All-feature tests include optional historical vulnerability demonstrations. Clippy warnings are currently visible, not a warning-free gate. Run hardware-related tests with `--nocapture` and count bodies reporting SKIPPED separately from Cargo harness successes. Simulator tests do not qualify DMA, NVMe power-loss persistence or ARM execution.
 
-- **Unique Test Namespaces:** Issue a capability token with a distinct `Namespace(u32)` or fresh `Tenant(u128)` incarnation per test suite so parallel test workers never collide on family names (`"users"`) or primary keys (`"user-42"`).
-- **Ephemeral `IdentityFile` per Test:** In unit tests, create a temporary `IdentityFile` (e.g., `/tmp/test-client-${uuid}.bin`) for each simulated client so sequence counters start cleanly at `1`.
+## Target schema and application tests
 
----
+After installing the application-pinned qualified compiler:
 
-## 2. CI Schema Conformance Testing (`flatc --conform`)
-
-CiagoMem enforces strict binary compatibility across schema versions (`v1 -> v2`) so resident and checkpointed actors never suffer memory corruption during lazy upcasting.
-
-Before calling `client.alterSchema(...)` in production, add the following `flatc` conformance check to your CI pipeline:
-
-```bash
-# Verify that app_schema.v2.fbs is 100% binary-compatible with app_schema.v1.fbs
+```sh
 flatc --conform schemas/app_schema.v1.fbs schemas/app_schema.v2.fbs
 ```
 
-### Schema Evolution Checklist
+This is a developer precheck; it does not replace bounded BFBS/document verification, catalog compatibility, upcaster correctness, resource quotas or replay tests. Use explicit stable field IDs; deprecate removed fields; append compatible optional fields. Do not change scalar types/defaults or struct layouts in place. Test rejected migrations and exact class boundaries as well as valid upgrades.
 
-1. **Explicit IDs Required:** Every field must have an `(id: N)` attribute.
-2. **Append-Only Fields:** New fields must be optional and added with the next contiguous ID.
-3. **Never Change Types In-Place:** Do not widen (`int32 -> int64`) or narrow a field's type in-place. Instead, deprecate the old field (`old_field: int (id: 2, deprecated);`) and append a new field (`new_field: long (id: 5);`).
-4. **Never Reorder Structs:** FlatBuffers `struct` layouts are fixed-size; only `table` definitions can evolve with new optional fields.
+Future clients use fresh authorized test namespaces and exclusive temporary identity journals. Reuse the same identity for retry/restart tests; creating a new identity would hide duplication defects. Test concurrent stale versions, conditional balance rejection, arithmetic overflow, arrays at capacity, corrupt schema/root offsets, cross-family authorization and link/delete races.
 
----
+## Required future suites
 
-## 3. Testing Optimistic Concurrency & Idempotency
+| Suite group | Required evidence |
+| --- | --- |
+| Application grammar | Every target reference example; invalid operators/aliases/types; byte spans and bounds |
+| Conditional CRUD | Same-version races, terminal result recovery, lost ACK and no duplicate debit |
+| Configuration | Precedence, invalid/unknown settings, memory arithmetic, TLS/clock/anchor readiness failures |
+| Capability codec | Cross-language known answers, attenuation, malformed lengths, scope widening, clock/key/boot changes |
+| SDK retries/diagnostics | Partial frames, identity-file crash boundaries, Busy/Indeterminate/RetryTooOld, redaction/logger failure |
+| General workloads | CRUD/session/SaaS/AI/telemetry models, transfer conservation, cascades and exact retrieval checks |
+| Release/operations | Actual image/client installation, graceful genuine CQEs, backup/recovery, upgrades and native export adapter |
 
-Your test suite should verify that your application properly handles concurrent actor writes and network retries:
+These are implementation requirements, not claims that corresponding tests already exist. Match each milestone to executable acceptance tests before marking it delivered.
 
-```typescript
-import { expect, test } from "vitest";
+## Performance qualification
 
-test("rejects stale document version on concurrent update", async () => {
-  const created = await client.create(
-    userSchema,
-    "user-cas-test",
-    initialBytes,
-  );
+Record schemas/vector dimensions, dataset, key skew, registered/resident/concurrent counts, read/write mix, hit rate, durability, batching, resource caps, compiler, CPU/kernel/storage, affinity and frequency policy. Report throughput and p50/p99/p99.99 with sample counts. Measure separately:
 
-  // First update succeeds (version 1 -> 2)
-  const update1 = await client.mutate(
-    userSchema,
-    "user-cas-test",
-    created.actorRef,
-    1n, // Expected version 1
-    `mutate { state.credits += 50 }`,
-  );
-  expect(update1.version).toBe(2n);
+- Resident engine snapshot, including R11 guard work.
+- Getter access to an already-published immutable export.
+- Export materialization/FD transfer and full request latency.
+- Cold fault/read/replay and admission under pressure.
+- Qualified local WAL persistence ACK and current-term quorum ACK.
 
-  // Second update using stale version 1 must fail with Status 5 (VersionConflict)
-  await expect(
-    client.mutate(
-      userSchema,
-      "user-cas-test",
-      created.actorRef,
-      1n, // Stale version!
-      `mutate { state.credits -= 20 }`,
-    ),
-  ).rejects.toMatchObject({ status: 5 });
-});
-```
+Earlier specification figures (resident200 ns, published getter300 ns, local durable50 µs and cold fault250 µs) are objectives requiring workload/hardware evidence, not release guarantees. Network durable latency is not an in-memory lookup measurement. Differential pushdown tests must return identical authorized results.60-second ramps are smoke evidence only; sustained qualification must expose checkpoint/compaction, spool pressure, throttling and failure recovery.
 
----
-
-## 4. Benchmarking & Performance Qualification
-
-When benchmarking CiagoMem on your target hardware, always separate **Registered Tenants**, **Resident Working Set**, and **Active Concurrent Sessions**:
-
-### Target Performance Qualification SLOs (Bare-Metal Linux + PLP NVMe)
-
-| Operation Path                             | Target Latency                   | Measurement Scope                                                     |
-| :----------------------------------------- | :------------------------------- | :-------------------------------------------------------------------- |
-| **Same-Core Resident Seqlock Read**        | `p99 ≤ 200 ns` / `p99.99 ≤ 1 µs` | Validated in-engine atomic snapshot (excludes network RTT).           |
-| **Local `memfd` Sealed Window Read**       | `p99 ≤ 300 ns`                   | Co-located agent reading an already-published 4 KiB projection.       |
-| **Single-Actor Durable Commit (`Tier 1`)** | `p99 ≤ 50 µs`                    | Compact WAL v2 group-commit over `io_uring` `O_DIRECT` to PLP NVMe.   |
-| **Cold Actor NVMe Fault-In**               | `p99 ≤ 250 µs`                   | A/B extent read, CRC32C verification, and TinyLFU admission into RAM. |
-
-### Differential Index Verification
-
-To measure the exact speedup of Roaring Bitmap filter pushdown and SIMD Zone Maps against a raw scalar scan on your dataset, compare query execution with index pushdown enabled versus disabled in your benchmark harness:
-
-- Ensure at least **10,000+ actors** are populated across multiple shards.
-- Record `accounted_bytes`, `hit_rate`, `io_uring_cqe_latency_us`, and `p50 / p99 / p99.99` latencies across sustained 60-second load ramps.
+See [recorded verification](docs/VERIFICATION.md) for observed local results and skipped checks. Miri/model checking, fuzzing, ARM and real power-cut/storage qualification require their own evidence.

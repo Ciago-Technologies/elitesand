@@ -1,176 +1,106 @@
-# CiaQL Language Reference
+# CiaQL reference
 
-**CiaQL (Ciagomem Query and Cognitive Language)** is a strongly typed, bounded, pipeline-oriented language for querying, mutating, joining, and analyzing actor state and AI memory frames.
+**Current:** bounded actor-profile parser and reference executor. **Target:** schema-bound collection/array profile in [specification 17.2](MASTER_SPECIFICATION.md#172-unified-target-ciaql-application-grammar). The complete target grammar is authoritative; do not treat its examples as accepted by the current parser.
 
-CiaQL is **not SQL**. It is purpose-built for actor-native storage, guaranteeing predictable memory bounds and zero-allocation hot paths.
+## Current actor profile
 
----
+After loading actors and authorizing a session as in the [complete quickstart](ciagomem-engine/examples/quickstart.rs):
 
-## 1. Lexical & Structural Rules
+```text
+@1 mutate {state.credits -= 25}
+@1 select {credits: state.credits}
+```
 
-* **Pipeline Operator (`|>`):** Stages in a CiaQL query are chained using the pipe operator (`|>`). Each stage consumes the candidate set or state produced by the previous stage.
-* **Case Sensitivity:** Keywords (`scan`, `filter`, `where`, `mutate`, `select`, `group_by`, `aggregate`, `take`, `and`, `or`, `not`) are ASCII case-insensitive. Family names (`"users"`) and field paths (`state.credits`) are strictly **case-sensitive**.
-* **Field Roots:** State fields are referenced via `state.<field_name>`. Engine metadata fields are referenced via `meta.<field_name>` (e.g., `meta.schema_version`, `meta.last_tx_seq`).
-* **Hard Safety Bounds:**
-  * Maximum query text length: **64 KiB**
-  * Maximum tokens per query: **16,384 tokens**
-  * Maximum vector literal dimensions: **4,096 dimensions**
-  * Maximum `top_k` bound: **1 to 1,000** (defaults to `10` when omitted)
-  * Maximum mutations per batch: **128 operations**
+The parser also has ACTOR, TX/TX_ACTORS and SCAN ACTORS sources, typed filtering/projection/grouping, search/similarity, relationship and frame/operator AST forms. Executor support and authorization are separate from parsing success. General arrays, runtime BFBS families and network mutation commands are not implemented by having an Append AST variant.
 
----
+The current lexer/parser allocates bounded tokens/AST collections. It does not promise zero allocations. Current source limits are64 KiB text,16,384 tokens,32 stages, nesting16, MAX_LIST=256,4096 vector dimensions and2..64 TX actors. Inspect parser and executor errors instead of assuming every syntactically accepted value is executable.
 
-## 2. Query Sources
+## Target lexical and safety rules
 
-Every CiaQL pipeline begins with a source selector:
+Only `|>` is a pipe; `|->` is invalid. Keywords are ASCII case-insensitive; paths/families/aliases and string values preserve case. Strings use validated escapes; `#` comments end at newline outside strings. Errors carry original half-open UTF-8 byte spans.
 
-| Source Syntax | Scope | Description |
-| :--- | :--- | :--- |
-| `@12345` or `@0x0008F421` | Single Actor | Targets a specific actor by its 64-bit decimal or hexadecimal ID. |
-| `family("users") key "user-42"` | Single Actor | Resolves an actor by its collection name and UTF-8 primary key. |
-| `scan family("users")` | Family Scan | Scans all live actors (resident and cold) in the `"users"` family within the authenticated namespace. |
-| `tx [@1, @2, @3]` | Multi-Actor Tx | Declares a deterministic multi-actor transaction participant set. |
+Target mutation batches allow128 operations; the129th rejects before logging. Arrays are bounded by their catalog descriptor (default 1024 elements) and extent size. Ordinary lists/columns/group keys are capped256; vectors are1..4096 dimensions; top_k is1..1000, default 10. Admission also enforces query work, output and allocation budgets.
 
----
+## Target sources and reads
 
-## 3. Filtering (`filter` / `where`)
-
-Filter stages evaluate boolean predicates. Leading equality and range filters are automatically pushed down into per-tenant **Roaring Bitmaps** and **64-slot SIMD Zone Maps** before materializing actor snapshots.
+| Source | Meaning |
+| --- | --- |
+| `@123` or `@0x7b` | Authorized point actor; ID resolves through full incarnation/directory checks |
+| `family("users") key "user-42"` | Point key under authenticated namespace |
+| `scan family("users")` | Authorized resident+cold family membership, not unrelated families |
+| `tx [@1, @2]` | Explicit bounded deterministic participant set |
 
 ```text
 scan family("users")
-  |> filter (state.status == "ACTIVE" and (state.credits >= 500 or state.tier == "ENTERPRISE"))
-  |> filter (not state.suspended == true)
+  |> filter (state.credits >= 50 and state.status == "ACTIVE")
+  |> select {name: state.username, version: meta.document_version}
+  |> take 25
 ```
 
-### Supported Comparison Operators
-* Equality: `==`, `!=`
-* Ordering: `<`, `<=`, `>`, `>=`
-* Set & Substring (Case-insensitive): `IN`, `CONTAINS`
+Engine metadata is read-only: meta.schema_version/family_id are u16; meta.actor_id/document_version are u64. meta.last_tx_seq is not defined. Missing nullable values are null; missing nonnullable scalars yield schema defaults. `null == null` is true. Other null comparisons are false except `!=` with exactly one null. CONTAINS is case-sensitive substring search; IN performs typed equality. Mixed integer/float comparisons must preserve i64 distinctions above 2^53.
 
-### Null & Type Semantics
-* Missing optional FlatBuffer fields evaluate to `null`.
-* `null == null` evaluates to `true`.
-* Mixed integer/float comparisons preserve exact `i64` precision above $2^{53}$ without silent IEEE-754 rounding.
-
----
-
-## 4. Mutations (`mutate`)
-
-Mutations execute atomically on the owner core. All numeric arithmetic (`+=`, `-=`) is overflow-checked before logging.Repeated targets in the same `mutate` block are rejected to prevent ordering ambiguity.
+## Target mutations and conditional commands
 
 ```text
 family("users") key "user-42"
   |> where (state.credits >= 25)
-  |> mutate {
-       state.credits -= 25,
-       state.email = "new_email@ciagotech.com",
-       state.tags.append("verified"),
-       state.audit_log.push_bounded("credits_deducted", 100)
-     }
+  |> mutate {state.credits -= 25, state.tags.append("verified")}
 ```
 
-### Supported Mutation Operations
+| Operation | Contract |
+| --- | --- |
+| `field = value` | Typed scalar/vector replacement |
+| `field += n`, `field -= n` | Checked numeric arithmetic; finite floats |
+| `field = null` | Nullable field clear; not an actor deletion |
+| `arr.append(v)` | Append under descriptor and extent bounds |
+| `arr.remove(i)` | Existing zero-based index, preserving order |
+| `arr.pop()` | Remove final element and optionally return it; empty rejects |
+| `arr.clear()` | Empty vector; retains actor |
+| `arr.push_bounded(v, cap)` | Catalog-approved ring capacity, discard oldest first; return discarded count |
 
-| Syntax | Target Type | Description |
-| :--- | :--- | :--- |
-| `state.field = <scalar>` | Scalar (`bool`, `i64`, `f32`, `f64`, `string`, `ActorRef`) | Sets the field to a new scalar value. |
-| `state.field += <number>` | Numeric (`i64`, `f32`, `f64`) | Checked addition assignment. |
-| `state.field -= <number>` | Numeric (`i64`, `f32`, `f64`) | Checked subtraction assignment. |
-| `state.field = null` | Optional Scalar | Clears an optional field to `null`. Fails on required fields. |
-| `state.arr = [v1, v2]` | Vector (`[i64]`, `[f32]`, `[string]`) | Replaces the entire vector. |
-| `state.arr.append(v)` | Vector | Appends one element to the end of the vector (max 1,024 elements default). |
-| `state.arr.remove(idx)` | Vector | Removes the element at 0-based `uint32` index `idx`. |
-| `state.arr.pop()` | Vector | Removes and returns the final element. Fails with `EmptyArray` if empty. |
-| `state.arr.clear()` | Vector | Empties the vector (`len = 0`). |
-| `state.arr.push_bounded(v, cap)` | Ring Vector | Appends `v` and evicts oldest elements if length exceeds `cap`. Returns count of evicted elements. |
+Repeated targets reject. Every operation in one batch succeeds or none does. Typed preparation and reservations precede WAL assignment; no partial indexes, label changes or version increments on failure. Compaction/promotion is planned document-path work, not a generated FlatBuffers getter modifying a vector in place.
 
----
-
-## 5. Projections (`select`) & Limiting (`take`)
-
-Project specific fields into named output columns and bound the returned row count:
+Target SDK MUTATE takes one source-free command:
 
 ```text
-scan family("users")
-  |> filter (state.credits > 0)
-  |> select {
-       user_name: state.username,
-       current_balance: state.credits,
-       schema_ver: meta.schema_version
-     }
-  |> take 25
+where (state.status == "ACTIVE" and state.balance_cents >= 5000)
+mutate {state.balance_cents -= 5000, state.tx_count += 1}
 ```
-*Note: `take N` must be the final stage in a pipeline (except when followed by an operator `export` stage).*
 
----
+This requires negotiated conditional_mutate_v1. Source family/key, expected actor incarnation and expected version arrive in the RPC. False predicate is status6/ConditionFailed; stale version is status5/VersionConflict. See specification 17.3 for durable terminal decisions and [safe retries](DEBUGGING.md).
 
-## 6. Grouping (`group_by`) & Aggregations (`aggregate`)
-
-Execute bounded analytical aggregations across a family scan:
+## Target analytics and retrieval
 
 ```text
 scan family("orders")
-  |> filter (state.status == "COMPLETED")
-  |> group_by (state.region, state.plan_tier)
-  |> aggregate {
-       order_count: count(),
-       total_revenue: sum(state.amount_cents),
-       avg_order: avg(state.amount_cents),
-       min_order: min(state.amount_cents),
-       max_order: max(state.amount_cents),
-       unique_customers: count_distinct(state.customer_id),
-       p95_amount: p95(state.amount_cents)
-     }
+  |> group_by (state.region)
+  |> aggregate {count: count(), total: sum(state.amount_cents), p95: p95(state.amount_cents)}
   |> take 20
 ```
 
-### Supported Aggregate Functions
-* `count()`: Counts all matching rows (includes nulls).
-* `count_distinct(path)`: Exact distinct count of non-null scalar values.
-* `sum(path)`: Accumulates integers in `i128` (rejecting `i64` result overflow) or finite floats.
-* `avg(path)`, `min(path)`, `max(path)`: Excludes nulls.
-* `p50(path)`, `p95(path)`, `p99(path)`: Exact nearest-rank quantiles.
-
----
-
-## 7. Cross-Actor Joins (`join`) & Referential Links (`link`)
-
-### Direct Actor Reference Join
-```text
-@100
-  |> join @actor(state.organization_ref) as @org
-  |> where (@org.state.active == true)
-  |> select {
-       employee: state.username,
-       company: @org.state.company_name
-     }
-```
-
-### Referential Integrity Links
-```text
-# Register a RESTRICT constraint (blocks deleting @1 while @2 exists)
-@2 link add(target: @1, on_delete: RESTRICT)
-
-# Register a CASCADE constraint (deleting @1 automatically deletes @3)
-@3 link add(target: @1, on_delete: CASCADE)
-```
-
----
-
-## 8. Full-Text (`search`) & Vector Similarity (`similarity`)
-
-Stage order is semantic: placing `search` with `top_k: 50` before `similarity` shortlists the top 50 BM25 text matches before running vector scoring. When both stages are present, scores are combined using **Reciprocal Rank Fusion (`1 / (60 + rank)`)** with deterministic actor-ID tie-breaking.
+COUNT() counts rows; COUNT(path), COUNT_DISTINCT, SUM, AVG, MIN, MAX and exact nearest-rank P50/P95/P99 ignore null inputs. Integer SUM uses i128 intermediate and checked i64 output. Empty count/sum yield0; other empty results yield null. All group/distinct/sort state is bounded. After aggregation only grouped keys or declared aggregate results may be projected; TAKE is final.
 
 ```text
 scan family("agent_memories")
-  |> filter (state.active == true)
-  |> search(field: state.body, query: "zero trust control plane", top_k: 50)
-  |> similarity(vector: [0.15, -0.42, 0.77, 0.09], metric: COSINE, threshold: 0.75)
-  |> select {
-       snippet: state.body
-     }
-  |> take 10
+  |> search(field: state.transcript, query: "network policy", top_k: 50)
+  |> similarity(vector: [0.1, 0.2, 0.3, 0.4], metric: COSINE, threshold: 0.75)
+  |> select {text: state.transcript}
+  |> take 5
 ```
 
-* **Supported Metrics:** `COSINE` (score $\ge$ threshold), `DOT` (score $\ge$ threshold), `L2` / Euclidean (distance $\le$ threshold).
+The example assumes a registered four-dimensional vector. Stage order changes candidates; RRF combines one-based ranks using1/(60+rank), with actor-ID ties. SQ8 shortlisting does not replace exact final threshold qualification. COSINE/DOT accept scores>=threshold, L2 accepts distance<=threshold. Vectors/thresholds must be finite; dimensions match the descriptor; cosine zero norms reject.
+
+## Target joins, links and deletion
+
+```text
+@100 |> join @actor(state.organization_ref) as @org
+     |> where (@org.state.active == true)
+     |> select {company: @org.state.company_name}
+@2 link add(target: @1, on_delete: RESTRICT)
+@3 link add(target: @1, on_delete: CASCADE)
+delete actor @1
+```
+
+Joins use catalog ActorRef fields with incarnations, authorized family scope, unique aliases, bounded fanout and propagated labels. A missing target is an inner-join miss. LINK is a mutation requiring its own idempotent coordinator/RPC; remote QUERY is read-only. TX write sets are explicit; no runtime join may silently add write participants.
+
+RESTRICT checks live referencing actors, not an implicit business-status filter. Cascades are bounded strict transactions or recoverable chunked jobs. Logical deletion and physical A/B reclamation are distinct. Operator export/frame commands remain separate privileged profile operations, not data-query side effects.

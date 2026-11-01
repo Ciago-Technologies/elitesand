@@ -1,68 +1,49 @@
-# Security, Authentication & AI Governance
+# Security, capabilities and AI governance
 
-CiagoMem — SLAE implements a Zero-Trust security architecture at the storage boundary. No request—whether arriving over remote TLS 1.3 or a local Unix socket—can read, mutate, or scan actor state without cryptographic capability verification and information-flow label checks.
+**Current:** capability/provenance/export primitives and reference Engine authorization. **Target:** a complete authenticated service, namespace/family policy, production clock, transport and operational key management. [Specification17.4](MASTER_SPECIFICATION.md#174-capability-types-clocks-and-target-codec) defines the target codec and clock behavior. Component tests are not proof that arbitrary host applications integrate them correctly.
 
----
+## Implemented capability primitives
 
-## 1. Capability-Based Authentication (`Macaroon`)
+Macaroons use HMAC-SHA256, constant-time signature comparison and conjunctive caveat evaluation. Every mandatory caveat must pass; attenuation restricts authority. Unknown caveats reject.
 
-CiagoMem replaces static database passwords with cryptographic **Macaroon Capabilities** signed using `HMAC-SHA256` with constant-time equality verification.
+| Existing caveat | Actual width |
+| --- | --- |
+| Tenant / Session / BootEpoch | u128 each |
+| ExpiresAt / Audience / Ops / KeyEpoch | u64 each |
+| PeerUid | u32 |
 
-### Mandatory Conjunctive Caveats
-Every capability token carries a chain of signed caveats. Verification is **conjunctive** (all caveats must pass; attenuating a token can only restrict authority, never expand it):
+RequestCtx receives trusted now_ns and peer/session context from the host. The embedded example's monotonic clock is a local domain, not a Unix timestamp. A client must never select the authorization clock or peer UID. Engine admission checks token expiry/boot, identity and operations; this does not create a TLS listener or namespace catalog.
 
-| Caveat | Type | Enforcement Rule |
-| :--- | :--- | :--- |
-| `Tenant` | `u128` | Binds the token to the exact 128-bit random tenant incarnation. |
-| `Namespace` | `u32` | Restricts operations to the authorized namespace ID. |
-| `AllowedFamilies` | `Sorted Set` | Whitelists exact family IDs (e.g., `["users", "orders"]`) or grants `NamespaceAdmin`. |
-| `Session` | `u64` | Binds the token to the logical session ID. |
-| `ClientId` | `u64` | Binds mutations to the authenticated idempotency client ID. |
-| `BootEpoch` | `u128` | Must match the server's current OS-random startup epoch. Prevents cross-restart token replay. |
-| `Audience` | `u64` | Prevents token forwarding across different service clusters. |
-| `PeerUid` | `u32` | Maps to the verified OS peer UID (`SO_PEERCRED` locally or mTLS principal mapping remotely). |
-| `Ops` | `Bitmask` | Grants specific operation bits (`OP_READ`, `OP_WRITE`, `OP_SCAN`, `OP_ADMIN`). |
-| `KeyEpoch` | `u32` | Enforces instant root-key rotation without restarting the node. |
-| `ExpiresAt` | `u64` (ns) | Evaluated against the server's monotonic high-water clock; expired tokens fail closed. |
+## Target service scopes and roles
 
-### Role-Based Access Control (RBAC) Patterns
-1. **CI/CD Migration Role (`OP_ADMIN`):** Issued temporarily during deployment pipelines to execute `REGISTER_SCHEMA` and `ALTER_SCHEMA`.
-2. **Application Worker Role (`OP_READ | OP_WRITE`):** Restricted to specific `AllowedFamilies` within a single `Tenant`. Cannot execute cross-tenant queries or register schemas.
-3. **Tenant Analytics Role (`OP_READ | OP_SCAN`):** Permitted to run `scan family(...)` and `aggregate` pipelines strictly within its own `Tenant` incarnation.
+Namespace(u32), ClientId(u64), sorted numeric AllowedFamilies(u16 IDs), and explicit NamespaceAdmin are target additions. The exact v2 TLV framing, type widths, MAC chain, max 32 caveats/16-KiB token, unknown-tag rejection and interoperability gates are in17.4. Family names are resolved server-side; a list of names is not the cryptographic set encoding.
 
----
+A migration/admin role may register schemas only within its namespace. Application roles receive read/write scope for designated families; analytics roles receive bounded read/scan permissions. No role implicitly grants Policy integrity to stored content. Root-key policy reload must validate atomically and recheck queued requests before commit admission; it cannot revoke completed effects.
 
-## 2. Tenant Isolation & Incarnation Protection
+Target production expiry uses trusted Unix nanoseconds with a nondecreasing high-water observation. Monotonic durations are separate. Clock rollback cannot extend expiry, caller timestamps cannot advance replay clocks, and BootEpoch invalidates old tokens after restart. Missing qualified time/identity/key policy fails readiness. Namespace/family/client authorization is rechecked before serving deduplicated results too.
 
-* **Zero Cross-Tenant Leakage:** Every actor slot header, WAL record, A/B checkpoint image, Roaring bitmap, and BM25 index is strictly partitioned by `(namespace_id, tenant_incarnation)`. A query cannot name or join an actor belonging to another tenant.
-* **128-Bit Random Incarnations:** When a tenant or actor is deleted and later recreated with the exact same name or primary key, CiagoMem assigns a fresh 128-bit OS-random incarnation. Any stale `ActorRef`, cached route, or old backup image referencing the previous incarnation is immediately rejected.
+## Tenant and actor lifetimes
 
----
+Validate full tenant and actor incarnations in authoritative identity metadata, snapshots, routes/checkpoints and relationships. Recreating a deleted identity obtains a fresh random incarnation. Never infer authorization from an ID-only route or an arbitrary schema field. Some current structures use tenant-scoped indexes rather than the future namespace/family catalog: do not claim every existing WAL/header/index physically stores the same composite tuple.
 
-## 3. CaMeL Information Flow & AI Prompt-Injection Defense
+## CaMeL provenance and action permits
 
-When building AI agents, storing untrusted web scrapes or third-party emails alongside system instructions in a standard vector database creates a severe **Indirect Prompt Injection** vulnerability.
-
-CiagoMem solves this at the storage layer using the **CaMeL Information Flow Lattice**:
-
-### 3.1 The Four Integrity Levels
-Every actor and memory field carries a private `Label` with an immutable integrity tier:
 ```text
-External  <  AgentDerived  <  UserDirect  <  Policy
+External < AgentDerived < UserDirect < Policy
 ```
-* **`External`:** Default tier for all untrusted inputs, web scrapes, and unverified LLM outputs (`Q-LLM`).
-* **`AgentDerived`:** Outputs generated by a privileged LLM (`P-LLM`). Automatically inherits the lattice join (minimum integrity) of every context actor read during the prompt!
-* **`UserDirect`:** Authenticated, direct instructions from the human user.
-* **`Policy`:** Hard system constraints and security rules.
 
-### 3.2 Cryptographic Provenance & Single-Use Action Permits
-* **No Privilege Escalation:** Public APIs can only construct `External` labels. Elevating data to `UserDirect` or `Policy`, or promoting `AgentDerived` data into trusted facts, requires an **Ed25519 content-bound signature** from a configured trusted issuer key.
-* **Bounded Replay Tracker:** Endorsement approvals are single-use, bound to the exact content SHA-256 digest, session, and `BootEpoch`, and expire within **300 seconds**.
-* **Tool Call Authorization:** Labels alone never authorize external tool side effects. Executing a sensitive tool requires consuming a one-time `FramePermit` bound to the session, tool name, sink, and argument digest—ensuring an agent poisoned by `External` data cannot trigger unauthorized actions.
+Public untrusted input defaults to External. Trusted labels require configured issuer validation and content-bound Ed25519 attestation. Derivation propagates minimum integrity, source union and reader-set intersection; it cannot launder content into a signed fact. Actual prompt/tool integrations must carry and enforce these labels. Storing a label alone does not prevent every prompt injection.
 
----
+Endorsement approvals are scoped to content digest, session and boot; maximum approval TTL is300 seconds with bounded replay tracking. This is separate from capability expiry and the target result ledger's retention. Sensitive actions require a consumed permit tied to the authorized tool/sink/argument digest; a label alone is not tool authority. Never hand untrusted actors an issuer key or unrestricted tool executor.
 
-## 4. Transport & Local `memfd` Isolation
+## Buffers, exports and target transports
 
-* **Remote Transport:** Enforces **TLS 1.3** over TCP or **QUIC v1** (with 0-RTT mutations strictly disabled to prevent replay attacks). Every 18-byte wire frame is validated via CRC32C before payload memory is allocated.
-* **Local Zero-Copy `SealedExportWindow`:** When local agents read projections via shared memory, CiagoMem allocates an isolated 4,096-byte `memfd`, applies `F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_FUTURE_WRITE | F_SEAL_SEAL`, verifies that `mmap(PROT_WRITE)` and `mprotect(PROT_WRITE)` fail on the descriptor, and passes a read-only (`O_RDONLY`) file descriptor to the client.
+R11 keeps raw slot/header atomics private, claims lifecycle ranges, excludes CPU payload access while DMA owns a slot and uses checked single-use pin tokens. Unsafe backend submissions/completions retain explicit lifetime contracts. Abandoned I/O/pins fence/retain capacity; they are not automatically repaired by dropping a Rust value.
+
+SealedExportWindow is an isolated immutable projection, not the writable engine arena. The current Linux primitive uses shrink/grow/future-write/seal seals and an O_RDONLY client descriptor. A target4-KiB response window has a64-byte header and at most4032 data bytes; projection materialization and descriptor transfer cost are separate from getter access. Per-session/global budgets include FD/VMA overhead.
+
+TLS1.3/mTLS and QUIC, SO_PEERCRED socket sessions and native FD SDK adapters are target service integrations. Disable replayable0-RTT mutations. Header CRC detects accidental corruption; transport authentication and schema/root verification remain necessary. Never treat CRC as a MAC.
+
+## Reporting vulnerabilities
+
+This repository does not establish a staffed security mailbox or response SLA. Use a maintainer-provided private channel when available; avoid putting tokens, keys, customer payloads or exploitable private data into public issues. A future release must publish its supported-version and disclosure process before production distribution.

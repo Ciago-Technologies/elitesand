@@ -1,100 +1,48 @@
-# Debugging, Logging & Troubleshooting
+# Debugging, diagnostics and safe retries
 
-This guide covers how to enable verbose debugging in the CiagoMem SDKs, attach custom structured loggers, inspect crash-safe idempotency state, and resolve common wire status codes.
+**Current:** typed Rust parser/engine errors, simulator failure injection and validation scripts. **Target:** network status codes, IdentityFile, debug/logger options and structured remote diagnostics in specification 17.6. No current @ciagomem/sdk publication is established here.
 
----
+## Debug the current checkout
 
-## 1. Enabling SDK Debug Mode
-
-Debugging CiagoMem client interactions starts with enabling the `debug` option in your client configuration.
-
-```typescript
-import { Client, IdentityFile } from "@ciagomem/sdk";
-
-const client = await Client.connect({
-  transport: {
-    kind: "tls",
-    host: "db.example.internal",
-    port: 7443,
-    ca: caCertBytes,
-  },
-  token: macaroonBytes,
-  identity: await IdentityFile.open("client-state.bin"),
-  debug: true, // Enables verbose wire-frame, sequence, and latency logging
-});
+```sh
+cargo run --release --offline -p ciagomem-engine --example quickstart
+cargo test --release --offline -p ciagomem-core --test r11_regressions -- --nocapture
+python3 scripts/validate_workspace.py
+python3 scripts/validate_documentation.py
 ```
 
-Enabling `debug: true` outputs detailed diagnostic traces for every request and response frame, including:
-* 18-byte wire header decoding (`stream_id`, `op`, `payload_len`, and header `CRC32C` verification).
-* Capability renewal and `BootEpoch` negotiation during `HELLO`.
-* Outgoing `client_id` and `client_seq` idempotency pairs.
-* Server execution latency, `commit_lsn`, and `catalog_epoch` transitions.
+The parser exposes byte spans through ParseError.at/end. Report them against the exact original UTF-8 string, not character counts or a normalized query. A successful parse does not imply execution or permission. `WriterActive`, `Reassigned`, `WriterBusy`, `NotYetDurable` and repair events are different paths; do not flatten them into corruption.
 
----
+## Target SDK logger and diagnostic extension
 
-## 2. Customizing the SDK Logger
+The future SDK accepts debug plus bounded structured error/warn/debug callbacks. Fields include trace/request ID, operation/status, duration and authorized version/LSN/catalog metadata. Debug must not dump raw frames. Redact tokens/signatures, keys, raw documents/schemas, query literals, tool arguments, full primary keys and identity-file pending bytes. Callback failure and log backpressure cannot block CQEs or change a committed outcome.
 
-In production services, you can override the default console output by supplying a custom `logger` implementation to route SDK events to Pino, Winston, Datadog, or OpenTelemetry:
+V1 wire errors contain bounded text detail; exact remote spans are not encoded automatically. Structured diagnostic_v1 negotiates result_kind6, code, primary/related UTF-8 spans and a bounded message. Validate all spans before exposing them. An SDK may preserve local parser spans without pretending an arbitrary text server error has a structured span.
 
-```typescript
-import log from "./my-logging-service";
-import { Client } from "@ciagomem/sdk";
+## Target crash-safe client identity
 
-const client = await Client.connect({
-  transport: tlsConfig,
-  token: macaroonBytes,
-  identity: identityFile,
-  logger: {
-    error(code, metadata) {
-      log.error({ code, ...metadata }, "CiagoMem SDK Error");
-    },
-    warn(code, metadata) {
-      log.warn({ code, ...metadata }, "CiagoMem SDK Warning");
-    },
-    debug(code, metadata) {
-      log.debug({ code, ...metadata }, "CiagoMem Wire Trace");
-    },
-  },
-});
-```
+IdentityFile has an exclusive process lock and a random nonzero client_id. Persist sequence, semantic digest and exact pending operation before sending; persist terminal result before clearing it. Validate checksums and directory-fsync boundaries. Recovery retransmits the identical semantic request with the same sequence; authentication/routing may renew without changing that digest. Never share one writable identity file among processes or silently recreate a corrupt file.
 
----
+## Target outcomes
 
-## 3. Debugging CiaQL Syntax & Span Errors
+| Outcome | Correct response |
+| --- | --- |
+| PermissionDenied3 | Renew through trusted issuer when appropriate; maintain identity during reconciliation |
+| VersionConflict5 | Terminal; read/recompute, then allocate a new intent/sequence |
+| ConditionFailed, status6 | Business predicate false; no partial change; changed arguments require a new intent |
+| Busy8 | Bounded jittered backoff; retain original pair/digest; a lost response may still need reconciliation |
+| IdempotencyConflict9 | Stop; same sequence was used with different semantics |
+| RetryTooOld10 | Outcome may be unavailable. Reconcile through business history/IDs; never automatically repeat using a fresh client_id |
+| SequenceGap11 | Recover missing pending state; do not skip sequence |
+| NeedsRepair12 | Preserve evidence and require verified A/B/WAL recovery; never recreate as empty |
+| Indeterminate13 or disconnect | Timeout is not abort proof; retain and retry exact original intent |
+| UnsupportedFeature14 | Explicit failure; do not downgrade consistency |
+| DedupCapacity15 | Respect admission/quota; alternate identities must not bypass the limit |
 
-When a CiaQL query fails lexical or semantic validation, CiagoMem returns a structured diagnostic containing the exact **UTF-8 byte span `[start, end)`** of the offending token or field path:
+The target24-hour result-retention default is not an unlimited retry guarantee. Retain high-water decisions after pruning.300-second approval TTL is unrelated. A new business operation after conflict must follow a reconciled terminal outcome, not merely a transport timeout.
 
-```typescript
-try {
-  await client.query(`scan family("users") |> filter (state.non_existent_field > 10)`);
-} catch (err: any) {
-  console.error("Status Code:", err.status);      // 4 (SchemaMismatch) or 6 (InvalidArgument)
-  console.error("Error Span:", err.span);         // { start: 32, end: 56 }
-  console.error("Server Detail:", err.detail);    // Unknown field 'non_existent_field' in family 'users' v1
-}
-```
+## Repair and observability
 
----
+No automatic repair service or replica backup restorer ships today. A future operator must verify identity, image epoch, checkpoint and WAL coverage before restoring. NeedsRepair is not always a whole-core fence. Distinguish damaged selected copies from cold absence and preserve original files/logs.
 
-## 4. Inspecting & Recovering `IdentityFile` State
-
-Every mutating SDK call (`create`, `upsert`, `mutate`, `delete`) is protected by a local crash-safe sequence store (`IdentityFile`). Before transmitting a mutation, the SDK fsyncs `(client_id, client_seq, request_digest, payload_bytes)` to disk.
-
-If your application crashes or loses network connectivity mid-flight (`Status 13: Indeterminate`), **do not delete your `client-state.bin` file!**
-1. When your application restarts and calls `Client.connect(...)` with the same `IdentityFile`, the SDK automatically detects the pending unacknowledged mutation.
-2. It re-transmits the exact request with the original `client_seq` and `request_digest` (updating only the renewed authentication token if needed).
-3. The server checks its durable **72-byte Result Ledger**: if the mutation already committed before the crash, the server returns the original committed `WriteResult` without re-running the mutation.
-
----
-
-## 5. Troubleshooting Common Status Codes
-
-| Status Code | Error Name | Root Cause | Resolution |
-| :--- | :--- | :--- | :--- |
-| **`Status 3`** | `PermissionDenied` | 1. Token expired (`ExpiresAt`).<br>2. Server restarted and generated a new `BootEpoch`.<br>3. Token lacks `AllowedFamilies` or `Ops` bit. | Fetch a freshly minted Macaroon from your auth issuer using the server's current `BootEpoch` (returned by `HELLO`). |
-| **`Status 4`** | `SchemaMismatch` | 1. Client built a FlatBuffer using an unregistered `.bfbs` version.<br>2. `file_identifier` (e.g., `"USER"`) is missing from `builder.finish()`. | Ensure `builder.finish(root, "USER")` includes the 4-byte identifier and matches the registered `SchemaCatalog` fingerprint. |
-| **`Status 5`** | `VersionConflict` | Concurrent writer updated the actor; `expected_document_version` no longer matches. | Read the latest actor snapshot (`client.read(...)`), recompute your changes against `doc.version`, and retry. |
-| **`Status 8`** | `Busy` | 1. Actor is paused in a `FreezeCheckpoint` barrier.<br>2. DMA owns the slot (`WriterActive`).<br>3. Per-actor deferral queue (64 requests) is full. | Retry with exponential backoff (e.g., 2 ms, 5 ms, 10 ms) using the **same** `client_seq`. |
-| **`Status 9`** | `IdempotencyConflict` | Client reused an existing `client_seq` with different mutation arguments or target key. | Never manually edit `IdentityFile` or share a single `IdentityFile` across multiple concurrent processes. |
-| **`Status 10`** | `RetryTooOld` | Client retried a `client_seq` older than the 24-hour dedup retention window. | Open a new `client_id` session and read the current actor state before issuing new writes. |
-| **`Status 12`** | `NeedsRepair` | Checksum or epoch mismatch detected on disk extent during cold load. | Actor is automatically fenced to prevent corruption propagation. Restore from replica or A/B backup. |
+Target metrics include active_sessions_total, eviction/dwell/generation headroom, export bytes, migration pause, route mismatch, WAL/archive pressure and CQE latency. Use bounded node/core/class/result labels and sampled hashed identities, not per-user metric cardinality. Existing local logs are evidence, not a running telemetry endpoint.

@@ -1,77 +1,66 @@
-# Configuration, Environment Variables & Capacity Planning
+# Configuration and memory planning
 
-This guide documents all server environment variables, memory budget allocations, slab class sizing, and durability tiers for **CiagoMem — SLAE**.
+**Current:** the Rust crates use constructor/config structures, including Engine Limits, LifecycleConfig and WAL LogConfig. There is no server consuming the environment variables below. **Target:** the host contract in specification 17.5, with validation before listener readiness or LSN assignment.
 
----
+## Current local configuration
 
-## 1. Server Environment Variables
+Start from the complete [Rust quickstart](ciagomem-engine/examples/quickstart.rs). It uses Limits::default() and a bounded 8-MiB MemoryJournal. Inspect each crate's public structs for its current fields. Setting CIAGOMEM_MODE or CIAGOMEM_ARENA_GIB does not turn that example into a server or make its journal durable.
 
-Configure the CiagoMem container using the following environment variables in your `docker run` command or `docker-compose.yml`:
+## Target host settings
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `CIAGOMEM_NODE_ID` | `1` | Unique 16-bit node identifier (`1..65534`; `0` and `65535` are reserved). |
-| `CIAGOMEM_MODE` | `production` | `production` (enforces TLS 1.3 and HugeTLB checks) or `development` (allows heap fallback). |
-| `CIAGOMEM_REACTOR_CORES` | `14` | Number of pinned thread-per-core `io_uring` reactors (`1..64`). |
-| `CIAGOMEM_ARENA_GIB` | `12` | Total RAM (in GiB) reserved for resident actor slot arenas (`10` or `12` GiB on a 16 GiB host). |
-| `CIAGOMEM_BIND_ADDR` | `0.0.0.0:7443` | TCP/QUIC listen address for the binary wire protocol. |
-| `CIAGOMEM_UDS_PATH` | `/run/ciagomem/db.sock` | Local Linux `SOCK_SEQPACKET` path for co-located zero-copy clients. |
-| `CIAGOMEM_DATA_DIR` | `/var/lib/ciagomem` | Root directory for per-core WAL v2 logs, A/B extents, and catalog state. |
-| `CIAGOMEM_BACKUP_DIR` | `/var/backups/ciagomem` | Canonical local root allowed for operator `EXPORT` backup rules. |
-| `CIAGOMEM_DEFAULT_DURABILITY` | `local-durable` | Default commit tier: `applied` (`0`), `local-durable` (`1`), or `replicated-durable` (`2`). |
-| `CIAGOMEM_TLS_CERT` | *Required in prod* | Path to server TLS 1.3 certificate PEM file. |
-| `CIAGOMEM_TLS_KEY` | *Required in prod* | Path to server TLS 1.3 private key PEM file. |
-| `CIAGOMEM_CA_CERT` | *Required in prod* | Path to trusted CA bundle PEM for client mTLS verification. |
-| `CIAGOMEM_EXPORT_BUDGET_MIB` | `64` | Maximum RAM reserved for active 4 KiB `memfd` export windows (`64 MiB` = max 16,384 windows). |
-| `CIAGOMEM_MIN_DWELL_MS` | `100` | Minimum hold-down time (ms) before a newly admitted slot can be evicted by capacity pressure. |
-| `CIAGOMEM_LOG_LEVEL` | `info` | Logging verbosity: `error`, `warn`, `info`, `debug`, `trace`. |
+Precedence is configuration TOML -> recognized environment overrides -> explicit CLI flags. Reject unknown project keys, duplicate file keys, invalid enums, overflow, conflicting aliases and unsafe paths. `--check-config` prints redacted effective values without modifying storage.
 
----
+| Variable | Target default | Type and validation |
+| --- | --- | --- |
+| CIAGOMEM_MODE | development | development or production; production is explicit, not an insecure fallback |
+| CIAGOMEM_PROFILE | custom in development; storage-service in production | custom, embedded-agent, storage-service; profile fixes budget regions before overrides |
+| CIAGOMEM_NODE_ID | 1 | u16 in1..65534, directory-unique; no silent ID reuse |
+| CIAGOMEM_REACTOR_CORES | min(14, available cpuset CPUs) | integer1..64 and <=allowed CPUs; affinity setup must succeed in production |
+| CIAGOMEM_ARENA_GIB | 2 development;12 storage-service;10.1875 embedded-agent | nonnegative decimal GiB, parsed exactly to whole MiB using rational arithmetic, no binary floating rounding; round down only where explicitly reported |
+| CIAGOMEM_BIND_ADDR | 127.0.0.1:7443 development; explicit in production | numeric IP/port; production requires TLS regardless of bind address; separate QUIC enable flag defaults false |
+| CIAGOMEM_QUIC_ENABLED | false | bool true/false; enable only with qualified TLS/QUIC host and explicit UDP listener |
+| CIAGOMEM_UDS_PATH | /run/ciagomem/db.sock | absolute path with trusted parent; SO_PEERCRED required; never unlink an unrelated existing file |
+| CIAGOMEM_DATA_DIR | /var/lib/ciagomem | canonical absolute private path; explicit writable ownership, exclusive node lock and qualified WAL/extent devices |
+| CIAGOMEM_BACKUP_DIR | /var/backups/ciagomem | canonical allowed root; export uses the hardened directory policy; never follows an attacker-controlled replacement |
+| CIAGOMEM_DEFAULT_DURABILITY | local-durable | applied, local-durable, replicated-durable; unsupported tier rejects rather than downgrading |
+| CIAGOMEM_TLS_CERT / CIAGOMEM_TLS_KEY / CIAGOMEM_CA_CERT | absent | mandatory for production remote listener; nonempty readable validated PEM, matching cert/key, trusted CA, principal mapping |
+| CIAGOMEM_KEYRING_FILE | absent | mandatory production issuer/key policy; owner-only secret file, no inline secret environment value; provider-specific anchor remains a separate deployment gate |
+| CIAGOMEM_EXPORT_BUDGET_MIB | 64 production;4 development | integer>=0; zero disables FD exports; <=charged I/O region minus reserved completion/staging resources |
+| CIAGOMEM_MIN_DWELL_MS | 100 | bounded integer1..60000 for capacity eviction; deletion/repair/shutdown uses separately authorized lifecycle rules |
+| CIAGOMEM_LOG_LEVEL | info | error, warn, info, debug, trace; redaction applies at every level |
 
-## 2. 16 GiB Node Memory Budget Profiles
+Production requires qualified recovery/identity anchors, journal/catalog/dedup, clock and key policy, TLS principal mapping, storage and resource admission. Failure must not select weaker durability, erase identities or announce readiness. Configuration is immutable except logging and explicit atomic key-policy reload; other changes require a qualified restart/migration.
 
-CiagoMem provides two validated memory planning profiles for a standard **16 GiB (`16,384 MiB`)** node:
+## Complete16-GiB planning profiles
 
-| Subsystem Region | Embedded-Agent Profile (`MiB`) | Storage-Service Profile (`MiB`) | Purpose |
-| :--- | ---: | ---: | :--- |
-| **Engine Resident Arena** | `10,432` | `12,288` | 2 MiB HugePages holding `SlotHeader` (128B) + Actor Extents (4–64 KiB). |
-| **Kernel, Sockets & Page Tables** | `2,048` | `1,536` | OS slab, TCP/TLS socket buffers, `io_uring` pinned rings. |
-| **Agent / App Processes** | `2,048` | `1,024` | Co-located application or AI worker cgroup allocation. |
-| **Control, Sidecars & Indexes** | `1,036` | `768` | `CoreSlotMeta` (64B/slot), TinyLFU sketches (640 KiB/core), Roaring/SQ8 indexes, dirty lists (33B/slot). |
-| **WAL, I/O & Export Buffers** | *(included above)* | `256` | Group-commit DMA scratch buffers + 64 MiB `memfd` export budget. |
-| **Contingency Reserve** | `820` | `512` | Unallocated safety margin (>3–5%). Never assigned as steady-state capacity. |
-| **Total Node RAM** | **16,384 MiB** | **16,384 MiB** | Strict hardware budget. |
+| Region, MiB | Embedded-agent | Storage-service |
+| --- | ---: | ---: |
+| Arena including separate header rounding | 10432 | 12288 |
+| Kernel/network/page tables | 2048 | 1536 |
+| App/agent processes | 2048 | 1024 |
+| Control/metadata/indexes, with embedded buffers included | 1036 | 768 |
+| Separate WAL/I/O/export/staging region | 0 | 256 |
+| Contingency | 820 | 512 |
+| Total | 16384 | 16384 |
 
----
+These are planning profiles, not qualified deployments. Charge R11 access sidecars at 8 bytes per allocated slot outside region_bytes, plus planned CoreSlotMeta64, dirty tracking33, routes, labels, indexes and allocator overhead. Do not allocate maximal indexes/clients/windows without quota accounting. Contingency is not free steady-state capacity.
 
-## 3. Slab Classes & Resident Slot Capacity
+## Target slab capacities
 
-Within the **12 GiB (`12,288 MiB`)** Storage-Service Arena across **14 reactor cores**, every actor is allocated into the smallest fitting power-of-two slab class (`class 0..4`). Each slot includes a 128-byte `SlotHeader`, a 128-byte `ExtentHeader`, and a 64-byte `CDOC` prefix (leaving `E - 192` bytes for the FlatBuffer payload and delta tail):
+ExtentHeader128 and CDOC64 are inside E; SlotHeader128 is separately allocated and HugePage-rounded. For a homogeneous12-GiB arena across14 cores:
 
-| Class | Extent Size (`E`) | Max Usable Payload + Tail | Max Resident Actors (Homogeneous 14-Core Node) |
-| ---: | ---: | ---: | ---: |
-| `0` | **4 KiB** (`4,096 B`) | `3,904 Bytes` | **3,045,376 slots** |
-| `1` | **8 KiB** (`8,192 B`) | `8,000 Bytes` | **1,547,776 slots** |
-| `2` | **16 KiB** (`16,384 B`) | `16,192 Bytes` | **779,264 slots** |
-| `3` | **32 KiB** (`32,768 B`) | `32,576 Bytes` | **391,424 slots** |
-| `4` | **64 KiB** (`65,536 B`) | `65,344 Bytes` | **196,160 slots** |
+| Class | E bytes | Maximum root/tail region before padding | Rounded arena-only resident ceiling |
+| --- | ---: | ---: | ---: |
+| 0 | 4096 | 3904 | 3045376 |
+| 1 | 8192 | 8000 | 1547776 |
+| 2 | 16384 | 16192 | 779264 |
+| 3 | 32768 | 32576 | 391424 |
+| 4 | 65536 | 65344 | 196160 |
 
-*Note: If a mutation causes an actor's compacted FlatBuffer to grow beyond its current class (e.g., from 4 KiB to 8 KiB), the owner core automatically promotes the actor to the next slab class and issues a new generational `SlotHandle`. Documents exceeding 64 KiB return `Status 7 (DocumentTooLarge)`.*
+Ceilings do not include metadata/connection affordability outside the arena; mixed classes have a different capacity equation. Document growth triggers target compaction/promotion; an image that cannot fit the largest extent rejects. This path is not yet integrated in the reference Engine.
 
----
+## Target durability and session budgets
 
-## 4. Durability Tiers (`requested_durability`)
+Applied is explicitly non-durable. Local-durable requires the qualified local WAL and result ledger persistence boundary. Replicated-durable additionally requires current-term consensus quorum persistence; unsupported mode rejects. Default production mode is local-durable only once its adapter is delivered.
 
-Every mutation request can specify its required durability guarantee:
-
-1. **`0` — `Applied` (In-Memory Seqlock Only):**
-   * Returns as soon as the owner core updates the resident seqlock slot.
-   * **Latency:** Sub-microsecond.
-   * **Use Case:** Ephemeral telemetry or non-critical cache state. Not restart-safe.
-2. **`1` — `LocalDurable` (Default Production Mode):**
-   * Returns only after the compact WAL v2 batch and idempotency result ledger are persisted to the local PLP NVMe drive via `io_uring` group commit.
-   * **Latency:** Target `p99 ≤ 50 µs`.
-   * **Use Case:** Standard single-node ACID mutations and durable retries.
-3. **`2` — `ReplicatedDurable` (Cluster Quorum Mode — `RPO = 0`):**
-   * Returns only after local NVMe persistence **plus** synchronous quorum acknowledgement (`Q = 2 of 3` replicas) in the current placement term.
-   * **Use Case:** Mission-critical financial ledgers and zero-data-loss failover.
+64 MiB admits at most16384 raw4-KiB export windows, not16384 sessions. Allocate windows lazily; extra sessions use framed bytes or receive Busy. Count sockets, TLS state, mappings and descriptors separately. Registered tenants, resident actors, active sessions and requests/sec are independent measurements. No latency or million-user guarantee follows from this table.

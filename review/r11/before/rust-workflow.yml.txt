@@ -1,0 +1,34 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "feat/core-mem-server-engine" ]
+  pull_request:
+    branches: [ "feat/core-mem-server-engine" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust checks
+      run: |
+        rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+        rustup override set stable
+    - name: Formatting
+      run: cargo fmt --all -- --check
+    - name: Workspace and specification contracts
+      run: python3 scripts/validate_workspace.py
+    - name: Default release tests
+      run: cargo test --release --offline --workspace -- --nocapture
+    - name: All-feature release tests
+      run: cargo test --release --offline --workspace --all-features -- --nocapture
+    # Existing warnings remain visible; a warning-free baseline is not established.
+    - name: Clippy
+      run: cargo clippy --offline --workspace --all-targets --all-features
+    - name: Bounded mesh progress
+      run: python3 scripts/check_mesh_progress.py

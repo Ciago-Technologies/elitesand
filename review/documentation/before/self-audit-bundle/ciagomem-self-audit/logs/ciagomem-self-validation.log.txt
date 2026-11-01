@@ -1,0 +1,5 @@
+Checked mirrored sections14–15, native/wire layouts, capacity ceilings, epochs, five classes, EBNF and current example.
+VERDICT: PASS
+Validated crate DAG, parser/crypto boundaries, opt-in legacy API, source listing, links and vendor inventory.
+Validated canonical Ciagomem/CiaQL names in owned paths and content.
+VERDICT: PASS

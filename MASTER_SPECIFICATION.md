@@ -1030,7 +1030,7 @@ Operation bodies, all target v1:
 - REGISTER_SCHEMA/ALTER_SCHEMA: `format:u8=1, family_name_len:u16, bfbs_len:u32, family_name_utf8, bfbs_bytes`; request schema_version supplies target version. Response returns family ID and fingerprint. Catalog writes are idempotent via the same ledger at namespace scope.
 - CREATE/UPSERT: `format:u8=1, expected_document_version:u64, fingerprint:[u8;32], root_len:u32, root_bytes`; CREATE requires expected version=0 and absent live key. UPSERT version=0 means policy-authorized unconditional replacement/create; a nonzero version is a compare-and-swap replacement. Existing labels are preserved; untrusted new documents receive External provenance via server policy, not from arbitrary BFBS fields.
 - READ: `format:u8=1, minimum_document_version:u64, projection_len:u32, projection_utf8`; zero projection length requests the full application root, otherwise a validated projection expression. Select durable/applied explicitly. Return generated typed root only for a full root image of the matching schema; projected rows use the query result format.
-- MUTATE: `format:u8=1, expected_document_version:u64, command_len:u32, command_utf8`; require one `mutate {...}` body resolved against the prefix's family/key, not a second conflicting actor source. Validate into the typed AST in 14.7. Expected version must be nonzero. Direct binary delta submission is deferred until a separately negotiated untrusted-AST verifier exists.
+- MUTATE: `format:u8=1, expected_document_version:u64, command_len:u32, command_utf8`; require one typed mutation command (plain `mutate {...}` or the explicitly negotiated conditional form in17.3), resolved against the prefix's family/key, not a second conflicting actor source. Validate into the typed AST in 14.7. Expected version must be nonzero. Direct binary delta submission is deferred until a separately negotiated untrusted-AST verifier exists.
 - DELETE: `format:u8=1, expected_document_version:u64, delete_mode:u8`; mode0=strict bounded restrict/cascade, mode1=chunked deletion job. Expected version is nonzero; a missing key returns NotFound unless this is a dedup retry of a committed delete.
 - QUERY: `format:u8=1, query_len:u32, query_utf8`; v1 remote queries are read-only. QUERY uses family_id=0 to resolve every named family under the authenticated namespace and permitted-family caveats; zero never grants wildcard authority. Mutations use MUTATE/CRUD RPCs so retry identity and result atomicity are unambiguous. There are no undocumented server-side language bindings.
 - DESCRIBE_SCHEMA: `format:u8=1, requested_version:u16`; family_id selects an authorized family. Version0 resolves current at the returned catalog epoch. Return kind5 with the descriptor metadata followed by `bfbs_len:u32` and verified BFBS bytes. This read-only operation lets ordinary family-authorized clients obtain the verifier schema without schema-admin permission; they cache it by exact fingerprint/epoch.
@@ -1883,3 +1883,224 @@ Dropping/forgetting a token does not fabricate completion or decrement the count
 Runtime acceptance covers blocked public checkpoint/load mutation, a valid unchanged completed image, a parked CPU reader preventing DMA, range-claim rollback, abandoned I/O/pins, 65,535 accepted pins plus saturation rejection, wrong-owner releases and stale-generation releases. Compile-fail tests cover raw atomic/header privacy, escaping guarded views and duplicate token consumption. R9/R10 teardown, rejection and unwind tests remain required.
 
 CI runs formatting, workspace/specification validation, default and all-feature **release** suites, all-target/all-feature Clippy and the bounded mesh progress runner. Tests use `--nocapture` so unavailable real-ring bodies print their skips. Existing Clippy warnings remain visible; warning-free enforcement is not claimed. These checks do not replace Miri, concurrency model checking, native DMA/power-cut qualification, cross-platform execution or distributed failure testing.
+
+## 17. Complete application and operator documentation contract
+
+### 17.1 Scope, authority and release status
+
+Ciagomem is intended as a general-purpose actor data plane. Applications define families such as users, sessions, orders, telemetry, documents and agent_memories; schemas and business rules belong to the application. Gaming and financial wallets are demanding modeling examples, not a restriction on supported industries or a demonstration of performance. Replacing a particular database requires matching that application's query, transaction, backup, retention and failure requirements. Actor joins are not an unrestricted SQL compatibility layer, and internal messaging is not a complete Kafka-compatible broker.
+
+Sections14–17 together define the target implementation checklist. Section 17 reconciles the application profile's grammar and operational behavior; it does not override current source behavior. Section 10 remains the legacy actor query profile. Existing R5–R11 invariants, SlotHeader128/alignment64, ExtentHeader128, EnvelopeV2, full incarnations, Boehm word-atomic SeqLock, CaMeL and SealedExportWindow remain mandatory. No feature below changes their bit layouts. Milestones in14.11 still gate delivery.
+
+| Surface | Current checkout | Required delivery gate |
+| --- | --- | --- |
+| Embedded Rust engine | Runnable reference engine, fixed Record representation, MemoryJournal | Integrated node journal/replay before application durability claims |
+| User BFBS families, arrays and conditional SDK mutations | Target contracts | M1–M4 reflection, identity, document path and fault-tested journal integration |
+| Client server/CLI/container/Go/TS clients | Not shipped by this workspace | M4–M5 interoperable codecs, authentication, durable retries and release manifests |
+| Node configuration, TLS, session multiplexing, diagnostics endpoint | Target host behavior | Host startup validation, quotas, request-time authorization and operations tests |
+| Cluster and warm restart | Planned | M6 consensus/fencing, cross-log recovery and section 15 failure suites |
+
+User guides must label target-only sections before commands or examples. A hypothetical image/package name is not evidence that an artifact exists. README/INSTALL lead with the runnable Rust quickstart; EXAMPLES separates current embedded calls from target client APIs. No document may translate an SLO objective into an observed guarantee. Case-sensitive API names and CiaQL are preserved; canonical product spelling is Ciagomem.
+
+### 17.2 Unified target CiaQL application grammar
+
+The following is the consolidated **target application profile** supplementing14.7. It combines family/array syntax with search, joins, metadata and analytics; it is not the grammar implemented by the current parser. Only `|>` is a pipe. Keywords are ASCII case-insensitive; paths, aliases, family names and string values retain case. Comments beginning `#` run to newline outside strings. Lex strings/numbers first, never split pipeline text inside literals. Preserve half-open UTF-8 spans for every AST node.
+
+```ebnf
+statement       = schema_admin | create_stmt | upsert_stmt | delete_stmt | link_stmt | pipeline ;
+schema_admin    = ("register" | "alter"), "schema", identifier, "version", uint16_nonzero,
+                  "payload", encoded_document ;
+encoded_document= ("hex" | "base64"), "(", string, ")" ;
+create_stmt     = "create", family_source, "key", string, "document", encoded_document ;
+upsert_stmt     = "upsert", family_source, "key", string, "document", encoded_document ;
+delete_stmt     = "delete", "actor", actor_source ;
+family_source   = "family", "(", string, ")" ;
+actor_source    = actor_ref | family_source, "key", string ;
+tx_source       = "tx", "[", actor_ref, ",", actor_ref, { ",", actor_ref }, "]" ;
+source          = actor_source | "scan", family_source | tx_source ;
+pipeline        = source, { "|>", stage } ;
+stage           = filter_stage | mutate_stage | select_stage | group_stage | aggregate_stage
+                | take_stage | join_stage | search_stage | similarity_stage ;
+filter_stage    = ("filter" | "where"), "(", bool_expr, ")" ;
+mutation_command= [ "where", "(", bool_expr, ")" ], mutate_stage ;
+mutate_stage    = "mutate", "{", mutation, { ",", mutation }, "}" ;
+mutation        = field_path, assign_op, value
+                | field_path, ".", "append", "(", value, ")"
+                | field_path, ".", "remove", "(", uint32, ")"
+                | field_path, ".", "pop", "(", ")"
+                | field_path, ".", "clear", "(", ")"
+                | field_path, ".", "push_bounded", "(", value, ",", uint32, ")" ;
+assign_op       = "=" | "+=" | "-=" ;
+value           = scalar | array_literal ;
+scalar          = "null" | "true" | "false" | number | string | actor_ref ;
+array_literal   = "[", [ scalar, { ",", scalar } ], "]" ;
+field_path      = "state", ".", identifier, { ".", identifier } ;
+metadata_path   = "meta", ".", ("schema_version" | "document_version" | "family_id" | "actor_id") ;
+qualified_path  = "@", identifier, ".", (field_path | metadata_path) ;
+result_path     = "result", ".", identifier ;
+read_path       = field_path | metadata_path | qualified_path | result_path ;
+select_stage    = "select", "{", projection, { ",", projection }, "}" ;
+projection      = identifier, ":", read_path ;
+group_stage     = "group_by", "(", read_path, { ",", read_path }, ")" ;
+aggregate_stage = "aggregate", "{", aggregate_item, { ",", aggregate_item }, "}" ;
+aggregate_item  = identifier, ":", ("count", "(", [ read_path ], ")"
+                | aggregate_fn, "(", read_path, ")") ;
+aggregate_fn    = "sum" | "avg" | "min" | "max" | "count_distinct" | "p50" | "p95" | "p99" ;
+take_stage      = "take", uint32 ;
+join_stage      = "join", "@", "actor", "(", field_path, ")", "as", "@", identifier ;
+link_stmt       = actor_source, "link", ("add", "(", "target", ":", actor_source,
+                  ",", "on_delete", ":", ("RESTRICT" | "CASCADE"), ")"
+                | "remove", "(", "target", ":", actor_source, ")") ;
+search_stage    = "search", "(", "field", ":", field_path, ",", "query", ":", string,
+                  [ ",", "top_k", ":", uint32 ], ")" ;
+similarity_stage= "similarity", "(", "vector", ":", array_literal, ",", "metric", ":",
+                  ("COSINE" | "DOT" | "L2"), ",", "threshold", ":", number, ")" ;
+bool_expr       = bool_term, { "or", bool_term } ;
+bool_term       = bool_factor, { "and", bool_factor } ;
+bool_factor     = [ "not" ], ("(", bool_expr, ")" | predicate) ;
+predicate       = read_path, compare_op, scalar
+                | read_path, "in", "[", scalar, { ",", scalar }, "]"
+                | read_path, "contains", string ;
+compare_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+actor_ref       = "@", (uint64 | hex_u64) ;
+identifier      = (letter | "_"), { letter | digit | "_" } ;
+letter          = ? ASCII A..Z or a..z ? ;
+uint16_nonzero  = uint ;
+uint32          = uint ;
+uint64          = uint ;
+uint            = "0" | nonzero, { digit } ;
+hex_u64         = "0x", hex_digit, { hex_digit } ;
+number          = [ "-" ], uint, [ ".", digit, { digit } ],
+                  [ ("e" | "E"), [ "+" | "-" ], digit, { digit } ] ;
+string          = '"', { json_char | json_escape }, '"' ;
+json_char       = ? Unicode scalar except quote, backslash and U+0000..U+001F ? ;
+json_escape     = ? RFC8259 escape with validated Unicode surrogate pairs ? ;
+digit           = "0" | nonzero ;
+nonzero         = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+hex_digit       = digit | "a" | "b" | "c" | "d" | "e" | "f"
+                | "A" | "B" | "C" | "D" | "E" | "F" ;
+```
+
+Semantic bounds are checked after parsing and before resource reservation/LSN assignment. Maximum query 64 KiB, tokens 16,384, stages 32, nesting 16, transaction participants 2..64 distinct, vector dimensions 1..4,096, search top_k 1..1,000 (default 10), mutations 128 in the application profile; ordinary lists/projected columns/group keys/aggregate items 256. A schema-bound array uses14.5's max_elements (default 1,024), not the ordinary syntax-list bound; empty arrays derive their element type from the descriptor. Both are additionally bounded by text size, document extent and allocation/work quotas. The current parser's MAX_LIST 256 and Append AST do not implement this application-array execution contract.
+
+`meta.schema_version` and `meta.family_id` are u16, `meta.document_version` and `meta.actor_id` are u64. They are engine-owned, read-only and cannot be declared as application fields or mutation targets. `meta.last_tx_seq` is not defined by this profile. External actor ID syntax never supplies trusted incarnation or ownership: resolve exact actor lifetime through the authenticated directory. Stored relationship fields have catalog-declared ActorRef semantics including full actor incarnation; no unchecked integer-to-pointer or ID-only cross-lifetime join is allowed.
+
+All joins resolve within the same authorized tenant/namespace, check family permissions, label readers and incarnation on both sides, and have unique aliases and bounded fanout/work. Missing joined actors remove the candidate (inner join); RESTRICT enforcement is separate from read join results. Joined data contributes minimum integrity, union of source categories and intersection of reader sets. Joins in read pipelines are not global SQL snapshot isolation: return bounded actor-consistent observations unless a negotiated transactional snapshot is requested. TX mutation participants must be known up front; discovering a new participant requires preflight/resequencing, never acquiring it mid-transaction. No collection-wide write scan is supported in this profile. LINK writes use an explicit idempotent LINK RPC described below, not read-only QUERY.
+
+A pipeline may contain at most one mutation stage, only for a point actor or explicit TX source. Filters preceding mutation are evaluated atomically under participant ownership; no search/group/aggregate/join may discover write targets dynamically. Grouping must feed aggregate; only grouped keys or aggregate outputs can be projected afterward; aggregate aliases are addressed as `result.<alias>` only after aggregation and cannot appear in pre-aggregate predicates. TAKE is final. Operator export/backup and memory-frame directives retain their separate privileged Section 10 profile; they are not allowed as a way to append side effects to a read-only network QUERY. Duplicate projection aliases or mutation targets reject.
+
+Predicates use explicit non-SQL null semantics: absent nullable fields are null, absent nonnullable FlatBuffers scalars yield declared defaults. `null == null` is true; other comparisons involving null are false except `!=` with exactly one null. CONTAINS is case-sensitive substring matching; IN compares typed values, not case-folded strings. Mixed i64/f64 comparison must preserve exact integer distinctions above 2^53. Integer arithmetic is checked; i64 SUM uses i128 intermediate and rejects an out-of-i64 final value. Finite floating operations reject NaN/infinity. COUNT() counts rows; COUNT(path), COUNT_DISTINCT and other aggregates ignore null inputs. Empty COUNT/SUM return0, other empty aggregates return null. Exact nearest-rank quantiles sort finite numeric values with rank=max(1,ceil(p*n/100)); integer results retain i64 type when the selected input is i64. Aggregate work and distinct sets remain quota-bounded.
+
+SEARCH produces a BM25-ranked shortlist, with deterministic actor-ID ties. A subsequent SIMILARITY operates on that shortlist; reversing stages changes candidates. When combining rankings, preserve earlier candidate ranks, use reciprocal rank fusion sum(1/(60+rank)) with one-based ranks and actor-ID ties. A row lacking an embedding is excluded. Embedding dimension must exactly match the registered vector field; COSINE rejects zero norm and accepts score>=threshold, DOT accepts score>=threshold, L2 accepts distance<=threshold. Thresholds are finite; no mandatory universal score range applies to DOT/L2. SQ8 is a bounded candidate accelerator: exact final threshold decisions use the stored original vectors. If memory/work budgets prevent exact reranking, reject or explicitly negotiate approximate results, never silently drop threshold matches.
+
+### 17.3 Conditional CRUD, links and terminal outcomes
+
+The M4 application profile must advertise `conditional_mutate_v1` before accepting optional `where (...) mutate {...}` in the14.9 MUTATE command bytes. It retains the same length-prefixed operation body and request prefix; no SlotHeader or persistent envelope layout change occurs. The typed AST adds `MutationCommand {predicate: Option<Expr>, mutations, span}`. A plain mutate command is unchanged. Clients cannot smuggle a second actor/family source into the command. SDK examples containing the conditional form are target examples, not current parser/SDK guarantees.
+
+Execution order is authenticate/revalidate current key/boot/expiry -> authoritative family/key/incarnation resolution -> authorized dedup lookup -> expected_document_version check -> predicate over that same version -> prepare all deltas, labels, links, budgets and result -> log atomic outcome -> publish/ack at requested durability. Recheck at commit admission after deferral. A successful single-actor update increments version once for the whole batch; checks and application mutation do not use separate read/write round trips. Arithmetic or predicate failure cannot partially debit a wallet or update its history.
+
+False predicate returns status6 InvalidArgument with machine diagnostic `ConditionFailed`; expected-version mismatch remains status5 VersionConflict. Both are terminal for that admitted request. The durable result ledger records terminal decisions even when no actor delta is emitted; it is bounded and recoverable independently of resident slots. Rejected authorization never creates an observable dedup entry. Busy/transport failures before admission do not consume client_seq; no unsafe assumption of this state is made after a lost response. Idempotent retries always authenticate before serving a cached outcome. A changed predicate or recomputed amount is a new semantic request and needs a new sequence after reconciliation of the old request.
+
+Target LINK RPC uses new op12 (op1..11 retain14.8 meanings), with feature `link_v1`: request prefix supplies the source family/key/incarnation; body `format:u8=1, expected_document_version:u64, action:u8` (0=add,1=remove), `on_delete:u8` (0=RESTRICT,1=CASCADE; remove uses0), `target_family_id:u16, target_actor_id:u64, target_actor_incarnation:u128`. Body is37 bytes. Require write permission on both source and target families and check both lifetimes before logging a link decision with dedup and directory/index changes. Version0 is forbidden. The source and target participants must be held under deterministic participant ordering so deletion cannot race edge insertion. Unknown op/feature returns UnsupportedFeature; QUERY never executes a link mutation. Mutating text LINK statements are embedded/admin entrypoints that lower to the same coordinator, not privileged shortcuts.
+
+Deletion follows14.9 and the bounded existing fail-forward model. RESTRICT checks every live referencing actor regardless of a business `active` flag; conditional constraints require an explicit application contract. A chunked job has a durable bounded plan and progress cursor. Visibility fencing, failure recovery, quota rejection and link races must be specified/tested before claiming all linked actors disappear instantly. Physical A/B reclamation waits for durable tombstones and quiescence. Replica reads and checkpoint recovery must not resurrect deleted identities. A wallet debit is only a modeling example: accounting applications also need transfer invariants, multi-actor decisions, audit retention and storage qualification.
+
+### 17.4 Capability types, clocks and target codec
+
+Current primitive widths are Tenant 128, Session 128, BootEpoch 128, Audience 64, Ops 64, KeyEpoch 64, ExpiresAt 64 and PeerUid 32. Do not narrow Session or KeyEpoch to match an illustrative SDK table. Namespace32, ClientId64 and allowed-family restrictions are target additions, not current Caveat variants. AllowedFamilies is a sorted unique nonempty set of numeric u16 family IDs (max 256), never a list of arbitrary names. NamespaceAdmin is explicit authority for one namespace; intersect every attenuation restriction, never combine grants by union. Readable namespace/family/client fields must agree with verified caveats.
+
+For the future serialized capability v2, prescribe canonical little-endian TLVs: `tag:u8,length:u16,value[length]`. Retain semantic tags0..7 and widths from current primitive encoding; tag8=Namespace(u32),9=ClientId(u64),10=AllowedFamilies(count:u16 plus IDs),11=NamespaceAdmin(namespace:u32). Reject unknown tags, noncanonical lengths/sets and missing mandatory caveats. A token has `format:u8=2,count:u8,key_id:u64,caveat_bytes_len:u16`, then all TLVs then signature 32:44 bytes fixed plus TLVs, max 16,384 total and32 caveats. The format is a target wire codec, not a reinterpretation of today's internal Macaroon value.
+
+V2 root signature is HMAC-SHA256(root_key, ASCII `ciagomem/capability/v2` || zero byte || key_id_le64). Each caveat attenuates with HMAC-SHA256(previous_signature, complete canonical TLV). An authorized issuer supplies the root authority; possessing an attenuated signature only permits further restriction. Verify the complete chain using constant-time equality, then conjunctively evaluate every caveat and namespace/family/client match. Count/length must exhaust exactly the encoded TLVs and remaining32 signature bytes; reject duplicates that conflict, unsupported scopes and admin authority without the required admin operation. No raw token, key or signature is logged. Current-v1/internal tokens never silently upgrade: explicit codec negotiation and issuer provisioning are required. This codec requires published known-answer, attenuation, malformed-boundary and cross-language tests before shipping.
+
+Target production ExpiresAt uses unsigned Unix nanoseconds. A trusted clock service computes effective_now=max(previous_effective_now,validated_system_unix_ns), initializes under an authenticated boot and rejects production readiness when time synchronization is unqualified. Never mix Unix timestamps with process-monotonic values. Local deadlines/dwell/budgets use monotonic durations separately. A rollback never extends a previously observed expiry; after restart BootEpoch invalidates old tokens. Caller timestamps never advance authorization/replay clocks. Current RequestCtx takes trusted now_ns from its host; the embedded demo uses its local MonotonicClock domain and does not implement this production clock bridge. Approval TTL remains at most300 seconds, distinct from result-ledger retention and token lifetime.
+
+The host revalidates expiry, boot, active key policy, scopes and CaMeL at request admission and after queued deferral; key-ring reload publishes one validated immutable generation atomically. Removed epochs reject new requests and queued work at commit admission; it cannot undo an already committed action. Never describe rotation as instant revocation of completed mutations. Current primitives and Engine checks do not supply a complete TLS/mTLS host, namespace catalog or cross-process clock service.
+
+### 17.5 Target configuration and startup contract
+
+The following variables are **proposed host configuration**, not environment variables read by the current Rust libraries. The host accepts `--config <path>` TOML, overridden by recognized CIAGOMEM_* environment entries, then explicit matching CLI flags. Reject unknown project keys, duplicated file keys, malformed values, unknown enum values and conflicting aliases. Empty is not the same as absent. Resolve the complete immutable configuration before binding listeners or assigning LSNs. `--check-config` validates locally and prints only redacted effective values and readiness deficiencies; it never mutates storage. Schema/query limits may only be lowered from the v1 profile without a separately negotiated version.
+
+| Variable | Target default | Type and validation |
+| --- | --- | --- |
+| CIAGOMEM_MODE | development | development or production; production is explicit, not an insecure fallback |
+| CIAGOMEM_PROFILE | custom in development; storage-service in production | custom, embedded-agent, storage-service; profile fixes budget regions before overrides |
+| CIAGOMEM_NODE_ID | 1 | u16 in1..65534, directory-unique; no silent ID reuse |
+| CIAGOMEM_REACTOR_CORES | min(14, available cpuset CPUs) | integer1..64 and <=allowed CPUs; affinity setup must succeed in production |
+| CIAGOMEM_ARENA_GIB | 2 development;12 storage-service;10.1875 embedded-agent | nonnegative decimal GiB, parsed exactly to whole MiB using rational arithmetic, no binary floating rounding; round down only where explicitly reported |
+| CIAGOMEM_BIND_ADDR | 127.0.0.1:7443 development; explicit in production | numeric IP/port; production requires TLS regardless of bind address; separate QUIC enable flag defaults false |
+| CIAGOMEM_QUIC_ENABLED | false | bool true/false; enable only with qualified TLS/QUIC host and explicit UDP listener |
+| CIAGOMEM_UDS_PATH | /run/ciagomem/db.sock | absolute path with trusted parent; SO_PEERCRED required; never unlink an unrelated existing file |
+| CIAGOMEM_DATA_DIR | /var/lib/ciagomem | canonical absolute private path; explicit writable ownership, exclusive node lock and qualified WAL/extent devices |
+| CIAGOMEM_BACKUP_DIR | /var/backups/ciagomem | canonical allowed root; export uses the hardened directory policy; never follows an attacker-controlled replacement |
+| CIAGOMEM_DEFAULT_DURABILITY | local-durable | applied, local-durable, replicated-durable; unsupported tier rejects rather than downgrading |
+| CIAGOMEM_TLS_CERT / CIAGOMEM_TLS_KEY / CIAGOMEM_CA_CERT | absent | mandatory for production remote listener; nonempty readable validated PEM, matching cert/key, trusted CA, principal mapping |
+| CIAGOMEM_KEYRING_FILE | absent | mandatory production issuer/key policy; owner-only secret file, no inline secret environment value; provider-specific anchor remains a separate deployment gate |
+| CIAGOMEM_EXPORT_BUDGET_MIB | 64 production;4 development | integer>=0; zero disables FD exports; <=charged I/O region minus reserved completion/staging resources |
+| CIAGOMEM_MIN_DWELL_MS | 100 | bounded integer1..60000 for capacity eviction; deletion/repair/shutdown uses separately authorized lifecycle rules |
+| CIAGOMEM_LOG_LEVEL | info | error, warn, info, debug, trace; redaction applies at every level |
+
+Production startup requires a complete recovery/identity anchor provider, journal, catalog/dedup replay, valid clock/key policy, compatible layout, sufficient cpuset/memlock/FD/cgroup limits, writable qualified storage and required HugeTLB allocations. Failed readiness does not silently create empty tenants or drop to non-durable mode. Development may explicitly use heap/reference MemoryJournal, but must label data non-durable and cannot announce a production service as ready. If a future host has no durable adapter, local-durable configuration fails rather than silently running MemoryJournal.
+
+Section 3's embedded-agent split is10,432+2,048+2,048+1,036+820=16,384 MiB, with control512 plus metadata/buffers524 within 1,036. Section 15's storage-service split is12,288+1,536+1,024+768+256+512=16,384 MiB. These are alternative planning profiles, not validated hardware deployments. Arena bytes include separate SlotHeader arrays and per-arena HugePage rounding; ExtentHeader and CDOC consume192 bytes inside E. R11 access sidecars add8 bytes/allocated slot in metadata, outside region_bytes, alongside planned CoreSlotMeta 64 and dirty tracker33 where used. At1,000,000 allocated slots the access sidecar alone is7.6294 MiB. Metadata/index/dedup/export costs cannot borrow contingency silently. Registered tenants, resident actors, physical connections, logical sessions and live export windows have independent quotas.64 MiB funds16,384 raw4 KiB windows, not a maximum of 16,384 sessions; FD/VMA/mapping overhead is extra.
+
+Arena defaults are profile values, not a supported-size whitelist: explicit custom development2 GiB is valid. A fractional GiB value must translate exactly into MiB; negative/overflow/nonintegral-MiB values reject. A custom profile declares a node-memory limit and every region; sum must fit the measured cgroup/hardware limit with retained contingency. Auto-adjusting maximum slot count must include14-core header rounding and sidecars, never E-only division. Whole-node ingress/export admission rejects before exhausting resources needed to reap CQEs or finish a checkpoint. Kernel/version numbers alone do not prove io_uring, seals, HugeTLB or storage-persistence support; use capability probes.
+
+Configuration is immutable after startup except log verbosity and a separately authorized atomic key-policy reload. Changing layout, node identity, arena/core placement, memory profile, storage, transports or durability policy requires drained/qualified restart or the explicit section 15 rolling procedure. Persist a nonsecret configuration fingerprint with node/storage manifests and report it in readiness/diagnostics. No hot reload may reinterpret existing records or bypass migration fencing.
+
+### 17.6 Diagnostics, logging and retry workflow
+
+A future SDK accepts debug and a structured logger with error/warn/debug callbacks. Debug never enables unredacted frames. Allowlisted events contain boot/node/core, trace/request ID, operation, bounded status, elapsed monotonic duration, stream ID, catalog epoch and (where authorized) commit LSN/document version. Sample or hash actor/key identifiers; do not put them in unbounded metric labels. Never emit Macaroons, HMAC/signatures, private keys, raw FlatBuffers/BFBS, query literals, plaintext tool arguments, full primary keys or identity-file pending payloads. Diagnostic buffers are bounded; log failure/drop counters never block CQE progress or change transaction outcome. Logger callback exceptions are contained, not propagated as a spurious mutation failure.
+
+V1 wire errors retain14.9's bounded text detail; they do not acquire undocumented binary span fields. Structured diagnostic extension requires negotiated feature `diagnostic_v1` and result_kind6 on non-OK replies: `format:u8=1,code:u16,start:u32,end:u32,related_count:u8`, then at most4 related `(start:u32,end:u32)` spans, then `message_len:u16,message_utf8`. Fixed prefix12 bytes before related spans/message length. Message <=512 bytes; spans are relative to original command/query UTF-8 bytes, satisfy start<=end<=input_len and land on codepoint boundaries. Never include unauthorized schema/actor existence in errors. SDKs expose status/code/optional span only when encoded or locally parsed; they cannot infer exact remote spans from arbitrary text.
+
+IdentityFile target workflow: single-process exclusive lock; fresh cryptographically random nonzero client_id on initialization; monotonic client_seq starts1 and never wraps. Before mutation transmission atomically persist format/version, client ID, sequence, semantic request digest and exact pending operation bytes with checksum using temp-write/fsync/rename/directory-fsync or an equivalently tested journal. Keep secret-free metadata separate from capability renewal. Acknowledged terminal result is durably recorded before clearing pending intent/advancing sequence. Recovery validates checksums and replays the identical semantic operation, refreshing only authentication and routing metadata excluded from the digest. Corrupt identity state fails closed; copying it to concurrent clients is forbidden. One v1 client identity has at most one unresolved mutation, preventing SequenceGap ambiguity.
+
+| Outcome | Required SDK/application behavior |
+| --- | --- |
+| PermissionDenied3 | Renew through trusted issuer if appropriate; preserve original semantic request/sequence during reconciliation; no blind repeated unauthorized retries |
+| VersionConflict5 / ConditionFailed6 | Terminal result for that intent; read/recompute business state and use a new sequence for changed arguments after recording outcome |
+| Busy8 before admission | Bounded jittered exponential backoff, respecting request timeout/retry budget; retransmit identical intent and sequence |
+| IdempotencyConflict9 | Stop automatic retries; same pair has conflicting digest; retain evidence and reconcile |
+| RetryTooOld10 | Original outcome may no longer be available. Never create a new client identity and automatically repeat the effect; reconcile using business IDs/history or operator recovery |
+| SequenceGap11 | Recover the missing pending intent from the locked identity journal; do not skip sequences |
+| NeedsRepair12 | Stop serving that damaged actor through ordinary load; preserve files/logs/identity; require qualified recovery, not silent fresh creation |
+| Indeterminate13 / disconnect after send | Outcome unknown; keep pending state and retry exactly the original pair/digest; an expired deadline is not proof of abort |
+| UnsupportedFeature14 | Surface explicit unsupported status; no weaker consistency/durability fallback |
+| DedupCapacity15 | Admission fails before actor mutation; backoff/reconcile with same identity, not an alternate identity bypassing quota |
+
+Changing amount/predicate after conflict changes the semantic digest. A final timeout leaves the operation unresolved unless the server supplies a terminal committed outcome.24-hour ledger retention is a default, not a safe client retry period after any arbitrary outage; quota/high-water and retirement rules in14.6 apply. A token's300-second approval TTL is unrelated. Administrator repair requires verified A/B/WAL/replica coverage and expected tenant/actor incarnations; no repair daemon is bundled today. A CRC/epoch failure can request NeedsRepair without fencing every actor on the core; do not claim the same action for every error path.
+
+### 17.7 Release, SDK and deployment prerequisites
+
+Current runnable entrypoint is `cargo run --release --offline -p ciagomem-engine --example quickstart`. It uses MemoryJournal and a generated fixed record, not a deployed schema-registration server. No current container registry tag, CLI health command, npm package or Go/Rust network client publication is established by this specification. Source examples for M4–M5 are acceptance API targets.
+
+Before documenting a production image, ship an executable host, Dockerfile/build pipeline, SBOM/licenses, immutable signed image digest, supported OS/CPU/kernel capability matrix, tested entrypoint/UID/filesystem layout, configuration schema and upgrade/rollback policy. Publish the actual versioned artifacts and generated-client compatibility matrix. The root LICENSE remains authoritative; documentation does not invent a new enterprise license grant. A pure TypeScript SDK cannot claim native mmap/SCM_RIGHTS access without a separately delivered native adapter; use framed bytes when absent.
+
+The host CLI must provide `--version`, redacted `--check-config`, `health --ready`, graceful drain/shutdown and explicit offline recovery diagnostics. Readiness requires replay, identity/catalog/dedup availability and required durability boundary; liveness only reports process/reactor progress. A QUIC-enabled deployment explicitly exposes UDP as well as TCP. Production mounts for data, backup, trusted socket directory, certs and HugeTLB must be tested with least privilege; do not require broad host capabilities without proving which operation needs them. HugePage reservation must include header-region rounding, avoid consuming the OS reserve and reflect actual host limits. A kernel-minimum claim requires tested feature detection, not merely a version string.
+
+SDK release gates include Rust/Go/Node interop on identical BFBS/fingerprint, endian framing, partial reads, maximum lengths, capability test vectors, token renewal, exactly-once effect within dedup coverage, identity-file power-loss cases, unsupported feature rejection, FD export ownership/disposal and cross-family/tenant isolation. `flatc --conform` is an application CI precheck, not proof of server verifier safety or arbitrary semantic compatibility. Pin actual compiler/runtime versions in build manifests; do not imply one crate version mandates identical version strings for every language package without an interoperability test.
+
+### 17.8 General-purpose workload blueprints and acceptance matrix
+
+| Application blueprint | Modeling and required semantics | Qualification and limits |
+| --- | --- | --- |
+| General CRUD / sessions / profiles / orders | Separate families, custom BFBS, tenant namespaces, typed roots, versioned updates and expiry policy | M1–M5; retention/session expiration is explicit application/host work, not an automatic TTL service inferred from a field name |
+| Stateful AI / RAG | Transcript metadata, labeled retrieved records, vectors and bounded tool history; authenticated hybrid shortlist then exact threshold checks | Define dimension/tokenization/model version and quotas. Labels propagate through the actual read/derive/tool path; storage alone does not prevent every prompt injection or reduce token use by a measured percentage |
+| Wallets / gaming | Single-actor conditional mutation plus bounded history; multi-actor transfers use explicit participant coordination | Contention remains serialized per actor. Require nonnegative balance/transfer conservation/retry/overflow tests; no financial-certification claim from an example |
+| Multi-tenant SaaS | users/projects/org families, RESTRICT/CASCADE relationships and recoverable chunked deletion | Track registered/resident/active separately; enforce per-tenant admission/dedup/index quotas, cold membership and no resurrection after deletion |
+| Telemetry / edge / local services | Bounded event windows and batched aggregation, optional immutable local export adapter | A single actor extent is not an unbounded log/blob store.4,032 bytes is export data capacity, not an arbitrary document limit or full request latency proof |
+
+Existing verification and the following future suites form the build checklist. These named suites are requirements, not tests currently present:
+
+| Target suite | Required positive and negative cases |
+| --- | --- |
+| application_grammar | Every documented profile example, mixed keyword case, string-literal pipes/comments, unknown stage, extra named argument, invalid alias/meta writes,128 vs129 mutations, arrays at catalog bound,4096 vs4097 vector dimensions; all errors have correct UTF-8 spans |
+| conditional_mutation | Insufficient balance, stale version, two writers, overflow in final operation, false predicate, lost ACK, restart after terminal rejection ledger, different-digest retry; no partial mutation or duplicate effect |
+| configuration_contract | Default/profile/CLI/environment precedence, duplicate/unknown key,2-GiB dev,10.1875-GiB exact accounting, memory/cgroup/export/FD exhaustion, invalid TLS/principal/clock/anchor; failed startup never announces ready |
+| capability_codec_v2 | HMAC known-answer vectors across Rust/Go/TS, conjunctive duplicate caveats, changed key ID, malformed TLV/count, unknown tag, family widening, wrong client/namespace/session/boot, clock rollback, future caller timestamps and key rotation while queued |
+| sdk_retry_diagnostics | Split frames, reconnect, no remote span without negotiation, multibyte span bounds, logger panic/backpressure/redaction, identity-file lock/crash boundaries, Busy/Indeterminate/RetryTooOld/SequenceGap and bounded retries |
+| application_blueprints | CRUD family isolation, nullable/default semantics, search-order/rerank differential checks, transfer conservation, deletion restart/faults and local export projection lifetime; independently compare indexed vs reference results |
+| release_and_operations | Real published artifact install, readiness after replay, shutdown with genuine CQEs, native FD adapter disposal, qualified restart/rollback and signed manifest compatibility |
+
+Benchmark warm-up, dataset, schema/vector sizes, registered/resident/concurrent counts, read/write mix, key skew, hit rate, durability mode, batching, resource caps, hardware/kernel/CPU affinity, frequency/power policy and commit-ack boundary must be recorded. Report throughput plus p50/p99/p99.99 and confidence/sample counts separately for resident read, already-published export getter, export construction/IPC, cold load, local durable commit and quorum commit. Differential index tests compare identical authorized results with pushdown on/off. Run sustained ramps long enough to expose thermal throttling, GC/checkpoint/compaction and spool pressure;60 seconds is a smoke ramp, not sufficient durability or capacity qualification. Latency targets in earlier sections are objectives; none prove a million simultaneously active users, universal cost savings or sub-microsecond durable/network writes.

@@ -23,6 +23,8 @@ jobs:
       run: cargo fmt --all -- --check
     - name: Workspace and specification contracts
       run: python3 scripts/validate_workspace.py
+    - name: Documentation contracts
+      run: python3 scripts/validate_documentation.py
     - name: Default release tests
       run: cargo test --release --offline --workspace -- --nocapture
     - name: All-feature release tests

@@ -1,8 +1,11 @@
 # Production Use Cases & Architecture Blueprints
 
-CiagoMem — SLAE is designed to replace fragmented multi-database architectures (such as running PostgreSQL + Redis + Pinecone + Kafka simultaneously) with a single, unified actor data plane. 
+> **Implementation status:** This guide includes target architecture and acceptance API examples. Current runnable integration is the [embedded Rust quickstart](ciagomem-engine/examples/quickstart.rs), using non-durable MemoryJournal. Runtime BFBS families, general arrays, network SDKs/server and distributed services remain milestones in specification 14.11. Section 17 is the complete target application/operations contract; target examples are not runnable SDK releases or measured performance guarantees.
 
-Below are four complete production blueprints showing how to model schemas, configure durability, and execute CiaQL pipelines for real-world workloads.
+
+Ciagomem — SLAE is designed to replace fragmented multi-database architectures (such as running PostgreSQL + Redis + Pinecone + Kafka simultaneously) with a single, unified actor data plane.
+
+Below are four target workload blueprints showing how to model schemas, configure durability, and execute CiaQL pipelines for real-world workloads.
 
 ---
 
@@ -14,9 +17,9 @@ Autonomous AI agents require three distinct types of state on every turn:
 2. **Episodic Transcripts:** Full-text keyword recall over past conversations (traditionally in Elasticsearch).
 3. **Semantic Memory:** High-dimensional vector embeddings for similarity recall (traditionally in Pinecone/Milvus).
 
-Fetching from three separate systems adds 10–50 ms of network latency and introduces prompt-injection risks when untrusted external web data is mixed with system instructions.
+Additional service hops require workload measurement. Prompt-injection risk comes from how untrusted content is used; a database boundary alone does not prevent it.
 
-### The CiagoMem Solution
+### The Ciagomem Solution
 Each AI session or memory frame is stored as a single **Actor** containing scalar metadata, full-text fields, a quantized `SQ8` vector embedding, and a **CaMeL Provenance Label** (`External < AgentDerived < UserDirect < Policy`).
 
 #### Schema (`agent_memory.fbs`)
@@ -30,7 +33,7 @@ table MemoryEpisode {
   role: string (id: 3);
   transcript: string (id: 4);
   recent_tools: [string] (id: 5);
-  embedding: [float32] (id: 6);
+  embedding: [float] (id: 6);
 }
 
 root_type MemoryEpisode;
@@ -51,6 +54,7 @@ await client.mutate(
   }`
 );
 
+// Target example assumes a registered four-dimensional embedding.
 // 2. Hybrid Recall: Filter active sessions -> BM25 text match -> SIMD Cosine similarity -> RRF fusion
 const memories = await client.query(`
   scan family("agent_memories")
@@ -71,10 +75,10 @@ const memories = await client.query(`
 ## 2. High-Frequency FinTech Wallets & Real-Time Gaming State
 
 ### The Problem
-Financial ledgers, real-time bidding engines, and multiplayer game servers experience extreme write contention on hot accounts. Traditional relational databases suffer from B-Tree page locks, MVCC bloat, and vacuuming stalls when a single row is updated thousands of times per second.
+Wallets, bidding engines and game servers can create contention on hot accounts. Test the actual workload, transaction requirements and contention pattern before choosing an implementation.
 
-### The CiagoMem Solution
-Every wallet or player state is isolated in a single-writer owner core. Updates use CiaQL's **Compact Binary Delta Tail** and optimistic version preconditions (`expected_document_version`), committing via `io_uring` group-commit in ≤ 50 µs without rewriting the base FlatBuffer.
+### The Ciagomem Solution
+Every wallet or player state is isolated in a single-writer owner core. Updates use CiaQL's **Compact Binary Delta Tail** and optimistic version preconditions (`expected_document_version`), targeting qualified local durable group-commit latency (an objective, not an observed bound) without rewriting the base FlatBuffer.
 
 #### Schema (`wallet.fbs`)
 ```flatbuffers
@@ -116,13 +120,13 @@ const txResult = await client.mutate(
 ### The Problem
 Enterprise SaaS platforms manage millions of registered tenants where only 10–20% are active at any given moment. Keeping all tenants in RAM is prohibitively expensive, while deleting an organization with thousands of linked projects and users often locks tables or leaves orphaned records.
 
-### The CiagoMem Solution
-* **Massive Working-Set Density:** CiagoMem's TinyLFU admission filter and segmented CLOCK eviction allow a single 16 GiB node to host **1,000,000 registered tenants**, keeping the hot working set in 2 MiB HugePages while faulting cold actors from NVMe in ≤ 250 µs.
+### The Ciagomem Solution
+* **Massive Working-Set Density:** Ciagomem's TinyLFU admission filter and segmented CLOCK eviction are planned toward **1,000,000 registered tenants** on a fully budgeted 16 GiB node, keeping the hot working set in 2 MiB HugePages while loading cold actors under separately measured NVMe latency and queue budgets.
 * **Storage-Level Referential Integrity (`LinkGraph`):** Actors declare explicit `RESTRICT` or `CASCADE` dependency edges. Deletions can execute as a strict atomic batch or an asynchronous, fail-forward **Chunked Deletion Saga**.
 
 #### Linking Actors & Executing a Deletion Saga
 ```text
-# Prevent deleting Organization @1 if active Billing Invoice @2 exists
+# Prevent deleting Organization @1 while referencing Billing Invoice @2 exists
 @2 link add(target: @1, on_delete: RESTRICT)
 
 # Automatically cascade delete Workspace @3 when Organization @1 is deleted
@@ -131,7 +135,7 @@ Enterprise SaaS platforms manage millions of registered tenants where only 10–
 
 ```typescript
 // Start an asynchronous chunked deletion job (mode: 1) for a large organization tree
-// Immediately tombstones all dependent actors so they vanish from scans, then reclaims storage in chunks
+// Target recoverable bounded deletion plan; visibility fences and durable cleanup follow the job contract
 const deleteJob = await client.delete(
   orgSchema,
   "org-enterprise-01",
@@ -148,8 +152,8 @@ const deleteJob = await client.delete(
 ### The Problem
 When microservices or AI worker processes run on the same physical Linux host or edge appliance as the database, serializing responses over TCP loopback (`127.0.0.1`) wastes CPU cycles and memory bandwidth.
 
-### The CiagoMem Solution
-By connecting over CiagoMem's local Unix Domain Socket (`SOCK_SEQPACKET` at `/run/ciagomem/db.sock`), co-located processes receive a kernel-sealed, read-only **`memfd` Export Window** (`SealedExportWindow`) via `SCM_RIGHTS`.
+### The Ciagomem Solution
+By connecting over Ciagomem's local Unix Domain Socket (`SOCK_SEQPACKET` at `/run/ciagomem/db.sock`), co-located processes receive a kernel-sealed, read-only **`memfd` Export Window** (`SealedExportWindow`) via `SCM_RIGHTS`.
 
 ```rust
 // Connect locally via Unix Domain Socket (SOCK_SEQPACKET)
@@ -159,7 +163,10 @@ let transport = Transport::UnixSeqpacket {
 
 let mut client = Client::connect(transport, token, identity).await?;
 
-// Reads <= 4,032 bytes can be projected directly into a sealed read-only memfd page (p99 <= 300 ns)
+// Reads <= 4,032 bytes can be projected directly into a sealed read-only memfd page (getter latency excludes projection construction, FD passing and request latency)
 let doc = client.read(&schema, "user-42").await?;
 let profile = flatbuffers::root::<UserProfile<'_>>(&doc.bytes)?;
 ```
+## General application CRUD and telemetry
+
+Users, sessions, orders, projects, sensor readings and other custom families follow the same schema/CRUD model; gaming and wallets are examples, not a specialization boundary. Applications choose keys, fields, relationships, expiry/retention rules and business invariants. Large blobs and unbounded event histories need an explicit external/chunking design beyond a single 64 KiB extent. The target feature/qualification checklist is specification 17.8.

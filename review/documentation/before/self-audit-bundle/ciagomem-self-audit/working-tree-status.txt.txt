@@ -1,0 +1,26 @@
+ M MASTER_SPECIFICATION.md
+ M README.md
+ M ciagomem-core/Cargo.toml
+ M ciagomem-core/examples/layout.rs
+ M ciagomem-core/src/io.rs
+ M ciagomem-core/src/lifecycle.rs
+ M ciagomem-core/src/slot.rs
+ M ciagomem-core/src/uring.rs
+ M ciagomem-wal/src/gclog.rs
+ M ciagomem-wal/tests/r5_wal.rs
+ M ciagomem-wal/tests/r9_recovery.rs
+ D docs/PERPLEXITY_REVIEW_PROMPT.md
+ M docs/VERIFICATION.md
+ M docs/cleanup-manifest.json
+ M policy.json
+ M scripts/validate_workspace.py
+ M tests/r6_regressions.rs
+ M tests/r7_regressions.rs
+ M tests/r9_regressions.rs
+?? ciagomem-wal/tests/r10_recovery.rs
+?? docs/GEMINI_ARGON_REVIEW_PROMPT.md
+?? docs/R10_REMEDIATION.md
+?? docs/r10-evidence.json
+?? review/r10/
+?? scripts/validate_spec_contract.py
+?? tests/r10_regressions.rs

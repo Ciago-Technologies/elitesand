@@ -4,29 +4,28 @@
   "verification_depth": "impact",
   "delegation": "none",
   "reason_codes": [
-    "self-audit-buffer-ownership",
-    "checked-consumable-pins",
-    "release-ci-gates"
+    "complete-documentation-contracts",
+    "preserve-audited-runtime",
+    "verified-artifact-cleanup"
   ],
   "allowed_write_scope": [
     "ciagomem-slae/** (excluding vendor and .git)",
     "ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md",
-    "ciagomem-r10-fixed-review.zip",
-    "ciagomem-r9-fixed-review.zip",
-    "New File/ciagomem-r9-fix-patch.zip",
-    "New File/CiagoMem-SLAE R8 Remediation Verification (R9).md",
+    "ciagomem-documentation-review.zip",
+    "README.md (only after preserving unique content)",
     "Ciagomem-Self-Audit-R10.md",
-    "ciagomem-r11-fixed-review.zip"
+    "ciagomem-r10-fixed-review.zip",
+    "ciagomem-r11-fixed-review.zip",
+    "ciagomem-self-audit-evidence.zip",
+    "New File/** (only after evidence preservation)"
   ],
   "acceptance": [
-    "public arena access cannot bypass lifecycle or DMA ownership",
-    "overlapping lifecycle claims rejected; pending readers prevent DMA submission",
-    "pins cannot wrap; releases consume generation-bound lifecycle-specific tokens",
-    "default and all-feature release suites and compile-fail regressions pass",
-    "format, Clippy, mesh progress and workspace/spec validators run with limitations reported",
-    "update both specifications and remediation documentation without changing storage layouts",
-    "CI runs release/all-feature tests, formatting, Clippy and specification checks",
-    "fresh review ZIP includes current source, both specs and verification evidence"
+    "both full specifications identical and preserve audited layouts and code listing",
+    "unified target grammar, configuration, auth, diagnostics, retries, deployment and use-case acceptance contracts documented",
+    "all ten root user guides distinguish runnable APIs from planned features",
+    "documentation, workspace and format validators pass; runnable quickstart succeeds",
+    "remove obsolete outgoing bundles and verified redundant inputs, retain source/vendor/audit evidence",
+    "one current review ZIP contains both specs, updated guides and checksum inventory"
   ],
   "project_invariants": [
     "five-crate acyclic workspace",

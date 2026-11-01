@@ -1,3 +1,13 @@
+# Documentation contract completion — 1 November 2026
+
+Both full specifications are synchronized. Section17 and the ten user guides distinguish current libraries from planned host/SDK services. Documentation-only changes preserve runtime source and storage layouts.
+
+Fresh checks:165 default release tests and193 all-feature release tests passed; the all-feature run with nocapture showed three real io_uring bodies skipped. The embedded quickstart created actor1 and read75 credits. Formatting, workspace/specification and new documentation-contract validators passed. The documentation validator checks the consolidated EBNF structure with a negative self-check, protocol byte arithmetic, memory totals, guide links/status and the CI documentation gate; it does not implement the future query parser or server.
+
+Cleanup preservation/fingerprints are recorded in cleanup-manifest.json. See [documentation changes](DOCUMENTATION_CONTRACTS.md). Historical results below remain attributed to their revisions. No new hardware/performance qualification, hosted Actions execution or client/container release verification is claimed.
+
+---
+
 # Verification of the R11 self-audit remediation
 
 Local Linux x86_64 checks on 31 October 2026:
