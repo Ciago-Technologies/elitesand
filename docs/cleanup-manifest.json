@@ -237,5 +237,12 @@
       "baseline_commit": "f845b51c0858d08c32f400feac7335416e0171bb",
       "note": "Earlier review artifact; source/history and audit evidence retained in repository and replacement bundle."
     }
-  }
+  },
+  "superseded_review_sha256": [
+    {
+      "filename": "ciagomem-orchestration-review.zip",
+      "sha256": "788bf7675e3179c354e3e3fe7f9e0befb8b46760d98e290106e9d91efc0d3328",
+      "reason": "Regenerated in place after staleness correction; pre-fix reproductions preserved in review/staleness."
+    }
+  ]
 }

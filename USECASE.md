@@ -220,7 +220,7 @@ let slice = broker.read_context(&[memory], 1024, &controller)?;
 // Never insert it into system policy or automatically authorize a tool call.
 ```
 
-There is no generic Engine access in worker broker APIs. The current broker owns the Engine and limits workers to the exact sources/output for their lease. Controller ingestion cannot overwrite reserved publications. Wrong tenant/session/audience/boot, expired token or lease, output collision, stale source and excessive input/output all reject. Same-content live-task publication retries return the existing reference; conflicting retries reject. After a lost worker message, the controller can call result to reconcile before starting another job.
+There is no generic Engine access in worker broker APIs. The current broker owns the Engine and limits workers to the exact sources/output for their lease. Controller ingestion cannot overwrite reserved publications. Wrong tenant/session/audience/boot, expired token or lease, output collision, stale source and excessive input/output all reject. Same-content live-task publication retries return the existing reference only while non-stale and unexpired; stale/expired publications reject before cached success. Conflicting retries of otherwise valid publications reject. After a lost worker message, the controller can call result to reconcile before starting another job.
 
 ### Hybrid memory and target CiaQL workflow
 

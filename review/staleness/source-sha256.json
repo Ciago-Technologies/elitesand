@@ -1,0 +1,8 @@
+{
+  "ciagomem-engine/src/memory.rs": "888f586861f32e6760234c00818a3f721c4b8d3df4267d0f12aaa60926bceb6a",
+  "ciagomem-engine/tests/memory.rs": "5157552ad49b74d5ff660a0069ff4bc26d2cb57d27f7c42277064b3ee9fa5a1e",
+  "MASTER_SPECIFICATION.md": "22c18c50cc07bb53c86f0d252f2c1e49ace08af5551816474f6c24f865ee2c32",
+  "USECASE.md": "c26e2bc424b4b0892e63b16ad40c2657b94e4cbd3c076ff5c7f24ccbb1c0501b",
+  "MEMORY_BROKER_AUDIT_INPUT.md": "c044a0bc5d3fe48a124231522e82bf85c003a0b053cda64e879748b333aeea85",
+  "MEMORY_BROKER_AUDIT_CONTEXT.md": "fc6c6b4cde4e418adfbdf30115efaa41b3035f50ac2ac12ac453997c661fd7be"
+}

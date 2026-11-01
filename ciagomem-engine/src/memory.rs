@@ -175,7 +175,7 @@ impl<J: Journal> MemoryBroker<J> {
         let mut changed = vec![actor];
         while let Some(actor) = changed.pop() {
             for task in self.tasks.values_mut() {
-                if !task.stale && task.sources.iter().any(|s| s.actor == actor) {
+                if !task.stale && task.sources.iter().any(|s| s.actor.id == actor.id) {
                     task.stale = true;
                     changed.push(task.output);
                 }
@@ -301,7 +301,7 @@ impl<J: Journal> MemoryBroker<J> {
         self.tasks.get_mut(&lease.job).unwrap().reads += 1;
         Ok(sources)
     }
-    /// Same-content retries within the live task are idempotent; no second journal write.
+    /// Same-content retries of a live, non-stale publication do not write the journal again.
     pub fn publish(
         &mut self,
         lease: &WorkerLease,
@@ -309,11 +309,17 @@ impl<J: Journal> MemoryBroker<J> {
         worker: &VerifiedMacaroon,
     ) -> Result<MemoryRef> {
         let task = self.worker(lease, worker, OP_WRITE)?;
+        if task.stale {
+            return Err(Error::StaleReference);
+        }
         if summary.is_empty() || summary.len() > self.limits.summary_bytes {
             return Err(Error::Budget);
         }
         let digest = content_digest(summary.as_bytes());
-        if let Some((previous, _)) = task.published {
+        if let Some((previous, until)) = task.published {
+            if self.engine.observed_now() >= until {
+                return Err(Error::StaleReference);
+            }
             if previous != digest {
                 return Err(Error::Duplicate);
             }
@@ -350,7 +356,7 @@ impl<J: Journal> MemoryBroker<J> {
             job: lease.job,
         })
     }
-    /// Controller reconciliation after a lost worker completion message.
+    /// Historical completion metadata after a lost message; read_context checks freshness.
     pub fn result(
         &self,
         lease: &WorkerLease,
@@ -474,4 +480,52 @@ fn hex(digest: &[u8; 32]) -> String {
         write!(s, "{byte:02x}").unwrap();
     }
     s
+}
+
+#[cfg(test)]
+mod invalidation_tests {
+    use super::*;
+    #[test]
+    fn replacement_event_invalidates_old_incarnation_and_its_descendants() {
+        let actor = |id, incarnation| ActorRef { id, incarnation };
+        let task = |output, source| Task {
+            output,
+            worker: 2,
+            deadline: 100,
+            reads: 0,
+            stale: false,
+            sources: vec![SourceStamp {
+                actor: source,
+                digest: [1; 32],
+            }],
+            published: Some(([2; 32], 200)),
+        };
+        let engine = Engine::new(
+            1,
+            crate::Limits::default(),
+            crate::MemoryJournal::new(1024),
+            1,
+            std::sync::Arc::new(ciagomem_core::MonotonicClock),
+        )
+        .unwrap();
+        let mut broker = MemoryBroker {
+            engine,
+            tenant: 11,
+            controller: 1,
+            audience: 7,
+            id: 1,
+            next: 3,
+            limits: MemoryLimits::default(),
+            tasks: [
+                (1, task(actor(10, 100), actor(1, 101))),
+                (2, task(actor(11, 100), actor(10, 100))),
+            ]
+            .into(),
+        };
+        // Simulate a future trusted replacement event. Today's public ingest rejects
+        // changed incarnations; this tests the invalidation boundary independently.
+        broker.invalidate(actor(1, 999));
+        assert!(broker.tasks[&1].stale);
+        assert!(broker.tasks[&2].stale);
+    }
 }

@@ -4,6 +4,14 @@ Documentation-only update: both complete specifications include15.13–15.18, an
 
 ---
 
+# MemoryBroker staleness correction — 1 November 2026
+
+Fresh release suites passed **186 default /214 all-feature tests**, including19 broker integration cases and the defensive invalidation unit test. Before correction, stale identical publication retries and expired-publication retries returned Ok; the hypothetical changed-incarnation invalidation event also failed its private unit regression. The public changed-incarnation ingest regression passed before/after because Engine already rejects replacement. See [finding disposition](MEMORY_STALENESS_REMEDIATION.md).
+
+Formatting, whitespace and workspace/document validators passed. Clippy completed with warnings. Three real io_uring bodies skipped locally. Plain-text audit files and the review ZIP are refreshed to the corrected source/specification; prior logs below remain historical. No paid-model, hardware, Miri/fuzzing or persisted task recovery qualification is claimed.
+
+---
+
 # Memory orchestration implementation — 1 November 2026
 
 Primary-source security/cost research was recorded before runtime changes in [MEMORY_ORCHESTRATION_RESEARCH.md](MEMORY_ORCHESTRATION_RESEARCH.md). The new bounded MemoryBroker integrates existing Engine/Label/journal paths; specification18 and the USECASE blueprint distinguish current code from target service/SDK/delta features.
