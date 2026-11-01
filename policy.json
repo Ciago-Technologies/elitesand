@@ -4,8 +4,8 @@
   "verification_depth": "impact",
   "delegation": "none",
   "reason_codes": [
-    "correct-malformed-ci-tls-checksum",
-    "verify-publisher-digest-and-bootstrap",
+    "install-openssl-default-configuration",
+    "smoke-test-custom-prefix-certificate-generation",
     "push-ci-fix"
   ],
   "allowed_write_scope": [
@@ -16,9 +16,9 @@
     "ciagomem-single-node-review.zip"
   ],
   "acceptance": [
-    "Pinned TLS archive SHA256 is exactly 64 hex digits and matches publisher and downloaded bytes",
-    "Corrected checksum step and documentation/workspace validation pass locally; report full bootstrap and remote CI limitations honestly",
-    "Commit and push the fix without force"
+    "TLS provider install includes default configuration via upstream install_ssldirs target",
+    "Certificate generation smoke test precedes Rust tests; network suite and validators pass with release configuration",
+    "Commit and push the fix; distinguish local checks from remote CI status"
   ],
   "project_invariants": [
     "five-crate acyclic workspace",

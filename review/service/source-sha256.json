@@ -71,5 +71,6 @@
   "scripts/check_mesh_progress.py": "8b962f7d3a66b5ea018cf00c932a4e6db6e386a61cda022c60aaa9e679477365",
   "scripts/validate_documentation.py": "bba3a6a2889ff835bf9eeb84c692aca9b23330154d5857efd05770faa6ba5675",
   "scripts/validate_spec_contract.py": "b4487a216cc6d827237f2fb7b89a1c29a663910752cfeef7ade2135263e49638",
-  "scripts/validate_workspace.py": "63ced29be285dbed5cefc4f10b00e8326da497cf1c6bd5d6da9c8d8a814d0048"
+  "scripts/validate_workspace.py": "63ced29be285dbed5cefc4f10b00e8326da497cf1c6bd5d6da9c8d8a814d0048",
+  ".github/workflows/rust.yml": "361acd34ce19f6f9d90b27a668be02d6054a17a0ff15dab1fa8e8b5f5f261f40"
 }

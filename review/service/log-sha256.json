@@ -46,5 +46,9 @@
   "review/single-node/before-lock-fix.log.txt.gz": {
     "uncompressed_sha256": "9ff08374d9eabe9c353ea6789d0759f29ab4b325ce28b7eb8110e7b554964096",
     "uncompressed_bytes": 297854
+  },
+  "review/service/ci-config-network.log.gz": {
+    "uncompressed_sha256": "0ed1679a74fc10bf16504e3569daf8ce7d3010522e7a7f535e521566a0a44e89",
+    "uncompressed_bytes": 287492
   }
 }

@@ -258,6 +258,11 @@
       "filename": "ciagomem-single-node-review.zip",
       "sha256": "cac1ad6442601927238e56b17f2eaac55aa6a61eb1da0f4d8129cc135fb7dc77",
       "reason": "Refreshed in place with corrected CI TLS checksum and malformed-pin validation."
+    },
+    {
+      "filename": "ciagomem-single-node-review.zip",
+      "sha256": "55d4f6386fb6a5aa275688fa8f7467e161f12eb5f59f69897671537a296eae1e",
+      "reason": "Refreshed in place with OpenSSL configuration installation and CI certificate smoke check."
     }
   ]
 }

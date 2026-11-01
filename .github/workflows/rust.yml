@@ -27,7 +27,9 @@ jobs:
         cd "$RUNNER_TEMP/openssl-3.5.9"
         ./Configure --prefix="$RUNNER_TEMP/ciagomem-tls" --libdir=lib shared no-tests
         make -j2
-        make install_sw
+        make install_sw install_ssldirs
+        test -s "$RUNNER_TEMP/ciagomem-tls/ssl/openssl.cnf"
+        (umask 077; LD_LIBRARY_PATH="$RUNNER_TEMP/ciagomem-tls/lib" "$RUNNER_TEMP/ciagomem-tls/bin/openssl" req -x509 -newkey ed25519 -nodes -subj /CN=ciagomem-ci-smoke -days 1 -keyout "$RUNNER_TEMP/tls-smoke.key" -out "$RUNNER_TEMP/tls-smoke.pem")
         printf 'LIBRARY_PATH=%s/lib\nLD_LIBRARY_PATH=%s/lib\n' "$RUNNER_TEMP/ciagomem-tls" "$RUNNER_TEMP/ciagomem-tls" >> "$GITHUB_ENV"
         printf '%s/bin\n' "$RUNNER_TEMP/ciagomem-tls" >> "$GITHUB_PATH"
     - name: Formatting
