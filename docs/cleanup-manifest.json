@@ -253,6 +253,11 @@
       "filename": "ciagomem-single-node-review.zip",
       "sha256": "d542e2bce8cfd0d7ccddda81db3548f6ddd0a2bb865264cc1ac415b0ac8a1277",
       "reason": "Pre-network worker bundle superseded in place by the TLS/durable-retry service bundle; historical evidence retained under review/single-node."
+    },
+    {
+      "filename": "ciagomem-single-node-review.zip",
+      "sha256": "cac1ad6442601927238e56b17f2eaac55aa6a61eb1da0f4d8129cc135fb7dc77",
+      "reason": "Refreshed in place with corrected CI TLS checksum and malformed-pin validation."
     }
   ]
 }

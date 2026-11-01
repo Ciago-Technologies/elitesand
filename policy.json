@@ -1,12 +1,12 @@
 {
-  "planning": "deep",
+  "planning": "compact",
   "context_depth": "dependency",
   "verification_depth": "impact",
   "delegation": "none",
   "reason_codes": [
-    "durable-client-retry-ledger",
-    "authenticated-bounded-network-reactor",
-    "finish-single-node-service-and-push"
+    "correct-malformed-ci-tls-checksum",
+    "verify-publisher-digest-and-bootstrap",
+    "push-ci-fix"
   ],
   "allowed_write_scope": [
     "ciagomem-slae/** (excluding vendor and .git)",
@@ -16,11 +16,9 @@
     "ciagomem-single-node-review.zip"
   ],
   "acceptance": [
-    "Mutations and retry outcomes persist in the same authenticated WAL batch; reboot/lost ACK cannot execute the same intent twice",
-    "Bounded TLS1.3/mTLS reactor, strict framing, principal mapping, backpressure and graceful shutdown have adversarial socket tests",
-    "Persistent client identity state preserves exact pending bytes across disconnect/restart; conflicts and old sequences fail closed",
-    "Full default/all-feature release suites, document/workspace checks and packaged offline build pass; unavailable hardware checks are explicit",
-    "Commit the completed single-node work and push normally without force; report remaining hardware/cluster qualification honestly"
+    "Pinned TLS archive SHA256 is exactly 64 hex digits and matches publisher and downloaded bytes",
+    "Corrected checksum step and documentation/workspace validation pass locally; report full bootstrap and remote CI limitations honestly",
+    "Commit and push the fix without force"
   ],
   "project_invariants": [
     "five-crate acyclic workspace",

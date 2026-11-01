@@ -69,7 +69,7 @@
   "ciagomem-wal/tests/r8_recovery.rs": "aeae6d3daf31baec1d0abc2a8eb0635fd807ede72bef14bdc54463e7d7d1dbd6",
   "ciagomem-wal/tests/r9_recovery.rs": "6db09feb6707dddabb66c64396030cb7b15b48528e338782691e5b448dd85508",
   "scripts/check_mesh_progress.py": "8b962f7d3a66b5ea018cf00c932a4e6db6e386a61cda022c60aaa9e679477365",
-  "scripts/validate_documentation.py": "13d02a4f8c4afbe101343eb9bbb1c0b37dc4d37fc91a11a698ce84ade102ebfe",
+  "scripts/validate_documentation.py": "bba3a6a2889ff835bf9eeb84c692aca9b23330154d5857efd05770faa6ba5675",
   "scripts/validate_spec_contract.py": "b4487a216cc6d827237f2fb7b89a1c29a663910752cfeef7ade2135263e49638",
   "scripts/validate_workspace.py": "63ced29be285dbed5cefc4f10b00e8326da497cf1c6bd5d6da9c8d8a814d0048"
 }

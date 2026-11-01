@@ -11,3 +11,5 @@ Earlier review/single-node logs/fingerprints describe the pre-network worker mil
 The extracted ZIP also passed263 all-feature release tests with an empty Cargo home and a separate target directory, fully offline (package.log.gz). This uses the same installed system TLS dependency and preserves the six native/TCP skips.
 
 Large raw logs are losslessly gzip-compressed; use gzip -dc to read them. log-sha256.json verifies the exact decompressed bytes for current and preceding worker-stage evidence. Short validator/diagnostic logs remain plain text.
+
+CI checksum correction: the workflow pin accidentally contained65 hex digits (an extra leading1). The corrected64-digit digest matches both the publisher checksum file and the freshly downloaded50.8MiB archive. The exact sha256sum command passes; a malformed-pin regression check and workspace/documentation validators pass. A full local provider build reached Configure but stopped because this host lacks Perl FindBin.pm. Remote CI must confirm the complete provider build; no new Rust runtime changes or full-suite rerun are claimed for this checksum-only correction.

@@ -92,6 +92,9 @@ def main():
     assert (ROOT / 'ciagomem-engine/src/bin/ciagomem-server.rs').exists()
     assert (ROOT / 'ciagomem-engine/examples/network_client.rs').exists()
     assert 'Install pinned TLS provider' in workflow
+    checksum = re.search(r"printf '([0-9a-f]+)  %s", workflow)
+    assert checksum and re.fullmatch(r'[0-9a-f]{64}', checksum[1]), 'TLS SHA256 pin must have exactly 64 hex digits'
+
     print('Checked full specification mirror, consolidated grammar, wire sizes, budgets, guide status/links and CI gate.')
     print('VERDICT: PASS')
 
