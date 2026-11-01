@@ -1,3 +1,15 @@
+# Scaling audit patches applied — 1 November 2026
+
+Six documentation patches close viral-actor read distribution, analytical view progress/retention, parked cold-fault resource safety, gateway/backend memory ownership, measured hot-set density and workload-specific concurrency/replacement acceptance. They extend15.3 and15.13–15.18 without changing layouts, grammar or runtime code. All ten guides reflect the contracts. The standalone whitepaper mirrors MASTER_SPECIFICATION.md.
+
+---
+
+# Horizontal scaling and Hub-and-Spoke documentation extension — 1 November 2026
+
+Specification15.13–15.18 adds canonical bucket-to-directory routing, principal-bound gateway multiplexing, aggregate bounded admission, isolated immutable-snapshot query workers, reclaimed hot publications, durable bulk manifests and all fifteen modality mappings. It distinguishes cluster-wide1M outstanding requests from user counts and preserves the complete16-GiB storage-node profile and narrowly scoped local-read objective. Immediate work remains existing single-node durability/recovery, authenticated bounded hosting and consistent indexes; extended database modalities are separate milestones. Both full specifications and all ten user guides are synchronized. No Rust, wire layout, storage header or grammar changes are part of this revision. Prior documentation notes below remain historical.
+
+---
+
 # Application and operations documentation completion
 
 This revision completes the missing specification contracts without changing runtime implementations. Section17 is mirrored in both full specifications; it makes general application CRUD, AI memory, SaaS, telemetry and local services explicit. Wallets and gaming are examples of contention-sensitive business state, not the product's only scope.

@@ -1,12 +1,12 @@
 # Ciagomem — SLAE: Technical Whitepaper and Master Engineering Specification
 
-**Version:** 3.0, R10 remediation and schema/distributed contract revision — 31 October 2026\
+**Version:** 3.0, R11 foundations, memory orchestration and horizontal multi-model contract revision — 1 November 2026\
 **Product:** Ciagomem — SLAE, the Unified State-Log Actor Engine (“The Store”)\
 **Language:** CiaQL — Ciagomem Query and Cognitive Language\
 **Status:** Architecture and component implementation; **not signed off for production**\
 **Workspace:** [`ciagomem-slae`](README.md), package version `0.3.0`
 
-This revision incorporates the [R10 verification report](review/r10/Ciagomem-SLAE-R9-Remediation-Verification.md.txt) and current R10 patch ZIP; R9 evidence remains under review/r9. Earlier reports are retained in [review/reports](review/reports), with patch/probe/log evidence under review and original extracted source evidence under review/initial-source. Superseded ZIPs and extracted workspaces were removed after preservation; see the [cleanup manifest](docs/cleanup-manifest.json). The current workspace is authoritative; historical evidence is not source to copy over it.
+Historical remediation evidence includes the [R10 verification report](review/r10/Ciagomem-SLAE-R9-Remediation-Verification.md.txt) and its preserved R10 patch evidence; R9 evidence remains under review/r9. Earlier reports are retained in [review/reports](review/reports), with patch/probe/log evidence under review and original extracted source evidence under review/initial-source. Superseded ZIPs and extracted workspaces were removed after preservation; see the [cleanup manifest](docs/cleanup-manifest.json). The current workspace is authoritative; historical evidence is not source to copy over it.
 
 “Must” describes a design requirement. “Implemented” identifies code present in the workspace. Targets and proposed deployment settings are not measurements or production guarantees. No Miri, cross-architecture, power-cut, or performance result from the supplied review is represented as a result obtained for this revision.
 
@@ -27,6 +27,10 @@ This revision incorporates the [R10 verification report](review/r10/Ciagomem-SLA
 13. [Verification and production exit criteria](#13-verification-and-production-exit-criteria)
 14. [Application schemas, collections, array storage and language clients](#14-application-schemas-collections-array-storage-and-language-clients)
 15. [Concurrency scaling, placement, migration and restart contracts](#15-concurrency-scaling-placement-migration-and-restart-contracts)
+
+16. [R11 ownership and pin lifetimes](#16-r11-self-audit-remediation-cpudma-ownership-and-pin-lifetimes)
+17. [Application and operator contract](#17-complete-application-and-operator-documentation-contract)
+18. [Sub-agent memory orchestration](#18-sub-agent-memory-orchestration-and-hybrid-context-assembly)
 
 ## 1. Scope and review disposition
 
@@ -1403,6 +1407,9 @@ This matrix supplements the review-resolution matrix; **target** is a required m
 | Go / TS SDKs | Not implemented or published | M5b: generated-root verification, lossless types, client-state persistence and interoperability fixtures |
 | Integrated durability / deletion | WAL/checkpoint/security components and reference in-memory journal; full reactor/replay/repair missing | Required before M4 durable ACKs or any production database claim |
 | Multi-node active load scaling | Core mesh components and migration/replication design direction; no complete distributed server | M6: placement, replicas/consensus, routing epochs, resharding, failure recovery and SLO qualification |
+| Gateway routing / admission | No external gateway or running host; core SPSC/credit primitives exist | M4/M6: principal-bound multiplexing, aggregate bounded lanes and epoch-fenced placement under15.13 |
+| Hub-and-Spoke query isolation / hot publication | Reference Engine executes synchronously; Left-Right host publication absent | Budgeted immutable snapshot workers and reclaimed hot views under15.14–15.15 |
+| Tiered segments / fifteen modality map | Actor/checkpoint libraries and reference indexes; no bulk manifest engine or broad DBMS compatibility |15.16–15.18: committed segment lifecycle and separately qualified extended modalities |
 
 Implementation dependencies are strict: first integrate/version the node journal/recovery path; then M1 catalog and identity durability; M2 membership/scan epochs; M3 bounded document/delta path; M4 transport/auth/dedup; M5 SDK conformance; M6 distributed qualification. Codec work can be developed independently against fixtures, but durable success cannot ship before its storage dependencies. Each milestone includes migration/rejection behavior for older body formats, bounded resource accounting and failure injection, rather than only a success-path demo. M1 can load arbitrary accepted structural schemas without engine recompilation; arbitrary application business logic still requires the application or a separately installed trusted upcaster.
 
@@ -1609,6 +1616,36 @@ Define resident hot working set W as bytes of actors touched within the reuse in
 | Offered load above sustainable service | Bounded queues fill; return Busy/retry-after or defer before acceptance. Do not turn every connection into an unbounded pending request. |
 
 Illustrative arithmetic only: with E=16 KiB, one dirty16 KiB write plus one16 KiB read per replacement and a hypothetical **shared**1 GiB/s storage limit, bandwidth ceiling is32,768 replacements/sec before WAL/replication; with100,000 IOPS and two I/Os/fault, the independent IOPS ceiling is50,000. Thus the smaller ceiling is32,768, not a device measurement. Different read/write channels or clean victims change the formula. If more than1% of reads miss, a fast-hit path alone cannot establish end-to-end P99. Use Little's law `in_flight=lambda*mean_latency` for queue planning, not active-user counts as a throughput metric.
+
+#### One million registered users and the 10–30% hot-set assumption
+
+The target density statement is one million registered user identities on a qualified16-GiB storage node, with an explicitly bounded resident working set. A user identity is not necessarily a tenant, session or actor; the deployment must state its mapping and records per user.
+
+“10–30% hot” is a workload assumption measured over a declared reuse interval. Report both the fraction of actors resident and their total bytes. A percentage of users alone does not determine memory usage or cache-hit rate.
+
+For illustration, assuming exactly one actor per registered user:
+
+| Resident actors | Extent size | Extent bytes expressed in GiB |
+| ---: | ---: | ---: |
+| 100,000 | 4 KiB | 0.381 |
+| 300,000 | 4 KiB | 1.144 |
+| 100,000 | 16 KiB | 1.526 |
+| 300,000 | 16 KiB | 4.578 |
+| 100,000 | 64 KiB | 6.104 |
+| 300,000 | 64 KiB | 18.311 |
+
+These values exclude separate slot headers, arena rounding, free reserves, sidecars, publications, indexes and every non-arena region. The final row cannot fit a16-GiB node, even though only30% of users have one resident actor.
+
+Capacity admission must satisfy both:
+
+- Actual allocated extents, rounded slot-header regions and arena free reserves fit the configured arena budget.
+- All arena and non-arena regions together fit the complete host budget, including HugeTLB memory even where ordinary RSS/cgroup counters report it separately.
+
+Cold identities still require accounted directory/catalog metadata. Historical records, dense vector originals and analytical segments are retained on qualified NVMe/object-storage tiers with bounded RAM caches. The disk tier has its own capacity, replica, retention and restore requirements.
+
+Do not evict hot data merely to maintain an arbitrary percentage. Cache policy uses measured reuse and hard byte quotas. If the hot working set grows, reduce admission, change the qualified profile or add storage nodes. Sustained cold misses change throughput and latency; tiering does not preserve local-read latency for absent data.
+
+The existing profile is16 GiB, or17,179,869,184 bytes. A machine advertised as decimal16 GB requires a separately reduced profile.
 
 ### 15.4 Anti-thrashing, generation headroom and FreezeCheckpoint
 
@@ -1850,6 +1887,261 @@ Machine-checkable distributed layout/capacity ledger:
   "participant_limit":64
 }
 ```
+
+### 15.13 Horizontal scaling and the one-million-request qualification contract
+
+**Target distributed specification, not implemented service capacity.** Sections15.13–15.18 extend the existing15.3–15.12 contracts. They preserve thread-per-core ownership, io_uring completion gates, five4–64 KiB extent classes, word-atomic Boehm seqlocks, FlatBuffers, SlotHeader128/align64, SlotHandle, EnvelopeV2, CaMeL and SealedExportWindow. No header, wire layout or grammar changes follow from this section. “16 GB” in deployment claims must name units: the existing profile is **16 GiB = 17,179,869,184 bytes**, not16,000,000,000 bytes. A decimal16-GB machine needs a smaller explicit profile.
+
+The scaling objective is **one million outstanding requests across a qualified cluster**, with bounded per-node work. It is not one million CPU operations executing simultaneously on a16-GiB node. Count separately registered users, active users over a named time interval, physical connections, logical sessions, offered requests/sec, admitted requests/sec, outstanding requests and resident working-set bytes. One user may own many actors and issue many requests. The original1M-registered-tenant density objective remains separate from this cluster concurrency objective.
+
+For a steady stable workload, Little's law is `outstanding = completed_requests_per_second * mean_end_to_end_seconds`. At1M completions/sec and10ms mean latency, about10,000 requests are outstanding;1M outstanding at that throughput implies about1 second mean latency. A finite burst is different: with no new arrivals,1M equal-cost requests on a hypothetical100,000-completion/sec service take about10 seconds to drain. None of these examples measures this engine.
+
+Select node count using both measured resource demand and admission capacity. For node i, let qualified service rate be `mu_i` under the stated workload/SLO and admitted outstanding limit be `L_i`. Require offered rate below the sum of usable `mu_i` with explicit failover/headroom, and `sum(L_i) >= accepted_cluster_outstanding`. For example100 nodes with10,000 available request reservations each provide1M reservation slots; this is arithmetic, not throughput or latency proof. A failed/hot partition reduces available capacity; aggregate idle cores do not make one actor's serial mutations parallel. Gateways must not claim backend admission for requests waiting only in their own queues. Insufficient reservations return Busy before acceptance.
+
+Each storage node obeys the complete16-GiB profile in15.3; total cluster RAM is the sum of all storage, gateway, query and control-plane hosts. Horizontal scaling increases total resources. Resident<=200ns remains the **unmeasured local validated small-read objective** in13.3, excluding routing, auth, queues, serialization, query execution, I/O, durable ACKs and model inference. Delta append preparation, index work, compaction and mutation commits have separate measured budgets; no<=200ns mutation or end-to-end task guarantee is introduced.
+
+#### Hash-to-Core Routing through authoritative placement
+
+An external gateway authenticates the client and derives a canonical logical key from trusted `(namespace_id, tenant_incarnation, family_id, actor_id)`. The target routing profile uses keyed BLAKE3-256 over the ASCII domain `ciagomem-route-v1` followed by little-endian namespace_id:u32, tenant_incarnation:u128, family_id:u16 and actor_id:u64. Interpret the first8 digest bytes as a little-endian u64 and reduce modulo the configured virtual bucket count in1..2^32. The route key is distinct from identity/authentication keys and accessible only to trusted routing services. Hash version, route-key epoch and bucket count belong to committed routing configuration; changing them requires an explicit directory migration, never a unilateral gateway update. For primary-key requests, first resolve identity under14.4; a client-supplied actor ID cannot bypass that registry. Hashing is a routing hint, never authorization.
+
+Resolve `(namespace,bucket)` through15.7's PlacementDirectory to `(primary_node,owner_core,placement_epoch)` and apply explicit actor overrides/splits. Do not independently compute `hash % live_nodes` or `hash % live_cores`: membership changes would disagree with live migration and durable ownership. Cached routes carry expected_placement_epoch and full tenant/actor incarnations. The target node revalidates authority; stale routes fail with ActorMoved before LSN assignment and trigger a bounded authenticated refresh. Reject/reconcile a stale snapshot or mutation rather than serve from the old owner. In-flight retries preserve client identity, sequence and semantic digest.
+
+The gateway reaches the owner through a core-addressed stream or a bounded node ingress dispatcher. Transport decoding may occur on another core, so account for that hop; direct ownership is not a promise of zero cross-core messages. Actor-local mutations need no global data lock. Cross-actor transactions, consensus, migration and shared publication still coordinate under existing epoch/Calvin rules. Multi-family scans fan out to authorized buckets under an explicit query budget; they cannot route as one point lookup. Keep each cross-bucket request within15.7's64-entry epoch-vector bound; larger fanout uses bounded subrequests and coordinator state under the declared query visibility contract.
+
+#### Gateway multiplexing and bounded ingress
+
+Gateway fleets terminate client TLS/QUIC sockets and map many authenticated logical sessions onto a bounded persistent stream pool per destination node/core. Pool size and stream concurrency are deployment parameters established by measurement; a TCP pool must account for head-of-line blocking, while QUIC still has finite connection/flow-control state. Backend stream_id is unique among live requests on that connection, not a globally unique session or idempotency key. Never reuse it until completion/cancellation is reconciled.
+
+Multiplexing moves physical client socket costs to gateway hosts; it does not remove them. Charge gateway TLS/socket buffers, principal/session tables, pending bodies, response buffers and retry state under independent hard limits. Every forwarded request binds its original authenticated principal/session and capabilities. Authenticate gateway-to-node transport, preserve end-client authority and recheck scope/expiry/boot at the node; a pooled connection's privileged credential must not authorize all its clients.
+
+Reuse15.5's producer-specific SPSC lanes. A gateway/network thread owns a producer endpoint; multiple producers never push into one SPSC endpoint. The4,096 data descriptors/core and512 control descriptors/core are aggregate core budgets across lanes, not allowances multiplied by gateways. Reserve payload/response bytes separately. Data admission requires tenant tokens plus queue, execution, snapshot, output and durability/dedup credits appropriate to the operation. Return **Status8 (Busy)** before mutation acceptance/LSN assignment when admission fails. OutboundFlow's ShedAdmission retains its existing item; it is not permission to discard accepted work. Genuine CQEs, decisions and credit returns retain reserved progress capacity.
+
+Define request acceptance precisely: the backend owns a bounded execution reservation after admission; a mutation may then become durable and must be reconciled if its response is lost. A disconnect or gateway deadline cannot turn it into an uncommitted request. New rejected work can retry with bounded backoff and the original intent; accepted/uncertain work uses14–17's idempotency rules. Cap queues at every hop, enforce tenant fairness and propagate cancellation without freeing buffers still owned by genuine I/O.
+
+#### Gateway and database memory ownership
+
+The gateway tier terminates external client connections and carries their client-facing socket buffers, TLS state, connection tracking and bounded pending requests. Multiplexing reduces the number of physical connections reaching each database node.
+
+“Stateless gateway” means that the gateway holds no authoritative database state or sole durable transaction outcome. It still holds transient connection, routing, session and in-flight request state. Gateway failure may drop transport connections; clients reconcile uncertain mutations through durable idempotency state rather than assuming they were aborted.
+
+Database nodes still require memory for:
+
+- Pooled gateway-to-node sockets and transport buffers.
+- Backend TLS/mTLS or other required authenticated transport state.
+- Request decoding, capability verification, response queues and deduplication.
+- io_uring rings, registered/staging buffers and completion bookkeeping.
+- Kernel networking, page tables, allocators and observability.
+
+These costs remain inside the existing complete16-GiB node profile. The1,536-MiB kernel/network region and other non-arena reservations in15.3 must not be reassigned to actor payload merely because a gateway exists.
+
+Gateway and external Query Worker hosts have separately measured budgets and are included in total deployment cost. Colocated workers consume the database host's existing budget.
+
+Admission limits apply independently to gateway connections, gateway pending bytes, backend streams and database execution reservations. A gateway must propagate backend backpressure rather than building an unbounded hidden queue. Maintain end-client authority on every multiplexed request; connection pooling never merges tenant permissions.
+
+### 15.14 Hub-and-Spoke isolation and query execution
+
+**Hub:** the owner reactor performs bounded actor command dispatch, validated resident point reads, short atomic publication and completion/control progress. Target compact deltas follow14.5–14.6, including prevalidation, bounded staging and owner-only publication; they do not make FlatBuffers vectors freely mutable. WAL sealing/persistence, multi-actor decisions, promotion and compaction are asynchronous state machines with per-tick work limits. Query parsing, model inference, unbounded index builds, joins and scans execute outside reactor ticks; reactor frame/command decoding remains bounded. The reference Engine currently executes queries synchronously; this worker split is planned.
+
+**Spokes:** budgeted asynchronous Query Workers execute large CiaQL aggregations, relational joins, graph traversals, ANN search, vector reranking and analytical I/O. They may evaluate predicates/rank results or propose a mutation, but never write actor bytes or authoritative indexes directly. Proposed mutations return to the owner for current authorization, expected-version validation, transaction handling and WAL admission. Local queries may retain a small bounded direct path only after measured work limits are met.
+
+```text
+Clients -> Gateway fleet -> epoch-fenced bounded owner ingress
+                                      |
+                          Owner reactor (Hub)
+                            |                 |
+                   Point read/delta      Bounded snapshot grant
+                            |                 v
+                       WAL + CQEs     Query Workers (Spokes)
+                            |          |                |
+                     Durable result   |        Tiered immutable segments
+                                      v
+                            Bounded results / owner-validated proposals
+```
+
+A snapshot grant binds namespace/tenant, full actor incarnation, handle generation, placement/schema/policy epochs, document version, applied/durable watermark, provenance/readers and requested visibility. Never hand a worker an unrestricted mutable arena pointer. A seqlock validates a finite read; it does not pin arbitrary mutable bytes for a long query. Capture a bounded immutable copy or retain an already immutable publication under a lifetime guard. An explicit lifecycle pin may retain a slot during bounded capture under the R11 ownership rules, but a pin prevents reuse only: it does not freeze writes or make payload bytes an immutable snapshot. Registered/DMA-owned payloads must obey lifecycle exclusion. Read-only workers cannot bypass either rule.
+
+Worker reservations charge queued jobs, CPU time, scan/candidate work, resident snapshots, per-actor/tenant pin counts and duration, segment-cache bytes, intermediate/spill disk and result bytes. Copy/release a pin or cancel when its retention budget expires; do not retain the entire hot arena for an analytical scan. Cancellation first stops work and drains genuine I/O before releasing referenced buffers. Chunked snapshot capture occurs under owner work budgets. Per-actor stable snapshots do not imply a transaction-wide snapshot: multi-actor SQL/analytics must use a declared consistent cut with retained history, or explicitly negotiated weaker per-actor visibility. Reject unsupported isolation rather than inventing a global LSN across independent streams.
+
+Spokes **must never synchronously block reactor progress**: reactors never wait on a worker future or take a worker-held mutex. CPU affinity/cgroup budgets, reserved reactor CPUs, separate bounded analytical I/O queues and bounded memory-bandwidth demand protect the path. Heavy jobs defer/shed when budgets are exhausted. Workers on the same host still share caches, DRAM bandwidth and devices; absolute absence of latency interference is not promised. Colocated workers fit the existing total profile by reducing other allocations; external query nodes have separately disclosed budgets. The default14-reactor profile must not additionally assume unreserved worker CPUs/RAM.
+
+#### Asynchronous analytical views and bounded change retention
+
+Columnar conversion, ANN construction/rebuild, analytical materialization and large text/vector index maintenance MUST execute on budgeted workers outside owner-reactor execution. The owner performs bounded transactional work and publishes committed change references; it does not synchronously run an analytical build before completing a normal actor mutation.
+
+Indexes required to enforce uniqueness, referential integrity or other write invariants remain part of the authoritative transaction boundary. Their correctness must not depend on an eventually updated analytical projection. If required validation cannot finish within owner work limits, defer that operation through a bounded state machine.
+
+For each analytical view, record:
+
+- View identity, schema/index version and committed manifest generation.
+- Source log-stream identity and placement lineage.
+- A contiguous processed-through watermark for each source stream.
+- The transactional visibility cut represented by the published view.
+- Rebuild state, retained-change bytes and oldest unprocessed change.
+
+A processed-through watermark means that every relevant committed change up to that position, including updates and deletes, is represented. Observing a later LSN does not permit advancing over a missing earlier change. Tentative transactional writes are excluded until their durable decision is established.
+
+Query freshness rules:
+
+1. The coordinator captures the requested visibility cut.
+2. Each view must demonstrate coverage of the relevant source positions.
+3. A view behind the required cut waits asynchronously within the query deadline, uses a correct bounded fallback, or returns an explicit unavailable/retry outcome. It must not silently return incomplete results as current.
+4. A view ahead of an exact historical cut must retain versions sufficient to evaluate that cut; simply satisfying watermark>=requested position is insufficient for an as-of snapshot.
+5. Cross-stream cuts must respect transaction decisions and migration lineage. An arbitrary vector of independently observed LSNs is not automatically a consistent database snapshot.
+
+Publish completed view generations atomically. Workers retain immutable view generations while querying, and reclamation waits for those readers and required backup/recovery references.
+
+Change retention is finite. Configure per-view and per-tenant lag/byte limits. A slow analytical consumer must not pin WAL indefinitely:
+
+- For a rebuildable view, mark it unavailable and establish a complete retained checkpoint plus bounded subsequent change coverage before releasing its old retention dependency.
+- If complete rebuild coverage cannot be secured within quota, stop affected write admission before required history is lost.
+- A view required by an operation's correctness contract cannot be silently discarded or downgraded.
+
+Worker isolation prevents synchronous reactor waits, not all hardware interference. Reserve CPU and I/O capacity, bound snapshot/cache/spill memory, and qualify hot-read tail latency while workers build and query views.
+
+### 15.15 Read-only hot publication and freshness
+
+Reuse15.5's **Left-Right-style immutable publication**, not a new slot format. The owner prepares the inactive immutable view and publishes its pointer/version with Release; readers acquire a lifetime/epoch guard, validate full identity and permissions, and read only that published view. Existing R11 mutable-slot reads retain all their guards. Retired views are reused/freed only after all readers quiesce; two buffers can therefore impose writer backpressure. A stalled reader cannot cause overwrite or unlimited replica allocation.
+
+The publication descriptor includes full incarnation, document/schema/policy/placement versions, Label and visibility watermark. Applied readers may see the latest committed-to-memory view; Durable readers require the proven persistence boundary and must not read a speculative view. Require read-your-writes with a minimum document version/watermark or return a bounded retry; stale-tolerant reads need explicit negotiated semantics. Revoke old routes/policy grants before returning a protected snapshot. Read-copy publication does not replace authoritative actor state or bypass A/B checkpoints, WAL and recovery.
+
+Promotion uses existing fallback thresholds, authorization-cohort combining and charged replica-image limits. It is useful for shared configuration/session/cache reads but does not confer Redis command/protocol compatibility. Cross-tenant readers need explicitly authorized copies/service scope. Exporting to an untrusted process still uses SealedExportWindow or framed bytes; do not expose internal publication pointers or mutable backing. Account for extra image, guard, export and output costs within16 GiB, rejecting promotion when full. Neither snapshot creation nor transport inherits the<=200ns local-read objective.
+
+#### Viral-actor reads: publication, distribution and serving authority
+
+This is a target serving contract. Hash-to-Core routing selects the actor's authoritative writer; it does not distribute500,000 reads of the same actor across independent writers.
+
+For an authorized read-heavy actor, the owner publishes a bounded immutable projection using the existing Left-Right-style publication protocol. Bounded read-serving executors acquire guarded local publications, or qualified remote read-serving replicas receive immutable versioned copies. Read requests may then be distributed among those endpoints without dispatching every response through the writer core.
+
+The publication identity includes namespace, tenant and actor incarnations, document version, schema/projection version, placement epoch, policy version, CaMeL reader set and durability evidence. A serving endpoint may only answer requests covered by its authority and the requested visibility mode.
+
+- Local readers acquire a valid lifetime guard before dereferencing the publication. Two alternating mutable buffers without reclamation are invalid.
+- Remote endpoints receive verified bytes and metadata, never process-local pointers. Remote replication, authorization and transport costs are explicit.
+- Publication subscriptions and copies are bounded per actor, tenant and node. Coalesce equivalent projections only within the same authorization cohort.
+- A slow reader cannot force reuse of its image or unlimited retired images. Stop further publication, defer work or reject new admission within configured bounds while continuing unrelated reactor progress.
+- Lifetime protection prevents reclamation; it does not grant permission to read or make an ordinary mutable actor slot immutable.
+
+Visibility must be explicit:
+
+- A read of a named immutable version may use a retained authorized publication.
+- A read-your-writes request supplies its required document version. An endpoint that has not reached it waits asynchronously within a deadline, redirects to a qualified endpoint, or returns an explicit retry outcome.
+- Local durability evidence proves persistence, not that a remote copy is latest.
+- A latest/linearizable read requires the current serving-authority and read-index proof defined in15.7. Asynchronous copies cannot claim this guarantee merely because their placement epoch matches.
+- An endpoint unable to establish current authorization must fail closed. Cached permission validity and revocation acknowledgement must be specified; instant revocation of an unreachable endpoint is not assumed. Previously delivered bytes cannot be recalled.
+
+Hot read publication distributes read work only. Mutations to one actor remain ordered by its owner. Splitting a hot writable aggregate requires an explicit application invariant and transaction design; moving it to another core does not increase its inherent single-writer parallelism.
+
+Output bandwidth is a separate bound. Returning4 KiB independently to500,000 requests produces2,048,000,000 payload bytes. A single ideal10-Gbit/s egress link requires at least1.6384 seconds to transmit them, before protocol overhead, contention or processing. Sharing one internal snapshot does not eliminate per-client transmission.
+
+The<=200ns objective remains scoped to a qualified small local resident read. It does not include snapshot construction, fanout, authorization, response encoding, remote replication or client delivery.
+
+### 15.16 Tiered bulk storage and committed manifests
+
+Hot metadata, current balances/status, document roots and bounded delta tails remain in the existing4–64 KiB extents in2-MiB HugePage arenas. Cold actor A/B checkpoints retain their existing lifecycle. **Bulk historical data is a separate target segment facility**: time-series blocks, columnar batches, graph adjacency blocks, dense-vector originals and ANN structures may reside in immutable NVMe segments, with optional object-storage tiers. Dense search structures can be hot or cold according to an explicit per-index budget; remote object storage is not a nanosecond lookup path.
+
+An actor/catalog stores a versioned logical immutable segment reference, never a raw pointer or client-selected URL. A manifest entry binds namespace/family, tenant and actor incarnation, segment/object ID and generation, format/schema version, byte length, content digest, encryption/key epoch, logical bounds (time/key/vector model/dimension as applicable), source committed progress and required storage/replica tier. Validate identity, lengths, digest, format and authorization on load. An exact source version and tombstone state remain authoritative even when a search index has not caught up.
+
+Publication order is: build under quota; finish/checksum; establish the requested durability/replication of the new object; then WAL-commit the manifest/reference change with the actor transaction; finally expose the new reference after its required persistence boundary. Crash before the reference commit leaves an unreferenced object for bounded orphan cleanup; crash after commit must find the referenced bytes. Recovery replays manifest lineage with actor data and fails closed on a missing/corrupt referenced object. LocalDurable cannot publish a sole reference to an unqualified remote upload or a buffer that disappears on restart.
+
+Readers pin a manifest generation. Compaction publishes replacement immutable segments and retires predecessors only after query, checkpoint/replay, backup and replica references release. Transactional deletion tombstones visibility first; physical reclamation waits for these references and verified lifecycle/I/O completion. Apply namespace quotas, remote retry/decompression/length bounds and controlled backend credentials. Catalog/manifest state, objects and necessary keys belong to restore validation; uploading WAL to S3 alone does not implement this segment facility or transactional backup.
+
+#### Asynchronous cold-data faulting and progress guarantees
+
+A resident actor referencing historical data does not synchronously load that data during a local point read. Requests requiring absent actor images or bulk segments follow a bounded asynchronous fault protocol:
+
+```text
+Admitted -> WaitingForData -> Validating -> Runnable -> Completed
+                         \-> Failed / Cancelling -> Drained
+```
+
+These are request-controller states, not replacements for the audited CQE-gated actor lifecycle.
+
+1. Before accepting the fault, reserve a request continuation, bounded waiter state, destination/staging bytes, I/O admission and completion resources. If unavailable, return Status8 (Busy) before mutation acceptance.
+2. Capture the full actor/segment identity, immutable manifest generation, required visibility and authorization context. Release ordinary CPU payload guards; never park a request while holding a seqlock write section.
+3. Coalesce duplicate reads of the same immutable object generation within authorized scopes. Bound waiters and response bytes independently: one shared disk read does not make unlimited waiting requests free.
+4. Submit the local NVMe read through the qualified asynchronous io_uring path. Park the request continuation and continue servicing other actors and CQEs. SQ exhaustion enters a bounded retry path or rejects unaccepted work; it never causes a busy-wait for queue space.
+5. Match completion to the exact operation generation and verify its result, expected length, identity and integrity. Bulk decompression and expensive verification run on budgeted workers; the owner processes bounded completion metadata.
+6. Revalidate incarnation, placement, manifest/version, authorization and deadline before resuming. A changed target requires a bounded restart or explicit stale/retry result, never installation into a reassigned slot.
+7. Publish a loaded actor only after the existing lifecycle and required replay coverage succeed. Bulk historical segments may remain in a separate bounded query cache instead of entering the hot actor arena.
+
+Object-storage misses use an asynchronous network/storage adapter with bounded timeouts, retries and staging. S3 access is not a local NVMe CQE and does not inherit NVMe latency or durability assumptions. Potentially blocking file opens, metadata operations, page faults and remote-client operations must be kept outside latency-critical reactor execution.
+
+Reserve progress resources separately from ordinary fault admission: completion processing, WAL/checkpoint buffers and at least the configured bounded reclamation path must remain available when data queues are full. Do not admit requests that retain all reclaimable slots and then wait for additional free slots. Cancel/defer lower-priority work or return Busy before creating that resource dependency.
+
+A timeout or cancellation does not prove the device has stopped accessing a buffer. Retain buffer ownership until the matching completion or qualified teardown proves access has ended. Preserve the existing R11 CPU/DMA exclusion, pin ownership and abandoned-I/O rules.
+
+Report fault wait, device time, validation, replay and scheduling separately. A cold miss has no<=200ns guarantee. If faulting becomes sustained, reduce admission before queue, memory or WAL exhaustion.
+
+### 15.17 Fifteen modality mappings and semantic boundaries
+
+This is a **target capability map**, not fifteen implemented products. CiaQL schemas/families describe application data; they do not establish SQL semantics by themselves. All spokes preserve actor identity, authorization, CaMeL propagation, transaction visibility and bounded work. Physical representations remain projections over committed data, with explicit authoritative manifests and rebuild/recovery contracts.
+
+| Modality | Actor hub mapping | Spoke/storage requirements and boundary |
+| --- | --- | --- |
+| Relational (SQL) | Families as tables, actors as rows/aggregates | Typed joins, optimizer, constraints, decimals/collations/NULL and consistent snapshots; CiaQL remains its own semantics; no PostgreSQL/MySQL compatibility claim |
+| Document | FlatBuffers roots, schema versions and bounded arrays | Nested/path indexing, bulk/chunk manifests beyond extent limits and schema-aware verification |
+| Key-value | Authenticated key-to-actor point lookup | Durable CAS/delete/TTL and defined ordered range scans; no Redis protocol equivalence |
+| Wide-column | Partition actor owns sparse cells and ordered blocks | Clustering keys, per-cell versions/TTL, partition bounds and segmented range reads |
+| Graph | Actor references and LinkGraph edges | Reverse adjacency, bounded traversals, cycle/path semantics and consistent relationship snapshots |
+| Time-series | Series metadata/current buffers in actor | Time-partitioned NVMe/object segments, late-arrival/dedup rules, retention, windows and continuous aggregates |
+| Vector | Embedding metadata and bounded hot candidates | Tiered ANN indexes/originals, filtered recall qualification, bounded reranking and deletion/freshness handling; current SQ8 candidate scoring is not a scalable ANN graph |
+| Object-oriented | Typed SDK objects with explicit actor identity | Versioned mappings, references and safe binary codecs; no arbitrary executable-object deserialization |
+| Hierarchical | Parent/child actors and path indexes | Atomic moves, cycle rejection, authorized subtree traversal and explicit inheritance |
+| Network model | Explicit record/set references | Navigational relationship semantics; no implicit legacy DBMS compatibility |
+| In-memory | Resident actor view and hot publication | Explicit applied/durable tiers, bounded residency/eviction and recovery; describes placement, not an extra data model |
+| NewSQL | Relational layer with distributed actor transactions | Qualified isolation, consensus, distributed decisions/recovery and SQL semantics before using the designation |
+| Column-oriented | Actor owns committed segment manifest | Columnar encoding/statistics, bounded vectorized scans/joins/grouping and spill; FlatBuffers and columnar conversion has a cost |
+| Multi-model | Shared catalog, identities and transaction boundary | Defined cross-view visibility, index progress, consistent updates, recovery and rebuild |
+| Cloud/DBaaS | Operated deployment of the same node/cluster | Provisioning, secure tenancy, quotas, upgrades, billing, backups/restores and incident operations; a delivery model |
+
+Derived scalar/unique/reference indexes used for mutation correctness must update transactionally with the authoritative change, or block the dependent operation until proven consistent. Async text/vector/columnar projections expose source progress **per log stream/placement lineage**, not a meaningless maximum LSN across cores. Queries requesting a minimum version wait within a deadline or use a correct authorized fallback; otherwise reject explicitly. Always apply current access/deletion checks before exposing candidates, counts or results. A stale index cannot resurrect a deleted actor or reveal a revoked principal's content. Full SQL, wide-column/graph/time-series engines, object compatibility and DBaaS remain extended scope, not requirements silently added to the immediate node-integration phase.
+
+### 15.18 Delivery order and qualification requirements
+
+**Immediate current-scope integration:** connect existing engine/journal operations to qualified WAL/checkpoint/recovery; define prepared-versus-visible-versus-durable publication; rebuild/replay authoritative indexes with actor data; integrate a bounded authenticated single-node host and request/response handling; enforce per-tenant admission and existing retry contracts. Crash replay must reconstruct identity, schema, deletion and decision state before readiness. Lost ACKs must not duplicate mutations; corrupt/missing required history is NeedsRepair, not an empty actor. No new Rust implementation is introduced by this document update.
+
+**Following existing milestones:** runtime BFBS/family catalog, typed arrays/deltas, complete client/ledger services and qualified multi-node placement/replication. Hub/worker scheduling, gateway routing and tiered segment integration ship only when their dependencies and tests pass. **Extended multi-model scope:** implement each15.17 row independently against its semantic contract; optional SQL/analytics libraries cannot replace the durability/isolation/security work. A syntax parser or simulator is not delivery of that modality.
+
+Required acceptance evidence:
+
+1. Routing: canonical-key agreement, adversarial hash load, stale directory caches, bucket splits and actor migration with retries; only the fenced owner accepts a mutation, and route refresh preserves intent.
+2. Multiplexing/admission: interleaved tenants and stream IDs cannot swap authority/results; lane ownership, aggregate capacities, payload/output budgets and control reservations hold; a gateway flood returns Busy without preventing CQEs or durable decision completion.
+3. Worker isolation: long SQL/ANN/graph jobs, slow readers, stalled workers, cancellation and saturated spill cannot hold mutable payloads, overflow pins or synchronously block reactors. Measure reactor P99 interference and RSS under colocated load; reject unsafe placement/configuration.
+4. Publication: concurrent view updates, epoch reclamation, exhausted two-buffer capacity, policy revocation and Durable/read-your-writes requirements; no stale pointer, unauthorized broadcast or speculative durable read.
+5. Tiering/indexes: crash every object/manifest commit boundary; test orphan cleanup, missing/corrupt objects, replay, snapshot/backup retention, index lag/rebuild and concurrent deletes; all declared query visibility contracts hold.
+6. Capacity: publish CPU/core count, hardware/kernel/storage, node/gateway/worker counts, exact16-GiB per-node accounting, dataset/schema/actor distribution, hot-set/cache ratios, requests/sec, accepted outstanding limit, rejection rate, read/write/query mix, durability, p50/p99/p99.99 and failure/headroom settings. Separate1M registered users, active users, physical connections and outstanding requests. Use overload and node-failure runs, not merely1M idle sessions or queued descriptors.
+7. Economics: compare equivalent correctness, durability, query quality/recall and availability with the incumbent systems; include all gateway/query/replica/storage hosts and background compaction. Agent measurements include worker/main/cache/retry tokens and answer quality under18.6. No universal exponential speedup, zero-token inference or guaranteed cost reduction follows from this architecture.
+
+#### Qualification of concurrency and database replacement
+
+The one-million-concurrent-request target counts distinct accepted client operations outstanding across the qualified cluster. Report separately:
+
+- Requests waiting only at gateways.
+- Backend-admitted client operations.
+- Internal fanout subrequests and outstanding I/O.
+- Completed operations/sec, rejected operations and latency percentiles.
+
+One logical query that fans out to20 workers is one client operation and20 internal tasks. Reserve its fanout resources, but do not count those tasks as20 additional users or client requests. Aggregate descriptor capacity alone does not demonstrate useful throughput.
+
+For stable sustained load, report the measured relationship between admitted completion rate, mean end-to-end latency and outstanding operations. Report burst-drain tests separately. Include request mix, payload/result sizes, hot-actor skew, read/write ratio, durability, cluster size and failure reserve.
+
+Required adversarial workloads include:
+
+1. 500,000 reads targeting one actor, with publication updates, slow consumers, authorization changes and bounded output bandwidth.
+2. Heavy mutations targeting one actor, demonstrating bounded queueing and Busy outcomes without claiming that read replicas parallelize writes.
+3. Concurrent analytical rebuilds and hot point traffic, with reactor tail latency, index lag, WAL retention and memory measured together.
+4. Cold-read storms, exhausted submission/data queues, delayed completions, cancellation and unavailable object storage, while completion and checkpoint progress remain possible.
+5. Gateway failure and backend disconnect after mutation acceptance, proving that retry reconciliation neither loses nor duplicates committed effects.
+
+Replacement claims are workload-specific:
+
+- Redis replacement requires the application's actual data structures, expiry, atomic operations, consistency and persistence behaviour to pass migration tests. Hot snapshot publication alone establishes none of those semantics.
+- PostgreSQL replacement requires the application's SQL/type/constraint and transaction behaviour, consistent snapshots, crash recovery and restore requirements to pass. CiaQL compatibility must be stated separately.
+- Pinecone or other vector-store replacement requires measured recall, filtering, update/delete visibility, index freshness and latency on representative data.
+- Time-series replacement requires late-arrival, retention, compression, downsampling and aggregate-refresh correctness.
+
+Cross-model queries must declare a consistent transactional cut or an explicitly negotiated weaker visibility mode. Pins protect lifetimes; they do not create cross-actor snapshot isolation. Unsupported semantics must reject explicitly.
+
+All targets retain the audited core layouts and lifecycle rules. No modality mapping, simulator result or microbenchmark constitutes production qualification of the complete system.
 
 ## 16. R11 self-audit remediation: CPU/DMA ownership and pin lifetimes
 

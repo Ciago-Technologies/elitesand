@@ -67,3 +67,13 @@ cargo run --release --offline -p ciagomem-engine --example memory_orchestration
 ```
 
 These exercise the in-process scoped broker, taint/reader propagation, transitive invalidation, TTL/rollback, input/output packing, publication retries and journal rejection. They do not call paid models, prove summary grounding, measure token savings or establish restart-safe task recovery. Specification18 lists the remaining service, adapter, provider and adversarial requirements.
+
+## Target horizontal and Hub-and-Spoke acceptance
+
+Use specification15.18 as the acceptance checklist. Test route-cache staleness during migration, shared-stream principal/result isolation, SPSC producer ownership, aggregate queue caps, pre-admission Busy, lost ACK reconciliation and continued CQE progress under floods. Exercise stalled query workers, snapshot/pin deadlines, cancellation with outstanding I/O, spill exhaustion, publication reclamation, policy revocation and durable/read-your-writes visibility.
+
+Crash-test every segment upload/manifest/WAL publication boundary and verify orphan cleanup, missing-object repair, backup retention, index rebuild/lag and delete visibility. Heavy SQL/ANN/scans must run alongside point traffic while recording reactor tail-latency interference, not just average query speed. Immutable per-actor snapshots alone must not pass a global snapshot-isolation test.
+
+A one-million-outstanding-request result must report all gateway/storage/query/replica nodes, accepted versus queued/rejected counts, request size/mix, completion rate and latency, hot working set, durability and resource usage. Gateways consume separately measured resources; storage nodes obey the complete16-GiB profile. Include sustained overload and node failure. The<=200ns objective remains a small local read, never a gateway/durable/query benchmark. Compare cost and actual model token usage only at equivalent correctness, availability and quality. These suites are planned; this documentation update does not execute them.
+
+The audit acceptance additions in15.18 require500,000 reads of one actor with slow consumers and publication updates; same-actor write overload; stalled analytical consumers/WAL pressure; cold-read storms with SQ exhaustion; and gateway failure after acceptance. Count one fanout query as one client operation plus its internal tasks. Validate full historical cuts, not just index watermarks>=requested positions. Database replacement is qualified against actual Redis/PostgreSQL/vector/time-series workload semantics.

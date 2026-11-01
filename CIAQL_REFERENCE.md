@@ -104,3 +104,11 @@ delete actor @1
 Joins use catalog ActorRef fields with incarnations, authorized family scope, unique aliases, bounded fanout and propagated labels. A missing target is an inner-join miss. LINK is a mutation requiring its own idempotent coordinator/RPC; remote QUERY is read-only. TX write sets are explicit; no runtime join may silently add write participants.
 
 RESTRICT checks live referencing actors, not an implicit business-status filter. Cascades are bounded strict transactions or recoverable chunked jobs. Logical deletion and physical A/B reclamation are distinct. Operator export/frame commands remain separate privileged profile operations, not data-query side effects.
+
+## Target execution placement and database semantics
+
+Specification15.14 routes bounded point commands to the actor owner and expensive scans, aggregations, joins, graph traversal and ANN execution to reserved Query Workers. Worker results preserve authorization/provenance and the declared snapshot/index progress. Workers propose mutations to owners for current version, policy, transaction and WAL validation; they never write snapshot bytes. Resource exhaustion is Busy before acceptance, not an incomplete successful result unless explicit approximate/partial semantics were negotiated.
+
+This scheduling contract adds no grammar or SQL compatibility. CiaQL's existing NULL/type rules remain intact. A future SQL layer needs its own semantics and consistent query-wide visibility; a set of individually immutable actors is not automatically a global snapshot. General SQL/time-series/graph execution remains extended scope, while the current parser/reference executor stays synchronous.
+
+Analytical results declare their visibility cut. Per-stream contiguous index coverage includes committed updates/deletes; an index ahead of an exact historical cut also needs retained versions. A required view that is behind waits asynchronously, uses a correct bounded fallback or rejects explicitly. No new CiaQL syntax or SQL-equivalent snapshot guarantee is implied.

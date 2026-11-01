@@ -55,3 +55,11 @@ A kernel version or PLP label alone does not qualify a deployment. HugePage rese
 The proposed local path is `/run/ciagomem/db.sock` using SOCK_SEQPACKET and authenticated peer credentials. FD exports require a native client adapter and immutable read-only windows. A pure JavaScript client uses framed bytes unless that adapter is installed. No current socket listener or `ciagomem-cli ping` command is provided.
 
 All proposed environment variables and precedence are in [CONFIGURATION.md](CONFIGURATION.md). Published SDK/image version strings, startup latency, operational metrics endpoints and performance guarantees require release evidence before being advertised as available.
+
+## Target gateway and query-worker deployment
+
+The gateway, Query Worker service and multi-node host in specification15.13–15.18 are not supplied binaries or container releases. Deploy them only after the corresponding durability, transport, placement and failure gates pass. Gateways have their own TLS/socket/session budgets; pooled node connections retain end-client authentication. Separate query hosts have separately accounted RAM/CPU/storage, while colocated workers reduce available reservations within the complete storage-node profile.
+
+Use the single-node durable host as the first implementation/deployment milestone. Multi-model compatibility, bulk segment storage and the one-million-outstanding-request cluster objective require separate qualification; no additional startup command or environment flag makes them available today.
+
+Qualification must include node-side backend networking/TLS memory even with external gateways, HugeTLB accounting, reserved cold-fault/CQE progress capacity and recovery of accepted operations after gateway loss. External read-serving copies require independently qualified authorization/freshness; they are not automatically current owners.

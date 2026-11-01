@@ -4,9 +4,9 @@
   "verification_depth": "impact",
   "delegation": "none",
   "reason_codes": [
-    "research-before-orchestration-implementation",
-    "bounded-worker-memory-handoff",
-    "preserve-provenance-and-audit-invariants"
+    "apply-six-scaling-audit-patches",
+    "documentation-only-commit",
+    "push-requested-by-user"
   ],
   "allowed_write_scope": [
     "ciagomem-slae/** (excluding vendor and .git)",
@@ -15,14 +15,10 @@
     "ciagomem-documentation-review.zip (superseded outgoing bundle only)"
   ],
   "acceptance": [
-    "primary-source security/cost research recorded before runtime changes",
-    "bounded engine-integrated broker scopes worker sources/output/session and rechecks source freshness",
-    "External inputs never promoted by summarization; derived labels and context budgets enforced",
-    "publication retry/collision/expiry/journal failure covered by adversarial tests",
-    "current Rust handoff example runs without external model credentials",
-    "both specifications and USECASE distinguish implemented broker from planned host/SDK/delta services",
-    "default/all-feature release tests, formatting, Clippy and document/workspace gates run",
-    "current ZIP includes both full specifications, research, implementation and evidence"
+    "Both complete specifications match byte-for-byte and define epoch-fenced routing, bounded admission, snapshot query workers, tier manifests and all 15 modalities",
+    "All affected current user guides preserve implemented/target distinctions and qualify density/latency/concurrency claims",
+    "Existing documentation/workspace validators and diff checks pass; runtime/source and historical evidence remain untouched",
+    "Stage only documentation/policy changes; commit and attempt normal push without force; report network failures honestly"
   ],
   "project_invariants": [
     "five-crate acyclic workspace",

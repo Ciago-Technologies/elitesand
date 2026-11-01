@@ -103,3 +103,13 @@ R11 access-word sidecars are implemented and cost 8 bytes per allocated slot out
 ## Current bounded memory orchestration component
 
 MemoryBroker privately owns the reference Engine, using scoped source/output leases and existing authorization/Label/journal paths. It captures source digests once, propagates revision invalidation through summary descendants and assembles ordered byte-bounded context with citations. The host supplies trusted credential verification and worker/model isolation; namespace/family services, automatic hybrid search and persisted task recovery remain planned. This path uses complete Record images, not the target delta tail. See specification18 for costs and boundaries.
+
+## Target Hub-and-Spoke data plane
+
+The owner reactor is the Hub: short validated point operations, owner-only publication and asynchronous completion progress. Query Workers are Spokes: joins, aggregations, graph traversal and ANN search consume explicit CPU, snapshot, I/O, intermediate and output reservations. They cannot write actor memory directly or synchronously hold up the reactor. Same-host workers still share hardware; qualification measures interference and reserves cores/bandwidth. The current reference executor is synchronous and does not implement this worker service.
+
+Gateways hash a canonical authenticated identity to a virtual bucket and resolve node/core through the authoritative PlacementDirectory and placement epoch. Hash modulo current core/node count is not an ownership protocol. Multiplexed connections preserve each client's capability/session; remote clients never share authorization merely by using the same backend socket.
+
+Immutable hot publication follows specification15.5/15.15 with guarded reclamation and charged duplicate images. Bulk segments use durable, content-bound manifests; actor A/B checkpoints remain a separate lifecycle. The full fifteen-modality mapping and consistency boundaries are in [specification15.17](MASTER_SPECIFICATION.md#1517-fifteen-modality-mappings-and-semantic-boundaries).
+
+Viral-actor read fanout uses bounded authorized read-serving endpoints over immutable publications; writers remain owner-serialized. Analytical builds consume committed changes asynchronously and publish contiguous per-stream coverage. Cold misses park continuations and resume only after validated I/O/replay, preserving CQE progress. See specification15.14–15.16.

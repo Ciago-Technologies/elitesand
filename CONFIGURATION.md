@@ -68,3 +68,13 @@ Applied is explicitly non-durable. Local-durable requires the qualified local WA
 ## Current MemoryBroker limits
 
 The Rust memory module accepts MemoryLimits, not server environment variables. Defaults:64 tasks,16 sources/task,1-MiB source images, one source read,4096-byte summary,8192-byte context,8 context refs,300-second worker lease and900-second summary TTL. Engine limits apply as well. Explicit forget releases task metadata and journal-deletes outputs; there is no background retention service. Caller-held snapshots, broker instances and actual model token/cost budgets require host limits. See specification18.2 for constructor ceilings.
+
+## Target gateway and query-worker resource reservations
+
+Specification15.13–15.18 adds deployment requirements, not new implemented environment variables. Configure measured limits separately for gateway connections/sessions/pending bytes, pooled backend streams, per-core producer lanes, aggregate ingress descriptors, query jobs/CPU, snapshot/pin count and duration, spill/cache/output bytes and per-tenant work. A per-core4,096-entry data budget is shared across producers; it must not grow with gateway count. Reserve completion/control capacity independently.
+
+The existing profile is16 GiB, not decimal16 GB. Colocated query workers must fit its regions and CPU allocation by reducing other reservations; do not add worker pools above a12-GiB arena and an already full node budget. Remote gateways/query nodes have separate RAM/CPU budgets and increase total deployment cost. Multiplexing relocates socket state rather than removing it. Full queues return Busy before acceptance; live accepted mutations retain reconciliation state.
+
+One million pending requests at a hypothetical1 KiB of state each already require about0.954 GiB before payloads and transport overhead. One million4-KiB export pages require3.815 GiB before descriptor/mapping costs; the existing64-MiB export cap remains16,384 windows. Exceeding any budget reduces admission, never silently borrows the contingency region. A configuration must declare accepted outstanding capacity, sustainable throughput/SLO and failure reserve per node; user count alone does not size a cluster.
+
+For the density objective,10–30% hot is a measured actor/byte working set, not a guaranteed capacity percentage. At300,000 resident64-KiB actors, extents alone require18.311 GiB. Account for cold identity catalogs as well as hot state. A stateless gateway still owns transient connections; database pooled sockets, transport, authentication and I/O buffers remain charged inside16 GiB. Reserve cold-fault continuation/staging/completion capacity before admission.

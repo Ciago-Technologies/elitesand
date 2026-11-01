@@ -1,3 +1,9 @@
+# Horizontal scaling and Hub-and-Spoke documentation — 1 November 2026
+
+Documentation-only update: both complete specifications include15.13–15.18, and all ten user guides are aligned. Existing workspace/specification and documentation validators passed, checking mirrors, header/wire layouts, class/capacity math, EBNF, links, naming and upstream inventory. Whitespace checks passed. New routing/snapshot/segment contracts are planned; documentation validation does not prove their implementation or one-million-request capacity. Runtime source/tests and historical evidence were not modified in this phase, and Rust tests/benchmarks were not rerun. Prior test counts below describe their recorded runtime revision. The older orchestration ZIP/plain-text audit dossiers remain evidence for that earlier revision, not a bundle of this new scaling documentation.
+
+---
+
 # Memory orchestration implementation — 1 November 2026
 
 Primary-source security/cost research was recorded before runtime changes in [MEMORY_ORCHESTRATION_RESEARCH.md](MEMORY_ORCHESTRATION_RESEARCH.md). The new bounded MemoryBroker integrates existing Engine/Label/journal paths; specification18 and the USECASE blueprint distinguish current code from target service/SDK/delta features.

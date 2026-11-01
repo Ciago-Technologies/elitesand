@@ -423,3 +423,11 @@ cargo run --release --offline -p ciagomem-engine --example memory_orchestration
 ```
 
 This provider-free example uses MemoryBroker and existing actor images. A worker reads only leased sources, publishes cited text and hands the controller a bounded context. Source changes invalidate descendants; unsigned output enters frame data through evidence_label(), never as automatic Policy/Fact authority. General BFBS/delta arrays, network SDKs and durable tasks remain target work. See specification18.
+
+## Target routing and execution workflow
+
+An application submits its namespace/family/key and authenticated intent. The gateway resolves actor identity, selects a virtual bucket and looks up its current owner node/core/placement epoch. It forwards through pooled binary streams with the original capability/session and idempotency pair. The owner validates authority and reserves bounded resources, returning Busy before accepting work if full. Stale routing refreshes without changing the semantic intent.
+
+A point operation follows the owner path; a heavy query obtains bounded immutable snapshot/segment grants for a Query Worker. The worker returns an authorized bounded result or an owner-validated mutation proposal. Durable success waits for the configured WAL/replica proof. Large historical/vector objects require the committed-manifest protocol rather than exceeding the64-KiB extent cap. This is a target workflow, not executable SDK code; the current runnable quickstart remains unchanged.
+
+A cold query parks after bounded staging/I/O admission and resumes after identity, manifest, completion and authorization checks. A hot shared actor may be read through an authorized immutable publication endpoint. Freshness/linearizable requirements remain explicit; neither workflow makes a remote request a200-ns local read.

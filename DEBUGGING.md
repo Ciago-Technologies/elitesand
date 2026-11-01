@@ -50,3 +50,11 @@ Target metrics include active_sessions_total, eviction/dwell/generation headroom
 ## Current MemoryBroker errors and reconciliation
 
 The Rust broker returns Engine Error variants, not target network status numbers. Permission covers invalid role/session/boot/expiry; StaleReference covers invalidated/missing job/source lifetimes; Budget covers task/source/read/output/context caps; Duplicate covers conflicting publication/output; Journal means publication/cleanup did not succeed through the adapter. For a lost worker message, use result with the original lease and controller scope. Repeated identical live-job publish returns its reference without another journal write; read_context still revalidates freshness. forget is explicit retention cleanup and invalidates descendants. After process restart old broker refs are invalid; no task recovery service is supplied.
+
+## Target routing and query-worker pressure diagnostics
+
+Distinguish offered requests, admitted outstanding work, queued-only gateway requests, completed requests/sec, active sessions and physical connections. Export bounded-cardinality ingress/payload/output occupancy, Busy counts, per-core queue age, worker jobs/snapshot bytes/pin age, publication-retired bytes, spill/cache pressure and per-stream index progress. Report routing/worker/I/O/commit time separately from the resident point read.
+
+A stale placement epoch requires authenticated route refresh and retry of the same intent; no gateway may create a new mutation sequence simply to reroute. Busy before acceptance is backpressure; a lost ACK or timeout after acceptance is uncertain and follows the existing reconciliation rules. With worker saturation, defer/shed new jobs and preserve genuine CQE progress. Missing/corrupt committed segment references are repair events, not absent actors. The service and these telemetry endpoints remain target integration.
+
+Distinguish cold-fault park time, device completion, validation, replay and runnable delay. Track analytical contiguous coverage, missing changes and retained WAL bytes per stream/lineage. A later observed LSN is not proof of gap-free processing. A cancelled request retains device-owned buffers until genuine completion/qualified teardown; SQ pressure must not stop CQE progress.

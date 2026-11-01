@@ -5,7 +5,7 @@
 
 Ciagomem — SLAE is designed to replace fragmented multi-database architectures (such as running PostgreSQL + Redis + Pinecone + Kafka simultaneously) with a single, unified actor data plane.
 
-Below are four target workload blueprints showing how to model schemas, configure durability, and execute CiaQL pipelines for real-world workloads.
+Below are five target workload blueprints showing how to model schemas, configure durability, and execute CiaQL pipelines for real-world workloads.
 
 ---
 
@@ -257,3 +257,13 @@ Record main and worker input/output tokens, cached-token billing, provider/tool/
 ## 6. General application CRUD and telemetry
 
 Users, sessions, orders, projects, sensor readings and other custom families follow the same schema/CRUD model; gaming and wallets are examples, not a specialization boundary. Applications choose keys, fields, relationships, expiry/retention rules and business invariants. Large blobs and unbounded event histories need an explicit external/chunking design beyond a single 64 KiB extent. The target feature/qualification checklist is specification 17.8.
+
+## Target cross-workload scaling and isolation
+
+The five blueprints share the target Hub-and-Spoke design in specification15.13–15.18. Gateways multiplex authenticated logical sessions and route through epoch-fenced placement; owner reactors handle bounded point state while reserved Query Workers handle heavy retrieval/analytics. Workers use immutable snapshots, cannot directly mutate actors and have CPU/pin/memory/I/O/output limits. Logical isolation does not eliminate shared hardware contention; measure point-read latency during search and aggregation load.
+
+Hot session/account metadata remains in4–64 KiB actors. Long histories, telemetry, columnar data and vector structures use planned immutable NVMe/object segments referenced through durable manifests. Immutable hot publication may improve heavily read shared actors, subject to reclamation, identity/permission checks and charged extra images. It does not make Ciagomem Redis-compatible or turn every query into a200-ns operation.
+
+One million active users requires a defined activity interval and request rate. One million outstanding requests is a cluster qualification objective with bounded per-node acceptance; gateways and query nodes add resources beyond each16-GiB storage node. Financial/game workloads remain examples of general application state. The fifteen-modality target map is an extension roadmap, not current compatibility; token/cost savings still require18.6's complete workflow measurements.
+
+For a viral shared actor, immutable authorized publications can fan reads to bounded serving endpoints;500,000 independent4-KiB responses still transmit2.048 billion bytes. Same-actor writes remain serialized. Historical cold requests park asynchronously; derived analytical views build outside the reactor and expose explicit freshness. A10–30% hot-user assumption alone cannot prove the memory budget.

@@ -51,3 +51,13 @@ This repository does not establish a staffed security mailbox or response SLA. U
 ## Worker orchestration boundary
 
 MemoryBroker owns its Engine and restricts worker leases to exact sources/output, tenant/session/audience/boot and deadlines. It accepts summary text as data, derives minimum source integrity and never issues a tool permit. Raw External evidence remains External. It invalidates dependent summaries on controlled source updates and requires host-reported revisions for external files. Rust type privacy is not an OS sandbox. See specification18 and the research/threat assessment in docs/MEMORY_ORCHESTRATION_RESEARCH.md.
+
+## Target gateway, snapshot and segment trust boundaries
+
+A pooled gateway connection authenticates the gateway, while every request retains its own end-client capability, session, scope and idempotency identity. The backend rechecks authorization/expiry/boot and current placement authority; hashing/routing never grants access. Validate response stream ownership so multiplexed tenants cannot receive each other's results. Preserve protected completion/decision capacity when rejecting untrusted ingress.
+
+Query Workers receive bounded immutable snapshots/manifest generations with full identity, provenance and visibility metadata. They receive neither mutable arena pointers nor implicit write authority. Revalidate proposed writes at the owner and current access/deletion policy before returning search results. Query-wide consistency requires an explicit consistent cut; independently pinned actors do not provide it.
+
+Remote segment references are controlled logical IDs, not arbitrary client URLs. Apply tenant quotas, bounded reads/decompression, authenticated storage credentials, digest/format verification and manifest-generation retention. A stale index cannot reveal revoked data or resurrect a tombstone. Left-Right publication retains guarded reclamation and permission checks; untrusted local processes still use sealed exports/framed bytes. These are target integration controls under15.13–15.17, not a completed host sandbox.
+
+Remote hot publications require current serving authority and request visibility, not just a matching placement epoch. Unreachable endpoints cannot promise instant revocation; they must fail closed without valid authorization proof. Named-version reads, read-your-writes and linearizable latest reads are distinct contracts. Publication guards protect lifetime, not authority, and a slot pin does not freeze mutable bytes.

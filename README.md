@@ -65,3 +65,13 @@ python3 scripts/validate_documentation.py
 ```
 
 `legacy-audit` enables historical vulnerability reproductions; leave it disabled in application integrations. See [LICENSE](LICENSE) for the proprietary terms. This README does not grant a separate commercial license.
+
+## Target scaling and multi-model execution
+
+The target Hub-and-Spoke design keeps bounded point operations on owner reactors and moves expensive joins, aggregations and ANN work to budgeted Query Workers using immutable snapshots. Epoch-fenced gateway routing and pooled streams distribute admitted work across nodes. The one-million-outstanding-request objective is cluster-wide and requires workload qualification; the local200-ns read objective excludes networking, authorization, queries and persistence.
+
+Each storage node retains a complete16-GiB budget; gateway/query/replica hosts add separately accounted resources. Historical time-series, columnar data and vector structures require planned immutable segment manifests on NVMe/object storage. The fifteen-modality map describes independent target contracts, not compatibility with fifteen existing databases. See [specification15.13–15.18](MASTER_SPECIFICATION.md#1513-horizontal-scaling-and-the-one-million-request-qualification-contract).
+
+The next implementation priority is the existing single-node durability/recovery, bounded authenticated host and consistent index-publication path. Broad SQL/time-series/graph engines remain extended scope.
+
+The scaling audit additionally requires distributed viral-actor reads, bounded asynchronous view maintenance with consistent cuts, and parked cold faults with reserved completion resources. Full requirements and workload-specific database replacement gates are in specification15.13–15.18; a10–30% hot population and pooled connections do not remove non-arena memory costs.
