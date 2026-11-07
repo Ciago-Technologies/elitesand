@@ -1,0 +1,353 @@
+# Elitesand continuation checkpoint
+
+**Checkpoint date:** 2026-11-08  
+**Repository:** `https://github.com/Ciago-Technologies/elitesand`  
+**Default branch:** `main`  
+**Purpose:** Give the owner, a teammate, or another coding agent enough verified context to continue safely.
+
+## 1. Current state at a glance
+
+The repository is a Rust workspace containing the Ciagomem/Elitesand core, WAL, query
+language, crypto, and engine crates. The release work for `0.1.1` has been prepared and
+published as a feature-branch commit, Git tag, GitHub release, and GHCR image. The
+protected promotion branches have not yet been updated because GitHub requires pull
+requests and the required `build` status check.
+
+Do **not** assume that `main`, `prod`, `staging`, or `dev` already contain the release
+commit. At checkpoint creation time, the promotion PRs are open.
+
+## 2. Work completed
+
+### Source and documentation changes
+
+The release commit is:
+
+```text
+79d3ea1 release: package stable 0.1.1
+```
+
+It contains:
+
+- `ciagomem-engine/examples/alpha_benchmark.rs`
+  - Changed `TARGET_CORES` from `8` to `4`.
+  - On the validated host, physical-core discovery selects `[0, 2, 4, 6]`.
+  - The four-core run produced:
+    - throughput: `2,556,891.39 ops/sec`
+    - queue-wait P99: `6,899 ns` (`6.9 us`)
+    - service-time P99: `2,979 ns`
+    - errors: `0`
+- `Dockerfile`
+  - Was added as container packaging, but its binary path still needs correction.
+  - Currently copies `target/release/ciagomem-server`; the Cargo target is
+    `ciagom-server`.
+  - Runs as the non-root `ciagomem` user.
+- `GATE.md`
+  - Documents production gates and explicitly separates passing local checks from
+    unverified hardware, durability, and performance qualification.
+
+An additional local commit added:
+
+```text
+08d2350 chore: add gstack skill routing rules to CLAUDE.md
+```
+
+`CLAUDE.md` is local repository documentation for agent skill routing. It was committed
+after the release commit and is currently ahead of `origin/main` locally. Confirm whether
+it should be promoted with the release PRs before merging.
+
+### Validation completed
+
+The following local checks passed during this work:
+
+```bash
+cargo fmt --all -- --check
+python3 scripts/validate_workspace.py
+python3 scripts/validate_documentation.py
+cargo test --release --offline --workspace
+cargo test --release --offline --workspace --all-features
+cargo build --release --offline -p ciagomem-engine --bin ciagom-server
+docker build \
+  -t ghcr.io/ciago-technologies/elitesand:0.1.1 \
+  -t ghcr.io/ciago-technologies/elitesand:v2 \
+  -t ghcr.io/ciago-technologies/elitesand:latest \
+  .
+```
+
+The all-feature release run reported `263 passed, 0 failed`. The validators passed.
+Warnings remain visible in the Rust build; a warning-free baseline was not established.
+
+The quickstart and durable recovery examples also passed:
+
+- quickstart created actor `1` and read credits value `75`;
+- durable host wrote `100`, mutated to `75`, checkpointed, restarted, and recovered `75`.
+
+### Release and package publication
+
+The annotated Git tag exists:
+
+```text
+v0.1.1 -> 79d3ea1
+```
+
+GitHub releases:
+
+- `0.1.1 Stable`: `https://github.com/Ciago-Technologies/elitesand/releases/tag/v0.1.1`
+- `0.1.0 (Deprecated)`: `https://github.com/Ciago-Technologies/elitesand/releases/tag/v0.1.0`
+
+GHCR image tags were pushed:
+
+```text
+ghcr.io/ciago-technologies/elitesand:0.1.1
+ghcr.io/ciago-technologies/elitesand:v2
+ghcr.io/ciago-technologies/elitesand:latest
+```
+
+The published image digest observed during the push was:
+
+```text
+sha256:b77574807ff53b0c00e119741e3e9f174d9871490f901efc140f7f737199213f0
+```
+
+The previous `v0.1.0` release was not deleted; it was marked deprecated for traceability.
+
+## 3. Branch and PR state
+
+Remote branches before final promotion were linear:
+
+```text
+feat/core-mem-server-engine -> dev -> staging -> prod -> main
+```
+
+Direct pushes to protected branches were rejected by GitHub rules. The release feature
+commit was successfully pushed to `feat/core-mem-server-engine`, and the tag was pushed.
+
+Open promotion PRs:
+
+| PR | Head | Base | Purpose |
+|---:|---|---|---|
+| [#8](https://github.com/Ciago-Technologies/elitesand/pull/8) | `feat/core-mem-server-engine` | `dev` | Promote 0.1.1 to dev |
+| [#7](https://github.com/Ciago-Technologies/elitesand/pull/7) | `feat/core-mem-server-engine` | `staging` | Promote 0.1.1 to staging |
+| [#6](https://github.com/Ciago-Technologies/elitesand/pull/6) | `feat/core-mem-server-engine` | `prod` | Promote 0.1.1 to prod |
+| [#5](https://github.com/Ciago-Technologies/elitesand/pull/5) | `feat/core-mem-server-engine` | `main` | Promote 0.1.1 to main |
+
+The GitHub Actions `build` runs associated with these PRs completed successfully. The PRs
+still need the repository's required approvals and merges. Because promotion order matters,
+merge them sequentially:
+
+1. PR #8: feature branch -> `dev`
+2. After #8 merges, create or update a `dev` -> `staging` promotion PR.
+3. After staging is validated, merge staging -> `prod`.
+4. After prod is validated, merge prod -> `main`.
+
+The already-open direct feature-to-all-branch PRs may be closed and replaced with sequential
+promotion PRs if repository policy or reviewers require strict ordering. Do not merge several
+parallel promotion PRs if that would bypass environment validation.
+
+## 4. Immediate next actions
+
+Run these commands from a fresh or current clone:
+
+```bash
+git fetch --prune --tags origin
+git status --short --branch
+gh pr list --repo Ciago-Technologies/elitesand --state open
+```
+
+Before merging, inspect every PR:
+
+```bash
+gh pr view 8 --repo Ciago-Technologies/elitesand
+gh pr checks 8 --repo Ciago-Technologies/elitesand
+```
+
+Merge only after required human review and successful checks:
+
+```bash
+gh pr merge 8 \
+  --repo Ciago-Technologies/elitesand \
+  --merge \
+  --delete-branch=false
+```
+
+Then refresh and promote in order:
+
+```bash
+git fetch --prune origin
+git switch dev
+git pull --ff-only origin dev
+
+gh pr create \
+  --repo Ciago-Technologies/elitesand \
+  --base staging \
+  --head dev \
+  --title "release: promote dev to staging" \
+  --body "Promote the validated 0.1.1 revision from dev to staging."
+```
+
+Repeat the same process for `staging -> prod` and `prod -> main`. Never force-push protected
+branches and never rewrite the published `v0.1.1` tag.
+
+After final promotion:
+
+```bash
+git fetch --prune --tags origin
+git log -1 --oneline origin/main
+git show --stat --oneline v0.1.1
+gh release view v0.1.1 --repo Ciago-Technologies/elitesand
+```
+
+If `origin/main` does not contain the intended release commit, the promotion is incomplete.
+
+## 5. Production gates and remaining work
+
+`GATE.md` is the authoritative gate checklist. Its status must not be overstated.
+
+### Gate 0: baseline verification
+
+Current local evidence: **PASS**.
+
+- release workspace tests passed;
+- all-feature tests passed;
+- formatting passed;
+- workspace validator passed;
+- documentation validator passed;
+- compile-fail documentation tests passed as part of the test suite.
+
+### Gate 1: dependencies and supply chain
+
+Partially complete. Vendor pins and the lockfile are present, but before a production claim:
+
+- run `cargo tree -d`;
+- run `cargo audit` or `cargo deny check`;
+- verify `legacy-audit` is absent from the release build;
+- consider adding the checks to CI.
+
+### Gate 2: hardware and kernel prerequisites
+
+Not fully qualified. Validate the actual deployment host:
+
+- Linux kernel and `io_uring` support;
+- HugeTLB reservation;
+- dedicated/isolated CPUs;
+- NVMe FLUSH/FUA behavior;
+- OpenSSL 3.5.9 or the approved supported version;
+- data and key permissions.
+
+The Docker image build is not hardware qualification.
+
+### Gate 3: capacity and performance
+
+Not complete. The alpha benchmark is a controlled smoke measurement, not a production
+capacity or SLO proof. Still required:
+
+- production NVMe/CPU benchmark;
+- p50/p95/p99 latency distributions over repeated runs;
+- sustained write/checkpoint load;
+- 1M-tenant residency simulation;
+- memory/RSS accounting;
+- thermal and scheduler conditions;
+- documented results in a benchmark artifact.
+
+Do not claim guaranteed `200 ns`, million-user capacity, or a durable/network latency SLO
+from the current benchmark.
+
+### Gate 4: durability and power loss
+
+Not complete. Still required:
+
+- WAL recovery across all tail modes;
+- repeated simulated power cuts;
+- checkpoint A/B atomicity;
+- qualified NVMe/filesystem combinations;
+- FLUSH/FUA evidence;
+- hard power-loss testing.
+
+### Gate 5: security and cryptographic hygiene
+
+Implementation checks exist, but operational qualification remains:
+
+- key ceremony and rotation procedure;
+- certificate renewal;
+- production secret handling;
+- release dependency audit;
+- verification that no secrets are present in images, logs, or documentation.
+
+### Gate 6: operational runbooks
+
+Partially complete. Existing `INSTALL.md`, `SECURITY.md`, `DEBUGGING.md`, `TESTING.md`,
+and this checkpoint cover some procedures. `GATE.md` still identifies runbooks to complete:
+
+- `DURABILITY.md`;
+- `BENCHMARKS.md`;
+- `SECURITY_OPS.md`;
+- `UPGRADE.md`;
+- `MONITORING.md`.
+
+Create these before claiming production readiness.
+
+### Gate 7: distributed/multi-node scope
+
+Explicitly not complete and out of the current single-node release scope. Do not describe
+the current release as a complete distributed runtime, SDK publication, or multi-node
+capacity solution.
+
+## 6. Important implementation facts
+
+- Workspace crate versions currently show `0.3.0`; GitHub release `0.1.1` is a repository
+  release label, not a Cargo crate-version change.
+- The server binary target is `ciagom-server`, but the current Dockerfile still copies
+  `target/release/ciagomem-server`. This is a known packaging mismatch and must be fixed
+  and rebuilt before treating the container as a valid release artifact.
+- The alpha benchmark requires Linux, AVX2, `io_uring`, and CPU affinity support.
+- The alpha benchmark uses four physical cores after the recent change; host-specific CPU
+  numbering must be rechecked on another machine.
+- Existing compiler warnings are not release blockers in the current workflow, but they
+  should not be silently ignored when diagnosing new changes.
+- Local files and artifacts outside Git are not restored by cloning. Keep authoritative
+  team documentation inside the repository.
+
+## 7. Files and references
+
+- `GATE.md`: production gate checklist and qualification gaps.
+- `README.md`: current capabilities and explicit non-claims.
+- `TESTING.md`: runnable tests and test limitations.
+- `INSTALL.md`: installation and service prerequisites.
+- `DEBUGGING.md`: diagnostics and retry behavior.
+- `SECURITY.md`: security boundaries and planned operational policy.
+- `docs/VERIFICATION.md`: historical verification evidence and limitations.
+- `docs/ECOSYSTEM_BENCHMARK.md`: documented smoke benchmark and raw measurement reference.
+- `.github/workflows/rust.yml`: required CI workflow.
+- `ciagomem-engine/examples/alpha_benchmark.rs`: four-core alpha benchmark.
+- `Dockerfile`: current container packaging.
+- `CLAUDE.md`: agent skill-routing instructions.
+
+## 8. Safe continuation rules for the next agent
+
+1. Read this file, `GATE.md`, and `README.md` before changing code.
+2. Run `git status --short --branch` before editing.
+3. Do not discard unrelated working-tree changes.
+4. Do not force-push, reset hard, or rewrite release tags.
+5. Use pull requests for protected branches.
+6. Validate the exact requirement rather than relying on a proxy benchmark.
+7. Keep production claims limited to observed evidence.
+8. Add tests and directly related documentation for code changes.
+9. Run the smallest relevant checks, then the full CI-equivalent suite before release.
+10. Record new benchmark hardware, configuration, commit SHA, and limitations.
+
+## 9. Definition of done for the pending release promotion
+
+The `0.1.1` promotion is complete only when all are true:
+
+- [ ] PR #8 or an equivalent reviewed feature-to-dev PR is merged.
+- [ ] `dev -> staging` promotion is reviewed, checked, and merged.
+- [ ] `staging -> prod` promotion is reviewed, checked, and merged.
+- [ ] `prod -> main` promotion is reviewed, checked, and merged.
+- [ ] `origin/main` contains the intended release commit.
+- [ ] `v0.1.1` still points to the intended immutable release commit.
+- [ ] GitHub release `0.1.1 Stable` is visible.
+- [ ] `0.1.0` remains visible and marked deprecated.
+- [ ] GHCR tags `0.1.1`, `v2`, and `latest` resolve to the published image.
+- [ ] Release notes disclose benchmark and production-qualification limitations.
+- [ ] Dockerfile binary path is corrected to the actual `ciagom-server` target and the image
+      is rebuilt and smoke-tested from the corrected source.
+- [ ] No secrets or unintended generated files are included.
