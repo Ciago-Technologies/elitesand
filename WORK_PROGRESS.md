@@ -31,13 +31,13 @@ and **planned** have different meanings:
 - The alpha benchmark runs with four physical cores on the validated host.
 - A GitHub release `0.1.1` exists and `0.1.0` is marked deprecated.
 - GHCR image tags `0.1.1`, `v2`, and `latest` were published.
-- The feature branch contains the release, whitepaper, progress, and checkpoint
-  documentation commits through `2d002c9`.
+- The release, whitepaper, progress, and checkpoint documentation commits have been
+  promoted to `dev`, `staging`, `prod`, and `main` through PRs #8, #7, #6, and #5.
 
 ### What is not complete
 
-- Protected branches have not necessarily received the latest release commits; they require
-  reviewed PR promotion.
+- The protected branches contain the current documentation promotion. Future source changes
+  still require the protected-branch promotion sequence.
 - The Dockerfile binary path still points at `ciagomem-server`, while the actual Cargo
   binary is `ciagom-server`; the published image must not be used as corrected-image
   evidence until this is fixed.
@@ -185,10 +185,10 @@ Known promotion PRs:
 
 |  PR | From                          | To        | State at last checkpoint |
 | --: | ----------------------------- | --------- | ------------------------ |
-|  #8 | `feat/core-mem-server-engine` | `dev`     | Open                     |
-|  #7 | `feat/core-mem-server-engine` | `staging` | Open                     |
-|  #6 | `feat/core-mem-server-engine` | `prod`    | Open                     |
-|  #5 | `feat/core-mem-server-engine` | `main`    | Open                     |
+|  #8 | `feat/core-mem-server-engine` | `dev`     | Merged                   |
+|  #7 | `feat/core-mem-server-engine` | `staging` | Merged                   |
+|  #6 | `feat/core-mem-server-engine` | `prod`    | Merged                   |
+|  #5 | `feat/core-mem-server-engine` | `main`    | Merged                   |
 
 Do not assume all four PRs should be merged in parallel. The safer release process is:
 

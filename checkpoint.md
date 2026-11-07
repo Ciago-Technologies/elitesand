@@ -17,7 +17,7 @@ complete a release or production-readiness phase.
 | 2. Functional verification                     | Complete locally                                 | Release tests, all-feature tests, formatting, workspace/docs validators, quickstart, and durable recovery passed | Re-run after every code or packaging change                                                                        |
 | 3. Alpha performance experiment                | Complete as a smoke experiment                   | Four-core affinity run passed the 100 us queue-wait P99 target on this host                                      | Repeat on controlled hardware; collect distributions, thermal data, RSS, sustained throughput, and host conditions |
 | 4. Release packaging                           | **Blocked**                                      | `v0.1.1`, GitHub release, and GHCR tags were created                                                             | Correct the Docker binary path, rebuild, smoke-test, and decide whether a new patch release is required            |
-| 5. Branch promotion                            | **In progress**                                  | Feature branch and tag were pushed; promotion PRs and CI runs exist                                              | Merge in order: feature -> dev -> staging -> prod -> main                                                          |
+| 5. Branch promotion                            | Complete for current documentation commit       | PRs #8, #7, #6, and #5 merged; `dev`, `staging`, `prod`, and `main` contain the documentation commit          | Repeat the same reviewed promotion flow for the Docker correction                                                   |
 | 6. Production qualification                    | Not started / incomplete                         | Gate checklist and limitations are documented                                                                    | Complete Gates 1–6 evidence before making production-capacity or durability claims                                 |
 | 7. Future feature development                  | M1 foundation identified; implementation pending | Whitepaper v3.0 capability matrix and M1–M6 dependency order are documented                                      | Complete M1 and its evidence before beginning M2–M6                                                                |
 
@@ -150,9 +150,11 @@ If any one of these is missing, mark the phase **in progress** or **blocked**, n
 ## Current handoff actions
 
 **Current status: NOT FINISHED.** Documentation is committed on
-`feat/core-mem-server-engine` at `2d002c9`, but the Docker packaging fix and protected
-branch promotion are still pending. The next person should not start M1 coding or publish
-another release yet. Complete these steps in order:
+`feat/core-mem-server-engine` at `2d002c9` and has been promoted through all protected
+branches. The owner bypass is configured on the `dev`, `staging`, `prod`, and `main`
+rulesets. The Docker packaging fix and release image publication are still pending. The
+next person should not start M1 coding or publish another release yet. Complete these
+steps in order:
 
 1. **Fix and validate the Dockerfile on the feature branch.** The Cargo binary is
    `ciagom-server`, but the Dockerfile currently refers to `ciagomem-server`.
@@ -182,18 +184,19 @@ another release yet. Complete these steps in order:
    git push origin feat/core-mem-server-engine
    ```
 
-3. **Promote through reviewed PRs in order.** Direct pushes to protected branches are
-   rejected. Do not merge the currently parallel PRs out of order. The required order is:
+3. **Promote the Docker correction through the protected branches.** The owner may bypass
+   the review requirement because this is a one-person project, but the required `build`
+   check must still pass. Prefer reviewed PRs for the audit trail; if urgent owner-only
+   promotion is necessary, use the configured bypass deliberately. The required order is:
 
    ```text
    feat/core-mem-server-engine -> dev -> staging -> prod -> main
    ```
 
-   Existing PRs are listed in Section 3. After the feature branch changes, wait for the
-   required `build` check, obtain approval from someone other than the last pusher, and
-   merge only the feature -> `dev` PR. Then create or update `dev` -> `staging`, validate
-   staging, continue to `prod`, and finally to `main`. Close superseded direct
-   feature-to-environment PRs if they would bypass this sequence.
+   After the feature branch changes, wait for the required `build` check, merge feature ->
+   `dev`, validate `dev`, then continue to `staging`, `prod`, and `main`. Do not bypass
+   checks or rewrite tags. The owner bypass removes the impossible second-person approval
+   requirement; it does not remove the required build validation.
 
 4. **After `main` contains the Docker fix, publish a new immutable patch release.**
    Do not move or overwrite `v0.1.1`, `v2`, or `latest` as release evidence. Use the
@@ -220,15 +223,15 @@ another release yet. Complete these steps in order:
    gh release view v0.1.2 --repo Ciago-Technologies/elitesand
    ```
 
-   The sequential promotion PRs should be merged, `origin/main` should contain the Docker
-   fix and documentation commit, the corrected image should start with `--help`, and the
+   The Docker-correction promotion should be merged, `origin/main` should contain the fix
+   and documentation commits, the corrected image should start with `--help`, and the
    release/image digest must be recorded before starting Phase F.
 
 ### Who does what
 
 | Person                | Responsibility                                                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Owner/release manager | Fix or approve the Docker packaging issue, approve promotion PRs, publish/re-publish the image, and confirm the final release checklist |
+| Owner/release manager | Fix or approve Docker packaging, use the owner bypass responsibly, promote branches, publish the image, and confirm the release checklist |
 | Contributor           | Work only on a feature branch, run local checks, open a PR to `dev`, and respond to review/CI failures                                  |
 | Reviewer              | Review the diff, confirm tests and gate evidence, and approve the relevant promotion PR                                                 |
 | Future AI agent       | Read this section first, inspect `git status`, never force-push or rewrite tags, and continue only from the first unchecked action      |
@@ -237,25 +240,23 @@ another release yet. Complete these steps in order:
 
 - The release image was built/published before the Dockerfile mismatch was identified; it
   must be rebuilt after correction.
-- `dev`, `staging`, `prod`, and `main` are protected and must be promoted through reviewed
-  PRs.
+- `dev`, `staging`, `prod`, and `main` remain protected. The owner account has an explicit
+  bypass actor on each ruleset because the project currently has one maintainer. Keep the
+  required `build` check enabled and prefer PRs for an auditable history.
 - `v0.1.1` already exists; do not move or rewrite that tag. The corrected image requires a
   new source commit and should use a new patch release such as `0.1.2`.
-- The documentation commit `2d002c9` is on the feature branch and must be included in the
-  same sequential promotion path.
+- The documentation commit `2d002c9` is already promoted. Remote branch tips are
+  `dev=913b3a6`, `staging=502e322`, `prod=2efceb4`, and `main=45dc0e5`.
 - Gate 3 (production performance/capacity) and Gate 4 (power-loss durability) are not
   complete. Do not claim production qualification.
 
 ## 1. Current state at a glance
 
 The repository is a Rust workspace containing the Ciagomem/Elitesand core, WAL, query
-language, crypto, and engine crates. The release work for `0.1.1` has been prepared and
-published as a feature-branch commit, Git tag, GitHub release, and GHCR image. The
-protected promotion branches have not yet been updated because GitHub requires pull
-requests and the required `build` status check.
-
-Do **not** assume that `main`, `prod`, `staging`, or `dev` already contain the release
-commit. At checkpoint creation time, the promotion PRs are open.
+language, crypto, and engine crates. The release work for `0.1.1` and the documentation
+commit `2d002c9` have been promoted to all protected branches. The current remaining
+release blocker is the Docker binary-path mismatch, followed by image publication and
+qualification gates.
 
 ## 2. Work completed
 
@@ -362,27 +363,18 @@ feat/core-mem-server-engine -> dev -> staging -> prod -> main
 Direct pushes to protected branches were rejected by GitHub rules. The release feature
 commit was successfully pushed to `feat/core-mem-server-engine`, and the tag was pushed.
 
-Open promotion PRs:
+Promotion PRs for the documentation commit (all merged):
 
 |                                                           PR | Head                          | Base      | Purpose                  |
 | -----------------------------------------------------------: | ----------------------------- | --------- | ------------------------ |
-| [#8](https://github.com/Ciago-Technologies/elitesand/pull/8) | `feat/core-mem-server-engine` | `dev`     | Promote 0.1.1 to dev     |
-| [#7](https://github.com/Ciago-Technologies/elitesand/pull/7) | `feat/core-mem-server-engine` | `staging` | Promote 0.1.1 to staging |
-| [#6](https://github.com/Ciago-Technologies/elitesand/pull/6) | `feat/core-mem-server-engine` | `prod`    | Promote 0.1.1 to prod    |
-| [#5](https://github.com/Ciago-Technologies/elitesand/pull/5) | `feat/core-mem-server-engine` | `main`    | Promote 0.1.1 to main    |
+| [#8](https://github.com/Ciago-Technologies/elitesand/pull/8) | `feat/core-mem-server-engine` | `dev`     | Merged; promote 0.1.1 to dev     |
+| [#7](https://github.com/Ciago-Technologies/elitesand/pull/7) | `feat/core-mem-server-engine` | `staging` | Merged; promote 0.1.1 to staging |
+| [#6](https://github.com/Ciago-Technologies/elitesand/pull/6) | `feat/core-mem-server-engine` | `prod`    | Merged; promote 0.1.1 to prod |
+| [#5](https://github.com/Ciago-Technologies/elitesand/pull/5) | `feat/core-mem-server-engine` | `main`    | Merged; promote 0.1.1 to main |
 
 The GitHub Actions `build` runs associated with these PRs completed successfully. The PRs
-still need the repository's required approvals and merges. Because promotion order matters,
-merge them sequentially:
-
-1. PR #8: feature branch -> `dev`
-2. After #8 merges, create or update a `dev` -> `staging` promotion PR.
-3. After staging is validated, merge staging -> `prod`.
-4. After prod is validated, merge prod -> `main`.
-
-The already-open direct feature-to-all-branch PRs may be closed and replaced with sequential
-promotion PRs if repository policy or reviewers require strict ordering. Do not merge several
-parallel promotion PRs if that would bypass environment validation.
+were merged sequentially after the owner bypass was configured. Future changes must use the
+same order and retain the required `build` check.
 
 ## 4. Immediate next actions
 
@@ -575,15 +567,15 @@ capacity solution.
 9. Run the smallest relevant checks, then the full CI-equivalent suite before release.
 10. Record new benchmark hardware, configuration, commit SHA, and limitations.
 
-## 9. Definition of done for the pending release promotion
+## 9. Definition of done for the pending Docker-correction release
 
-The `0.1.1` promotion is complete only when all are true:
+The `0.1.1` branch promotion is complete. The pending Docker-correction release is
+complete only when all are true:
 
-- [ ] PR #8 or an equivalent reviewed feature-to-dev PR is merged.
-- [ ] `dev -> staging` promotion is reviewed, checked, and merged.
-- [ ] `staging -> prod` promotion is reviewed, checked, and merged.
-- [ ] `prod -> main` promotion is reviewed, checked, and merged.
-- [ ] `origin/main` contains the intended release commit.
+- [x] Documentation promotion PRs #8, #7, #6, and #5 are merged.
+- [x] `origin/main` contains the documentation commit.
+- [ ] Docker correction is committed and pushed on the feature branch.
+- [ ] Docker-correction promotion reaches `dev`, `staging`, `prod`, and `main`.
 - [ ] `v0.1.1` still points to the intended immutable release commit.
 - [ ] GitHub release `0.1.1 Stable` is visible.
 - [ ] `0.1.0` remains visible and marked deprecated.
