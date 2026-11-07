@@ -13,3 +13,4 @@ ciagomem-ql = { path = "../ciagomem-ql" }
 roaring = "0.10.12"
 flatbuffers = "25.2.10"
 wide = "0.7.33"
+hdrhistogram = "7.5.4"
