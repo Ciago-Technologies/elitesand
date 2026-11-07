@@ -19,11 +19,64 @@ complete a release or production-readiness phase.
 | 4. Release packaging                           | **Blocked**                                | `v0.1.1`, GitHub release, and GHCR tags were created                                                             | Correct the Docker binary path, rebuild, smoke-test, and decide whether a new patch release is required            |
 | 5. Branch promotion                            | **In progress**                            | Feature branch and tag were pushed; promotion PRs and CI runs exist                                              | Merge in order: feature -> dev -> staging -> prod -> main                                                          |
 | 6. Production qualification                    | Not started / incomplete                   | Gate checklist and limitations are documented                                                                    | Complete Gates 1–6 evidence before making production-capacity or durability claims                                 |
-| 7. Future feature development                  | Not started                                | Target architecture and roadmap are documented                                                                   | Choose the next scoped feature only after the release blockers and required gates are resolved                     |
+| 7. Future feature development                  | M1 foundation identified; implementation pending | Whitepaper v3.0 capability matrix and M1–M6 dependency order are documented                                  | Complete M1 and its evidence before beginning M2–M6                                                           |
+
+### M1 status before moving to M2
+
+M1 is the first whitepaper implementation milestone:
+**runtime BFBS `SchemaCatalog`, identity durability, and lazy upcasting**.
+The repository currently has the foundation needed to begin M1, but M1 itself is not yet
+complete. Do not mark M1 complete or start M2 based only on the existing fixed-Record
+service.
+
+#### M1 work already completed or available as foundation
+
+- Fixed-Record `ActorImage` scalar/text/vector behavior exists and is covered by the current
+  engine/reference tests.
+- Actor identity/incarnation, generation, slot, ownership, WAL, checkpoint, replay, and
+  authoritative index-rebuild primitives exist for the current single-node profile.
+- Authenticated durability, capability/tenant checks, deletion handling, and durable retry
+  receipts exist in the current service profile.
+- Protocol 3 framing and fixed-Record Rust client/retry behavior are implemented as the
+  starting compatibility boundary.
+- The whitepaper-to-code dependency order, conservative status labels, and M1 exit criteria
+  are documented in `WORK_PROGRESS.md`.
+
+These are prerequisites and reusable components; they are not proof that runtime schema
+catalog functionality has been delivered.
+
+#### M1 work still required before M2
+
+- Implement a bounded runtime BFBS schema verifier and reject malformed, oversized, or
+  unsupported schemas explicitly.
+- Implement durable `SchemaCatalog` descriptors, family bindings, schema identity, version
+  metadata, and recovery/replay.
+- Bind schema/family identity to tenant authorization and the existing identity/incarnation
+  model without weakening fixed-Record authorization.
+- Define and implement supported schema compatibility and lazy-upcasting rules, including
+  deterministic failures for missing, invalid, or incompatible upcasters.
+- Integrate catalog state with WAL/checkpoint/replay and ensure corrupt or incomplete schema
+  history produces an explicit repair/error state, never an empty replacement.
+- Add registration, lookup, read, update, restart, replay, quota, authorization,
+  malformed-input, corruption, compatibility, and upcast tests.
+- Add wire/storage compatibility fixtures and document versioning, migration, rejection,
+  resource limits, and rollback behavior.
+- Record repeatable evidence for correctness, bounded memory/CPU, isolation, and recovery.
+
+#### M1 exit gate
+
+M1 is complete only when a supported runtime schema can be registered, durably recovered,
+authorized, validated, read, and lazily upcast through the supported version range.
+Malformed, unauthorized, oversized, incompatible, and corrupt inputs must fail explicitly.
+The implementation, tests, compatibility fixtures, documentation, and evidence must all be
+present in the feature branch and pass CI.
+
+Only after this gate passes may M2 begin:
+**family membership, collection directory, cold/resident enumeration, and scan epochs**.
 
 ### The next coding phase
 
-The immediate coding task is **packaging correctness**, not a new feature:
+The immediate coding task is **packaging correctness**, not a whitepaper feature:
 
 1. Change the Dockerfile from `ciagomem-server` to the actual Cargo binary
    `ciagom-server`.
@@ -35,17 +88,53 @@ The immediate coding task is **packaging correctness**, not a new feature:
 7. Publish a corrected image. Because `v0.1.1` already exists, do not move the tag casually;
    use `0.1.2` if repository policy does not allow republishing the existing release tag.
 
-After packaging and promotion are complete, the next engineering phase is **qualification**:
+After packaging and promotion are complete, follow the `WORK_PROGRESS.md` phases in order:
 
-- Gate 1: supply-chain audit and release-feature checks.
-- Gate 2: deployment-host preflight.
-- Gate 3: repeatable capacity and latency qualification.
-- Gate 4: power-loss and storage durability qualification.
-- Gate 5: operational security/key-rotation evidence.
-- Gate 6: production runbooks and monitoring.
+1. **Phase F / Gate 1–2:** supply-chain audit and deployment-host preflight.
+2. **Phase G / Gate 3:** repeatable performance and capacity qualification.
+3. **Phase H / Gate 4:** durability, power-loss, and storage qualification.
+4. **Phase I / Gates 5–6:** operational security and production runbooks.
 
 Only after the relevant gate evidence exists should the team start claiming production
-readiness. Gate 7 distributed/multi-node work remains a separate future scope.
+readiness. These qualification phases are also the whitepaper prerequisite named
+**current node journal/recovery qualification**.
+
+### First whitepaper implementation phase after qualification
+
+The first actual coding milestone from
+`ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md`
+is **M1: runtime BFBS `SchemaCatalog`, identity durability, and lazy upcasting**.
+
+Do not start M2, M3, M4, SDK publication, or distributed M6 work as the primary phase before
+M1 is complete. M1 must build on the qualified journal/recovery path and must include:
+
+- bounded BFBS verification and rejection of malformed or oversized schemas;
+- durable schema descriptors and family bindings;
+- schema/version compatibility and explicit unsupported-version errors;
+- identity/incarnation persistence and recovery;
+- lazy upcasting with deterministic failure behavior;
+- tenant authorization and bounded resource accounting;
+- restart, replay, quota, compatibility, and corruption tests;
+- documentation of the wire/storage compatibility contract.
+
+**M1 exit criteria:** a runtime schema can be registered, durably recovered, authorized,
+validated, read, and upcast through the supported version range; malformed, unauthorized,
+oversized, incompatible, and corrupt inputs fail explicitly; the required tests and evidence
+are recorded. Passing existing fixed-Record tests alone does not complete M1.
+
+After M1, continue in the whitepaper dependency order:
+
+```text
+M1 SchemaCatalog + identity/upcasting
+  -> M2 family membership, collection directory, scan epochs
+  -> M3 typed documents, arrays, deltas, compaction, array WAL
+  -> M4 transport/authentication/dedup/interoperability
+  -> M5a published Rust SDK and M5b Go/TypeScript SDKs
+  -> M6 placement, gateway, replicas, migration, distributed recovery, SLO qualification
+```
+
+The full product is not complete until the selected user-facing scope also has tests,
+documentation, operational support, release artifacts, and workload-specific qualification.
 
 ### Phase completion rule
 
