@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ "feat/core-mem-server-engine" ]
+    branches: [ "**" ]
   pull_request:
-    branches: [ "feat/core-mem-server-engine" ]
+    branches: [ "main", "dev", "staging", "prod" ]
 
 env:
   CARGO_TERM_COLOR: always
