@@ -19,7 +19,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const TARGET_CORES: usize = 8;
+// This host exposes four higher-frequency performance cores before its
+// lower-frequency cores. Keep the alpha run on those four physical cores.
+const TARGET_CORES: usize = 4;
 const QUEUE_CAPACITY: usize = 4096;
 const VECTOR_DIMENSIONS: usize = 384;
 const WARMUP_DURATION: Duration = Duration::from_secs(30);
