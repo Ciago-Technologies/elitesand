@@ -31,14 +31,16 @@ and **planned** have different meanings:
 - The alpha benchmark runs with four physical cores on the validated host.
 - A GitHub release `0.1.1` exists and `0.1.0` is marked deprecated.
 - GHCR image tags `0.1.1`, `v2`, and `latest` were published.
-- A feature branch contains the release and documentation commits.
+- The feature branch contains the release, whitepaper, progress, and checkpoint
+  documentation commits through `2d002c9`.
 
 ### What is not complete
 
 - Protected branches have not necessarily received the latest release commits; they require
   reviewed PR promotion.
-- The Dockerfile binary path must be checked against the actual Cargo binary before relying
-  on the published image.
+- The Dockerfile binary path still points at `ciagomem-server`, while the actual Cargo
+  binary is `ciagom-server`; the published image must not be used as corrected-image
+  evidence until this is fixed.
 - Production hardware and capacity qualification is incomplete.
 - Power-loss/NVMe durability qualification is incomplete.
 - Supply-chain and operational security gates are incomplete.
@@ -146,9 +148,26 @@ write performance.
   ```
 
 - `GATE.md`, `checkpoint.md`, `CLAUDE.md`, and the release handoff guide were created.
+- `WORK_PROGRESS.md` and the full whitepaper were committed in `2d002c9`.
 
 **Important:** Release publication is not the same as production qualification. The release
 notes must continue to disclose unqualified hardware, durability, and scaling claims.
+
+### Phase E — current handoff: packaging correction and sequential promotion
+
+**Status:** Blocked pending the Dockerfile binary-path correction.
+
+The next work is not M1 feature coding. First correct and validate the container on
+`feat/core-mem-server-engine`, run the documented checks, and promote the resulting commit
+through reviewed PRs in this order:
+
+```text
+feat/core-mem-server-engine -> dev -> staging -> prod -> main
+```
+
+Do not overwrite the existing `v0.1.1`, `v2`, or `latest` tags. After `main` contains the
+fix, publish an immutable patch release (expected `0.1.2`) and record its image digest.
+Only then begin Phase F supply-chain/deployment preflight.
 
 ## 3. Current branch and promotion state
 

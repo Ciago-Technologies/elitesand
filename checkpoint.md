@@ -149,66 +149,80 @@ If any one of these is missing, mark the phase **in progress** or **blocked**, n
 
 ## Current handoff actions
 
-**Current status: NOT FINISHED.** The next person should not start new feature work or
-publish another release yet. Complete these steps in order:
+**Current status: NOT FINISHED.** Documentation is committed on
+`feat/core-mem-server-engine` at `2d002c9`, but the Docker packaging fix and protected
+branch promotion are still pending. The next person should not start M1 coding or publish
+another release yet. Complete these steps in order:
 
-1. **Fix the Dockerfile binary name.** The Cargo binary is `ciagom-server`, but the
-   Dockerfile currently refers to `ciagomem-server`.
-
-   ```bash
-   cd /path/to/elitesand
-   sed -i 's/ciagomem-server/ciagom-server/g' Dockerfile
-   cargo build --release --offline -p ciagomem-engine --bin ciagom-server
-   docker build -t ghcr.io/ciago-technologies/elitesand:0.1.1 .
-   docker run --rm ghcr.io/ciago-technologies/elitesand:0.1.1 --help
-   ```
-
-   Inspect the diff before committing. Do not use the old image as release evidence.
-
-2. **Commit and push the Docker fix to the feature branch.**
+1. **Fix and validate the Dockerfile on the feature branch.** The Cargo binary is
+   `ciagom-server`, but the Dockerfile currently refers to `ciagomem-server`.
 
    ```bash
    git switch feat/core-mem-server-engine
+   grep -nE 'COPY|ENTRYPOINT' Dockerfile
+   # Edit Dockerfile so both paths use ciagom-server.
+   cargo build --release --offline -p ciagomem-engine --bin ciagom-server
+   docker build -t ghcr.io/ciago-technologies/elitesand:0.1.2-rc .
+   docker run --rm ghcr.io/ciago-technologies/elitesand:0.1.2-rc --help
+   ```
+
+   Inspect the diff before committing. Do not treat the existing `0.1.1`, `v2`, or
+   `latest` image tags as evidence for the corrected Dockerfile.
+
+2. **Run checks, commit, and push the Docker fix to the feature branch.**
+
+   ```bash
+   cargo fmt --all -- --check
+   python3 scripts/validate_workspace.py
+   python3 scripts/validate_documentation.py
+   cargo test --release --offline --workspace
    git add Dockerfile
-   git commit -m "fix: use the actual server binary in Docker image"
+   git commit -m "fix: use the actual server binary in Docker image" \
+     -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
    git push origin feat/core-mem-server-engine
    ```
 
-3. **Merge promotion PRs in order.** Do not merge the currently parallel PRs out of order.
-   The required order is:
+3. **Promote through reviewed PRs in order.** Direct pushes to protected branches are
+   rejected. Do not merge the currently parallel PRs out of order. The required order is:
 
    ```text
    feat/core-mem-server-engine -> dev -> staging -> prod -> main
    ```
 
-   Existing PRs are listed in Section 3. After the feature branch changes, refresh their
-   checks. If the parallel PRs no longer represent the desired order, close them and create
-   sequential PRs using the commands in Section 4.
+   Existing PRs are listed in Section 3. After the feature branch changes, wait for the
+   required `build` check, obtain approval from someone other than the last pusher, and
+   merge only the feature -> `dev` PR. Then create or update `dev` -> `staging`, validate
+   staging, continue to `prod`, and finally to `main`. Close superseded direct
+   feature-to-environment PRs if they would bypass this sequence.
 
-4. **After `main` contains the Docker fix, rebuild and republish the image.**
+4. **After `main` contains the Docker fix, publish a new immutable patch release.**
+   Do not move or overwrite `v0.1.1`, `v2`, or `latest` as release evidence. Use the
+   repository's approved patch version, expected to be `0.1.2`, and record the image digest.
 
    ```bash
    docker build \
-     -t ghcr.io/ciago-technologies/elitesand:0.1.1 \
-     -t ghcr.io/ciago-technologies/elitesand:v2 \
-     -t ghcr.io/ciago-technologies/elitesand:latest \
+     -t ghcr.io/ciago-technologies/elitesand:0.1.2 \
      .
-   docker push ghcr.io/ciago-technologies/elitesand:0.1.1
-   docker push ghcr.io/ciago-technologies/elitesand:v2
-   docker push ghcr.io/ciago-technologies/elitesand:latest
+   docker run --rm ghcr.io/ciago-technologies/elitesand:0.1.2 --help
+   docker push ghcr.io/ciago-technologies/elitesand:0.1.2
    ```
 
-5. **Verify completion.** The task is complete only when:
+   Create the matching GitHub release only after the image and source promotion are
+   verified. Add `latest` only if repository release policy explicitly requires moving that
+   convenience tag.
+
+5. **Verify completion.** The release handoff is complete only when:
 
    ```bash
    git fetch --prune --tags origin
    git log -1 --oneline origin/main
    gh pr list --repo Ciago-Technologies/elitesand --state open
-   gh release view v0.1.1 --repo Ciago-Technologies/elitesand
+   gh release view v0.1.2 --repo Ciago-Technologies/elitesand
    ```
 
-   All promotion PRs should be merged, `origin/main` should contain the intended release
-   changes, and the Dockerfile/image check should pass.
+   The sequential promotion PRs should be merged, `origin/main` should contain the Docker
+   fix and documentation commit, the corrected image should start with `--help`, and the
+   release/image digest must be recorded before starting Phase F.
 
 ### Who does what
 
@@ -225,9 +239,10 @@ publish another release yet. Complete these steps in order:
   must be rebuilt after correction.
 - `dev`, `staging`, `prod`, and `main` are protected and must be promoted through reviewed
   PRs.
-- `v0.1.1` already exists; do not move or rewrite that tag. If the corrected image requires
-  a new source commit, keep the same release tag only if policy explicitly permits it;
-  otherwise use a new patch release such as `0.1.2`.
+- `v0.1.1` already exists; do not move or rewrite that tag. The corrected image requires a
+  new source commit and should use a new patch release such as `0.1.2`.
+- The documentation commit `2d002c9` is on the feature branch and must be included in the
+  same sequential promotion path.
 - Gate 3 (production performance/capacity) and Gate 4 (power-loss durability) are not
   complete. Do not claim production qualification.
 
