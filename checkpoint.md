@@ -5,7 +5,60 @@
 **Default branch:** `main`  
 **Purpose:** Give the owner, a teammate, or another coding agent enough verified context to continue safely.
 
-## Start here: exact next actions
+## Project phase map
+
+This is the most important section for continuation. Work is organized into phases. A phase
+is complete only when its exit criteria are satisfied; passing unit tests alone does not
+complete a release or production-readiness phase.
+
+| Phase | Status | What was achieved | What remains |
+|---|---|---|---|
+| 1. Core implementation and repository assembly | Complete for the current single-node scope | Rust workspace, core/WAL/QL/crypto/engine crates, tests, examples, documentation, and vendor sources are present | Future distributed runtime, SDKs, and broader schema families remain out of scope |
+| 2. Functional verification | Complete locally | Release tests, all-feature tests, formatting, workspace/docs validators, quickstart, and durable recovery passed | Re-run after every code or packaging change |
+| 3. Alpha performance experiment | Complete as a smoke experiment | Four-core affinity run passed the 100 us queue-wait P99 target on this host | Repeat on controlled hardware; collect distributions, thermal data, RSS, sustained throughput, and host conditions |
+| 4. Release packaging | **Blocked** | `v0.1.1`, GitHub release, and GHCR tags were created | Correct the Docker binary path, rebuild, smoke-test, and decide whether a new patch release is required |
+| 5. Branch promotion | **In progress** | Feature branch and tag were pushed; promotion PRs and CI runs exist | Merge in order: feature -> dev -> staging -> prod -> main |
+| 6. Production qualification | Not started / incomplete | Gate checklist and limitations are documented | Complete Gates 1–6 evidence before making production-capacity or durability claims |
+| 7. Future feature development | Not started | Target architecture and roadmap are documented | Choose the next scoped feature only after the release blockers and required gates are resolved |
+
+### The next coding phase
+
+The immediate coding task is **packaging correctness**, not a new feature:
+
+1. Change the Dockerfile from `ciagomem-server` to the actual Cargo binary
+   `ciagom-server`.
+2. Build the release binary from the corrected source.
+3. Build and run the image with `--help`.
+4. Commit the fix on the feature branch.
+5. Re-run the repository checks.
+6. Promote that commit through the protected branches.
+7. Publish a corrected image. Because `v0.1.1` already exists, do not move the tag casually;
+   use `0.1.2` if repository policy does not allow republishing the existing release tag.
+
+After packaging and promotion are complete, the next engineering phase is **qualification**:
+
+- Gate 1: supply-chain audit and release-feature checks.
+- Gate 2: deployment-host preflight.
+- Gate 3: repeatable capacity and latency qualification.
+- Gate 4: power-loss and storage durability qualification.
+- Gate 5: operational security/key-rotation evidence.
+- Gate 6: production runbooks and monitoring.
+
+Only after the relevant gate evidence exists should the team start claiming production
+readiness. Gate 7 distributed/multi-node work remains a separate future scope.
+
+### Phase completion rule
+
+For every future phase, record four things before marking it complete:
+
+1. **Intent:** what user or system problem the phase solves.
+2. **Implementation:** which files, commands, and configuration changed.
+3. **Evidence:** test output, benchmark output, CI links, package digest, or hardware record.
+4. **Exit criteria:** measurable conditions that must pass before moving to the next phase.
+
+If any one of these is missing, mark the phase **in progress** or **blocked**, not complete.
+
+## Current handoff actions
 
 **Current status: NOT FINISHED.** The next person should not start new feature work or
 publish another release yet. Complete these steps in order:
