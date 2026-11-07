@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ "feat/core-mem-server-engine" ]
+    branches: [ "**" ]
   pull_request:
-    branches: [ "feat/core-mem-server-engine" ]
+    branches: [ "main", "dev", "staging", "prod" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
+    - name: Fetch locked Rust dependencies
+      run: cargo fetch --locked
     - name: Install Rust checks
       run: |
         rustup toolchain install stable --profile minimal --component rustfmt --component clippy
