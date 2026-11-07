@@ -5,6 +5,90 @@
 **Default branch:** `main`  
 **Purpose:** Give the owner, a teammate, or another coding agent enough verified context to continue safely.
 
+## Start here: exact next actions
+
+**Current status: NOT FINISHED.** The next person should not start new feature work or
+publish another release yet. Complete these steps in order:
+
+1. **Fix the Dockerfile binary name.** The Cargo binary is `ciagom-server`, but the
+   Dockerfile currently refers to `ciagomem-server`.
+
+   ```bash
+   cd /path/to/elitesand
+   sed -i 's/ciagomem-server/ciagom-server/g' Dockerfile
+   cargo build --release --offline -p ciagomem-engine --bin ciagom-server
+   docker build -t ghcr.io/ciago-technologies/elitesand:0.1.1 .
+   docker run --rm ghcr.io/ciago-technologies/elitesand:0.1.1 --help
+   ```
+
+   Inspect the diff before committing. Do not use the old image as release evidence.
+
+2. **Commit and push the Docker fix to the feature branch.**
+
+   ```bash
+   git switch feat/core-mem-server-engine
+   git add Dockerfile
+   git commit -m "fix: use the actual server binary in Docker image"
+   git push origin feat/core-mem-server-engine
+   ```
+
+3. **Merge promotion PRs in order.** Do not merge the currently parallel PRs out of order.
+   The required order is:
+
+   ```text
+   feat/core-mem-server-engine -> dev -> staging -> prod -> main
+   ```
+
+   Existing PRs are listed in Section 3. After the feature branch changes, refresh their
+   checks. If the parallel PRs no longer represent the desired order, close them and create
+   sequential PRs using the commands in Section 4.
+
+4. **After `main` contains the Docker fix, rebuild and republish the image.**
+
+   ```bash
+   docker build \
+     -t ghcr.io/ciago-technologies/elitesand:0.1.1 \
+     -t ghcr.io/ciago-technologies/elitesand:v2 \
+     -t ghcr.io/ciago-technologies/elitesand:latest \
+     .
+   docker push ghcr.io/ciago-technologies/elitesand:0.1.1
+   docker push ghcr.io/ciago-technologies/elitesand:v2
+   docker push ghcr.io/ciago-technologies/elitesand:latest
+   ```
+
+5. **Verify completion.** The task is complete only when:
+
+   ```bash
+   git fetch --prune --tags origin
+   git log -1 --oneline origin/main
+   gh pr list --repo Ciago-Technologies/elitesand --state open
+   gh release view v0.1.1 --repo Ciago-Technologies/elitesand
+   ```
+
+   All promotion PRs should be merged, `origin/main` should contain the intended release
+   changes, and the Dockerfile/image check should pass.
+
+### Who does what
+
+| Person | Responsibility |
+| --- | --- |
+| Owner/release manager | Fix or approve the Docker packaging issue, approve promotion PRs, publish/re-publish the image, and confirm the final release checklist |
+| Contributor | Work only on a feature branch, run local checks, open a PR to `dev`, and respond to review/CI failures |
+| Reviewer | Review the diff, confirm tests and gate evidence, and approve the relevant promotion PR |
+| Future AI agent | Read this section first, inspect `git status`, never force-push or rewrite tags, and continue only from the first unchecked action |
+
+### Current blockers
+
+- The release image was built/published before the Dockerfile mismatch was identified; it
+  must be rebuilt after correction.
+- `dev`, `staging`, `prod`, and `main` are protected and must be promoted through reviewed
+  PRs.
+- `v0.1.1` already exists; do not move or rewrite that tag. If the corrected image requires
+  a new source commit, keep the same release tag only if policy explicitly permits it;
+  otherwise use a new patch release such as `0.1.2`.
+- Gate 3 (production performance/capacity) and Gate 4 (power-loss durability) are not
+  complete. Do not claim production qualification.
+
 ## 1. Current state at a glance
 
 The repository is a Rust workspace containing the Ciagomem/Elitesand core, WAL, query
@@ -123,12 +207,12 @@ commit was successfully pushed to `feat/core-mem-server-engine`, and the tag was
 
 Open promotion PRs:
 
-| PR | Head | Base | Purpose |
-|---:|---|---|---|
-| [#8](https://github.com/Ciago-Technologies/elitesand/pull/8) | `feat/core-mem-server-engine` | `dev` | Promote 0.1.1 to dev |
+|                                                           PR | Head                          | Base      | Purpose                  |
+| -----------------------------------------------------------: | ----------------------------- | --------- | ------------------------ |
+| [#8](https://github.com/Ciago-Technologies/elitesand/pull/8) | `feat/core-mem-server-engine` | `dev`     | Promote 0.1.1 to dev     |
 | [#7](https://github.com/Ciago-Technologies/elitesand/pull/7) | `feat/core-mem-server-engine` | `staging` | Promote 0.1.1 to staging |
-| [#6](https://github.com/Ciago-Technologies/elitesand/pull/6) | `feat/core-mem-server-engine` | `prod` | Promote 0.1.1 to prod |
-| [#5](https://github.com/Ciago-Technologies/elitesand/pull/5) | `feat/core-mem-server-engine` | `main` | Promote 0.1.1 to main |
+| [#6](https://github.com/Ciago-Technologies/elitesand/pull/6) | `feat/core-mem-server-engine` | `prod`    | Promote 0.1.1 to prod    |
+| [#5](https://github.com/Ciago-Technologies/elitesand/pull/5) | `feat/core-mem-server-engine` | `main`    | Promote 0.1.1 to main    |
 
 The GitHub Actions `build` runs associated with these PRs completed successfully. The PRs
 still need the repository's required approvals and merges. Because promotion order matters,
