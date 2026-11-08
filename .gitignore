@@ -5,3 +5,7 @@
 /scripts/__pycache__/
 /ciagomem-service/
 /ciagomem-client/
+
+# Local distribution planning document; keep it outside the repository.
+/ELITESAND_OPEN_SOURCE_AND_ENTERPRISE_DISTRIBUTION_PLAN.md
+/ciagomem_slae_complete_technical_whitepaper_and_master_engineering_specification_v3_0_final.md
